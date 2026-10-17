@@ -1,0 +1,2 @@
+# Olist-format test CSVs contain an embedded newline inside a quoted field; keep LF.
+tests/fixtures/olist-mini/*.csv eol=lf
