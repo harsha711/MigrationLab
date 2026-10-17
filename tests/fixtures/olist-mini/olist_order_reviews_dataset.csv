@@ -1,0 +1,7 @@
+"review_id","order_id","review_score","review_comment_title","review_comment_message","review_creation_date","review_answer_timestamp"
+"r2","o2","5","","Chegou antes do prazo 👍","2018-01-10 00:00:00","2018-01-11 00:00:00"
+"r1","o1","4","Ótimo","Produto bom,
+entrega rápida.","2017-10-10 00:00:00","2017-10-11 00:00:00"
+"r3","o3","1","Péssimo","","2018-02-05 00:00:00","2018-02-06 00:00:00"
+"r4","o4","3","","   ","2018-03-05 00:00:00","2018-03-06 00:00:00"
+"r9","o-unknown","2","","order not in orders file","2018-05-05 00:00:00","2018-05-06 00:00:00"
