@@ -150,9 +150,14 @@ def derive(run: dict) -> dict:
         observations.append(obs)
 
     if not has_attempts:
-        plan_id = next((o["plan_id"] for o in observations if o["plan_id"]), None)
+        # One attempt executes exactly one plan: summary.plan_id (staged) or none (unsafe).
+        plan_id = summary.get("plan_id") or next(
+            (o["plan_id"] for o in observations if o["plan_id"]), None)
         attempts["a1"] = {"attempt": "a1", "plan_id": plan_id,
                           "status": summary.get("verdict"), "failed": summary.get("checks_failed")}
+        for o in observations:
+            if o["scope_source"] == "derived_v0" and o["plan_id"] is None:
+                o["plan_id"] = plan_id
     for s in summary.get("attempts") or []:
         label = f"a{s.get('attempt')}"
         if label in attempts:
