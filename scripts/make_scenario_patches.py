@@ -26,10 +26,12 @@ MODELS = "saleor/account/models.py"
 NOTE_LINE = "    note = models.TextField(null=True, blank=True)\n"
 
 
-def migration(doc: str, operations: str) -> str:
+def migration(doc: str, operations: str, header: str = "", attrs: str = "") -> str:
     return (f"# EXPERIMENT (manual, not upstream): {doc}\n\n"
-            "from django.db import migrations, models\n\n\n"
+            "from django.db import migrations, models\n"
+            f"{header}\n\n"
             "class Migration(migrations.Migration):\n"
+            f"{attrs}"
             f"    dependencies = [\n        {DEP},\n    ]\n\n"
             f"    operations = [\n{operations}    ]\n")
 
@@ -76,7 +78,69 @@ DROP_NOTE_EDITS = [
      "        return root.note\n\n", ""),
 ]
 
+USER_NAMES = ("    email = models.EmailField(unique=True)\n"
+              "    first_name = models.CharField(max_length=256, blank=True)\n"
+              "    last_name = models.CharField(max_length=256, blank=True)\n")
+
+
+def user_last_name(definition: str) -> tuple:
+    return (MODELS, USER_NAMES, USER_NAMES.replace(
+        "    last_name = models.CharField(max_length=256, blank=True)\n", definition))
+
+
+def alter_last_name(field: str) -> str:
+    return ("        migrations.AlterField(\n            model_name=\"user\", name=\"last_name\",\n"
+            f"            field={field},\n        ),\n")
+
+
+CREATE_TIER = (
+    "        migrations.CreateModel(\n            name=\"LoyaltyTier\",\n            fields=[\n"
+    "                (\"id\", models.BigAutoField(primary_key=True, serialize=False)),\n"
+    "                (\"name\", models.CharField(max_length=100, unique=True)),\n"
+    "                (\"created_at\", models.DateTimeField(auto_now_add=True)),\n"
+    "            ],\n        ),\n")
+TIER_MODEL = ("\n\nclass LoyaltyTier(models.Model):\n"
+              "    id = models.BigAutoField(primary_key=True)\n"
+              "    name = models.CharField(max_length=100, unique=True)\n"
+              "    created_at = models.DateTimeField(auto_now_add=True)\n")
+INDEX_ANCHOR = "            *ModelWithMetadata.Meta.indexes,\n            # Orders searching index\n"
+ADD_INDEX = ("        AddIndexConcurrently(\n            model_name=\"user\",\n"
+             "            index=BTreeIndex(fields=[\"last_name\"], name=\"account_user_last_name_btree\"),\n"
+             "        ),\n")
+REFERRER_FIELD = ("models.ForeignKey(blank=True, db_column=\"referrer_id\", db_index=False, null=True, "
+                  "on_delete=models.SET_NULL, related_name=\"referred_users\", to=\"account.user\")")
+ADD_REFERRER = (f"        migrations.AddField(\n            model_name=\"user\", name=\"referrer\",\n"
+                f"            field={REFERRER_FIELD},\n        ),\n")
+FK_SQL = ("        migrations.RunSQL(\n"
+          "            \"ALTER TABLE account_user ADD CONSTRAINT account_user_referrer_fk \"\n"
+          "            \"FOREIGN KEY (referrer_id) REFERENCES account_user (id) DEFERRABLE INITIALLY DEFERRED\",\n"
+          "            reverse_sql=\"ALTER TABLE account_user DROP CONSTRAINT account_user_referrer_fk\",\n"
+          "        ),\n")
+ADD_CUSTOMER_NOTE = ("        migrations.AddField(\n            model_name=\"user\", name=\"customer_note\",\n"
+                     "            field=models.TextField(blank=True, null=True),\n        ),\n")
+OLD_RESOLVER = ("    @staticmethod\n    def resolve_note(root: models.User, _info: ResolveInfo):\n"
+                "        return root.{attr}\n")
+
+
+def raw_resolver(column: str) -> str:
+    return ("    @staticmethod\n    def resolve_note(root: models.User, _info: ResolveInfo):\n"
+            "        # EXPERIMENT (manual): raw SQL read path; linters that only inspect migrations\n"
+            "        # and ORM-level renames do not see this column reference.\n"
+            "        from django.db import connection\n\n"
+            "        with connection.cursor() as cursor:\n"
+            f"            cursor.execute(\"SELECT {column} FROM account_user WHERE id = %s\", [root.pk])\n"
+            "            row = cursor.fetchone()\n"
+            "        return row[0] if row else None\n")
+
+
+def rename_series(kind: str) -> list[Path]:
+    """The original rename patches: kind 'new-unsafe' (RenameField) or 'new-staged' (state-only)."""
+    return sorted((PATCHES / kind).glob("*.patch"))
+
+
 # scenario id -> variant -> spec. "base_patches" are applied with git am before the edits.
+# An edit with old=None appends to the file. "migration": None means the base patches already
+# provide it (or the version has no migration, like an old version).
 SPECS = {
     "add-optional-column": {
         "apply": {"subject": "add optional User.nickname (NULL allowed)",
@@ -115,6 +179,94 @@ SPECS = {
                           SHORTEN_NOTE if v == "apply" else state_only(indent(SHORTEN_NOTE, 8)))}
         for v in ("apply", "state-only")
     },
+    # --- Tier 1 (A5 reuses the add-required-column patches) ---
+    "add-table": {
+        "apply": {"subject": "add model LoyaltyTier (new table)",
+                  "edits": [(MODELS, None, TIER_MODEL)],
+                  "migration": ("0107_loyaltytier", CREATE_TIER)},
+    },
+    "add-index-concurrently": {
+        "apply": {"subject": "add a B-tree index on User.last_name, built concurrently",
+                  "edits": [(MODELS, INDEX_ANCHOR, INDEX_ANCHOR.replace(
+                      "            # Orders searching index\n",
+                      "            BTreeIndex(fields=[\"last_name\"], "
+                      "name=\"account_user_last_name_btree\"),\n"
+                      "            # Orders searching index\n"))],
+                  "migration": ("0107_user_last_name_btree", ADD_INDEX,
+                                "from django.contrib.postgres.indexes import BTreeIndex\n"
+                                "from django.contrib.postgres.operations import AddIndexConcurrently\n",
+                                "    atomic = False\n\n")},
+    },
+    "lengthen-varchar": {
+        "apply": {"subject": "lengthen User.last_name to varchar(512)",
+                  "edits": [user_last_name(
+                      "    last_name = models.CharField(max_length=512, blank=True)\n")],
+                  "migration": ("0107_alter_user_last_name_512",
+                                alter_last_name("models.CharField(blank=True, max_length=512)"))},
+    },
+    # --- Tier 2 ---
+    "unique-last-name": {
+        v: {"subject": f"make User.last_name unique ({v})",
+            "edits": [user_last_name(
+                "    last_name = models.CharField(max_length=256, blank=True, unique=True)\n")],
+            "migration": ("0107_alter_user_last_name_unique",
+                          (lambda op: op if v == "apply" else state_only(indent(op, 8)))(
+                              alter_last_name("models.CharField(blank=True, max_length=256, "
+                                              "unique=True)")))}
+        for v in ("apply", "state-only")
+    },
+    "foreign-key-orphans": {
+        v: {"subject": f"User.referrer foreign key over legacy referrer_id ({v})",
+            "edits": [(MODELS, NOTE_LINE, NOTE_LINE
+                       + "    referrer = models.ForeignKey(\n"
+                         "        \"self\", null=True, blank=True, on_delete=models.SET_NULL,\n"
+                         "        related_name=\"referred_users\", db_column=\"referrer_id\", "
+                         "db_index=False,\n    )\n")],
+            "migration": ("0107_user_referrer",
+                          "        migrations.SeparateDatabaseAndState(\n"
+                          f"            state_operations=[\n{indent(ADD_REFERRER, 8)}            ],\n"
+                          "            database_operations=["
+                          + (f"\n{indent(FK_SQL, 8)}            " if v == "apply" else "")
+                          + "],\n        ),\n")}
+        for v in ("apply", "state-only")
+    },
+    "irreversible-data-migration": {
+        "apply": {"subject": "add User.customer_note and MOVE notes into it (no reverse)",
+                  "edits": [(MODELS, NOTE_LINE, NOTE_LINE
+                             + "    customer_note = models.TextField(null=True, blank=True)\n")],
+                  "migration": ("0107_move_note",
+                                ADD_CUSTOMER_NOTE + "        migrations.RunPython(move_notes),\n",
+                                "\n\ndef move_notes(apps, schema_editor):\n"
+                                "    User = apps.get_model(\"account\", \"User\")\n"
+                                "    User.objects.update(customer_note=models.F(\"note\"), note=None)\n")},
+        "reversible": {"subject": "add User.customer_note and COPY notes into it (reversible)",
+                       "edits": [(MODELS, NOTE_LINE, NOTE_LINE
+                                  + "    customer_note = models.TextField(null=True, blank=True)\n")],
+                       "migration": ("0107_move_note",
+                                     ADD_CUSTOMER_NOTE
+                                     + "        migrations.RunPython(copy_notes, "
+                                       "reverse_code=migrations.RunPython.noop),\n",
+                                     "\n\ndef copy_notes(apps, schema_editor):\n"
+                                     "    User = apps.get_model(\"account\", \"User\")\n"
+                                     "    User.objects.update(customer_note=models.F(\"note\"))\n")},
+    },
+    "raw-sql-rename": {
+        "old": {"subject": "old version reads User.note through raw SQL",
+                "edits": [("saleor/graphql/account/types.py",
+                           OLD_RESOLVER.format(attr="note"), raw_resolver("note"))],
+                "migration": None},
+        "apply": {"subject": "rename note -> customer_note; raw SQL read updated (RenameField)",
+                  "base_patches": rename_series("new-unsafe"),
+                  "edits": [("saleor/graphql/account/types.py",
+                             OLD_RESOLVER.format(attr="customer_note"), raw_resolver("customer_note"))],
+                  "migration": None},
+        "state-only": {"subject": "rename note -> customer_note; raw SQL read updated (state-only)",
+                       "base_patches": rename_series("new-staged"),
+                       "edits": [("saleor/graphql/account/types.py",
+                                  OLD_RESOLVER.format(attr="customer_note"),
+                                  raw_resolver("customer_note"))],
+                       "migration": None},
+    },
 }
 
 
@@ -122,8 +274,11 @@ def git(*args, cwd=SALEOR, check=True):
     return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True, text=True)
 
 
-def edit(path: Path, old: str, new: str) -> None:
+def edit(path: Path, old: str | None, new: str) -> None:
     text = path.read_text()
+    if old is None:
+        path.write_text(text.rstrip("\n") + "\n" + new)
+        return
     count = text.count(old)
     if count != 1:
         raise SystemExit(f"{path}: expected exactly one match, found {count}:\n{old}")
@@ -145,9 +300,10 @@ def build(scenario: str, variant: str, spec: dict) -> list[str]:
             git(*ident, "am", "-q", *map(str, spec["base_patches"]), cwd=work)
         for rel, old, new in spec["edits"]:
             edit(work / rel, old, new)
-        mig_name, ops = spec["migration"]
-        (work / "saleor/account/migrations" / f"{mig_name}.py").write_text(
-            migration(spec["subject"], ops))
+        if spec["migration"] is not None:
+            mig_name, ops, *extra = spec["migration"]
+            (work / "saleor/account/migrations" / f"{mig_name}.py").write_text(
+                migration(spec["subject"], ops, *extra))
         git("add", "-A", cwd=work)
         git(*ident, "commit", "-q", "-m",
             f"EXPERIMENT (manual, not upstream): {spec['subject']}", cwd=work)

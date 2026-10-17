@@ -1,0 +1,12 @@
+{
+  "scenario": "add-table",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "accept.json": {
+      "verdict": "PASS",
+      "recommendation": "accept_as_is",
+      "why": "CREATE TABLE touches nothing the old version uses."
+    }
+  }
+}

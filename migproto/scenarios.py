@@ -21,6 +21,8 @@ from .config import VENDOR, WORKTREES
 
 APP_LABEL = "account"
 TABLE = "account_user"
+PREVIOUS_MIGRATION = "0106_merge_20260807_0748"   # pinned head; rollback checks migrate back here
+ALL_PHASES = ("expand", "backfill", "deploy", "contract")
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
@@ -44,6 +46,17 @@ class Scenario:
     new_app_note_ops: bool = True
     rename_hooks: bool = False
     tags: tuple[str, ...] = field(default=())
+    # Old application version (worktree key). "old" is the pinned, unmodified Saleor; a scenario
+    # can ship its own old version when the behaviour under test lives in old code (A8).
+    old_version: str = "old"
+    # Legacy data created in each run database before the old app starts (manual SQL, run
+    # through the guard). Never touches the template.
+    prepare_sql: tuple[str, ...] = ()
+    # Columns whose values for pre-existing rows must not change during the rollout.
+    unchanged: tuple[str, ...] = ()
+    # Phases after which `not_null` columns are checked (a column may legitimately hold NULLs
+    # right after an expand stage, before its backfill).
+    not_null_phases: tuple[str, ...] = ALL_PHASES
 
     def variant(self, migration: str) -> Variant:
         if migration not in self.variants:
@@ -117,16 +130,98 @@ SCENARIOS: dict[str, Scenario] = {s.id: s for s in [
         cases=RENAME_CASES + ("old_write_long_note",), present_after_contract=("note",),
         tags=("B1",),
     ),
+    # --- Tier 1 -------------------------------------------------------------------------------
+    Scenario(
+        id="backfill-then-required",
+        title="A5: backfill a new column, then make it required while old writers still insert",
+        change=_change("Add User.marketing_opt_in (boolean, Django default False) by adding a "
+                       "nullable column, backfilling it, and making it NOT NULL.",
+                       new_column="marketing_opt_in"),
+        variants={"apply": Variant("add-required-column/apply", "0107_user_marketing_opt_in"),
+                  "state_only": Variant("add-required-column/state-only",
+                                        "0107_user_marketing_opt_in")},
+        cases=RENAME_CASES, not_null=("marketing_opt_in",),
+        not_null_phases=("backfill", "deploy", "contract"),
+        present_after_contract=("marketing_opt_in",), tags=("A5",),
+    ),
+    Scenario(
+        id="add-table", title="D2: add a new table",
+        change=_change("Add a new model LoyaltyTier (table account_loyaltytier).",
+                       new_table="account_loyaltytier"),
+        variants={"apply": Variant("add-table/apply", "0107_loyaltytier")},
+        cases=RENAME_CASES, tags=("D2", "safe-control"),
+    ),
+    Scenario(
+        id="add-index-concurrently", title="D4: add an index concurrently",
+        change=_change("Add a B-tree index on User.last_name, built with CREATE INDEX "
+                       "CONCURRENTLY (non-atomic migration).", indexed_column="last_name"),
+        variants={"apply": Variant("add-index-concurrently/apply", "0107_user_last_name_btree")},
+        cases=RENAME_CASES, unchanged=("last_name",), tags=("D4", "safe-control"),
+    ),
+    Scenario(
+        id="lengthen-varchar", title="D5: lengthen a varchar column (last_name 256 -> 512)",
+        change=_change("Change User.last_name from varchar(256) to varchar(512).",
+                       old_column="last_name"),
+        variants={"apply": Variant("lengthen-varchar/apply", "0107_alter_user_last_name_512")},
+        cases=RENAME_CASES, unchanged=("last_name",), tags=("D5", "safe-control"),
+    ),
+    # --- Tier 2 -------------------------------------------------------------------------------
+    Scenario(
+        id="unique-last-name", title="B2: add a unique constraint to a column with duplicates",
+        change=_change("Make User.last_name unique.", old_column="last_name"),
+        variants={"apply": Variant("unique-last-name/apply", "0107_alter_user_last_name_unique"),
+                  "state_only": Variant("unique-last-name/state-only",
+                                        "0107_alter_user_last_name_unique")},
+        cases=RENAME_CASES, unchanged=("last_name",), tags=("B2",),
+    ),
+    Scenario(
+        id="foreign-key-orphans",
+        title="B3: add a foreign key over a legacy column that has orphan values",
+        change=_change("Turn the legacy integer column account_user.referrer_id into "
+                       "ForeignKey(User) (self-reference).", old_column="referrer_id"),
+        variants={"apply": Variant("foreign-key-orphans/apply", "0107_user_referrer"),
+                  "state_only": Variant("foreign-key-orphans/state-only", "0107_user_referrer")},
+        prepare_sql=(
+            "ALTER TABLE account_user ADD COLUMN referrer_id integer",
+            "UPDATE account_user SET referrer_id = id - 1 WHERE id % 10 = 0 AND id > 1",
+            "UPDATE account_user SET referrer_id = id + 1000000 WHERE id % 97 = 0",
+        ),
+        cases=RENAME_CASES, present_after_contract=("referrer_id",), tags=("B3",),
+    ),
+    Scenario(
+        id="irreversible-data-migration",
+        title="B4: irreversible data migration (move notes into a new column)",
+        change=_change("Add User.customer_note and move every note into it with a data "
+                       "migration.", old_column="note", new_column="customer_note"),
+        variants={"apply": Variant("irreversible-data-migration/apply", "0107_move_note"),
+                  "apply-reversible": Variant("irreversible-data-migration/reversible",
+                                              "0107_move_note")},
+        cases=RENAME_CASES, tags=("B4",),
+    ),
+    Scenario(
+        id="raw-sql-rename",
+        title="A8: rename a column that app code reads through raw SQL",
+        change=_change("Rename User.note to customer_note. The GraphQL resolver for User.note "
+                       "reads the column with a raw SQL query.",
+                       old_column="note", new_column="customer_note"),
+        old_version="raw-sql-rename/old",
+        variants={"apply": Variant("raw-sql-rename/apply", "0107_rename_user_note_customer_note"),
+                  "state_only": Variant("raw-sql-rename/state-only",
+                                        "0107_rename_user_note_customer_note")},
+        cases=RENAME_CASES, preserve=("note", "customer_note"), rename_hooks=True,
+        tags=("A8",),
+    ),
 ]}
 
 DEFAULT = "rename-note"
 
 # Register every variant worktree (rename-note's are already in config.WORKTREES).
 for _s in SCENARIOS.values():
-    for _col in (*_s.preserve, *_s.not_null, *_s.absent_after_contract, *_s.present_after_contract):
+    for _col in (*_s.preserve, *_s.not_null, *_s.absent_after_contract, *_s.present_after_contract,
+                 *_s.unchanged):
         assert _IDENT.match(_col), (_s.id, _col)
-    for _v in _s.variants.values():
-        WORKTREES.setdefault(_v.version, VENDOR / f"wt-{_v.version.replace('/', '-')}")
+    for _version in (*(v.version for v in _s.variants.values()), _s.old_version):
+        WORKTREES.setdefault(_version, VENDOR / f"wt-{_version.replace('/', '-')}")
 
 
 def get(scenario_id: str | None) -> Scenario:
@@ -138,7 +233,9 @@ def get(scenario_id: str | None) -> Scenario:
 
 def variant_versions() -> list[str]:
     """All new-version worktree keys that setup must build (beyond config.BRANCHES)."""
-    return sorted({v.version for s in SCENARIOS.values() for v in s.variants.values()})
+    versions = {v.version for s in SCENARIOS.values() for v in s.variants.values()}
+    versions |= {s.old_version for s in SCENARIOS.values() if s.old_version != "old"}
+    return sorted(versions)
 
 
 def file_safe(version: str) -> str:

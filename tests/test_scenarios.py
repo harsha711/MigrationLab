@@ -2,7 +2,7 @@
 
 import pytest
 
-from migproto import checks, plans, scenarios, staged
+from migproto import checks, plans, scenarios, staged  # noqa: F401  (staged.recommendation)
 from migproto.config import WORKTREES
 from migproto.saleor_app import create_customer_request
 
@@ -22,10 +22,15 @@ def test_registry_is_consistent():
     assert rename.variant("state_only").version == "new-staged"
     assert rename.variant("apply").version == "new-unsafe"
     for s in scenarios.SCENARIOS.values():
-        assert set(s.variants) <= {"apply", "state_only"} and "apply" in s.variants
+        assert "apply" in s.variants, s.id
+        assert all(k in ("apply", "state_only") or k.startswith("apply-") for k in s.variants)
         assert all(c in checks.CATALOGUE for c in s.cases), s.id
+        assert s.old_version in WORKTREES
+        assert set(s.not_null_phases) <= set(scenarios.ALL_PHASES)
         for v in s.variants.values():
             assert v.version in WORKTREES and v.migration.startswith("0107_")
+    assert len(scenarios.SCENARIOS) == 14
+    assert "raw-sql-rename/old" in scenarios.variant_versions()
     with pytest.raises(KeyError):
         scenarios.get("no-such-scenario")
     with pytest.raises(KeyError):
@@ -51,6 +56,35 @@ def test_state_only_plan_still_needs_expand_and_contract():
         plans.validate_plan(plan(DEPLOY_APPLY, {**RETIRE, "migration": "apply"}))
     with pytest.raises(plans.PlanError, match="retire_old"):
         plans.validate_plan(plan(DEPLOY_APPLY))
+
+
+def test_rollback_check_and_variant_rules():
+    rollback = {"id": "rb", "kind": "rollback_check"}
+    p = plan({**DEPLOY_APPLY, "variant": "apply-reversible"}, rollback, RETIRE)
+    assert plans.validate_plan(p) and plans.deploy_variant(p) == "apply-reversible"
+    assert plans.deploy_variant(plan(DEPLOY_APPLY, RETIRE)) == "apply"
+    assert plans.deploy_variant(plan({"id": "d", "kind": "deploy_new"}, RETIRE)) == "state_only"
+    with pytest.raises(plans.PlanError, match="after deploy_new and before retire_old"):
+        plans.validate_plan(plan(rollback, DEPLOY_APPLY, RETIRE))
+    with pytest.raises(plans.PlanError, match="at most one"):
+        plans.validate_plan(plan(DEPLOY_APPLY, rollback, {**rollback, "id": "rb2"}, RETIRE))
+    with pytest.raises(plans.PlanError, match="only the deploy_new stage may set variant"):
+        plans.validate_plan(plan(DEPLOY_APPLY, {**RETIRE, "variant": "x"}))
+    with pytest.raises(KeyError):
+        scenarios.get("irreversible-data-migration").variant("apply-nope")
+
+
+def test_scripted_plans_valid_and_labelled():
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "proposals"
+    for label_file in (root / "manual" / "scenarios").glob("*.json"):
+        scenario = scenarios.get(label_file.stem)
+        labels = json.loads(label_file.read_text(encoding="utf-8"))["plans"]
+        for name in labels:
+            p = json.loads((root / "scripted" / scenario.id / name).read_text(encoding="utf-8"))
+            plans.validate_plan(p)
+            scenario.variant(plans.deploy_variant(p))   # the plan's variant exists
 
 
 def test_recommendation():

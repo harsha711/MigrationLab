@@ -5,10 +5,11 @@ from pathlib import Path
 
 from . import db
 
-STAGE_KINDS = {"sql", "deploy_new", "retire_old"}
+STAGE_KINDS = {"sql", "deploy_new", "retire_old", "rollback_check"}
 SQL_PHASES = {"expand", "backfill", "contract"}
 PLAN_KEYS = {"plan_id", "summary", "write_consistency", "stages", "provenance", "revision_notes"}
-STAGE_KEYS = {"id", "kind", "phase", "description", "sql", "repeat_until_zero_rows", "migration"}
+STAGE_KEYS = {"id", "kind", "phase", "description", "sql", "repeat_until_zero_rows", "migration",
+              "variant"}
 DEPLOY_MIGRATIONS = {"state_only", "apply"}
 APPS = {"old", "new"}
 OPS = {"read", "write", "create", "clear"}
@@ -70,10 +71,20 @@ def validate_plan(plan: dict) -> dict:
                 raise PlanError(f"stage {sid}: only the deploy_new stage may set migration")
             if st["migration"] not in DEPLOY_MIGRATIONS:
                 raise PlanError(f"stage {sid}: migration must be one of {sorted(DEPLOY_MIGRATIONS)}")
+        if "variant" in st:
+            if kind != "deploy_new":
+                raise PlanError(f"stage {sid}: only the deploy_new stage may set variant")
+            if not isinstance(st["variant"], str) or not st["variant"]:
+                raise PlanError(f"stage {sid}: variant must be a non-empty string")
     kinds = [st["kind"] for st in stages]
     for required in ("deploy_new", "retire_old"):
         if kinds.count(required) != 1:
             raise PlanError(f"plan must contain exactly one {required} stage")
+    if kinds.count("rollback_check") > 1:
+        raise PlanError("plan may contain at most one rollback_check stage")
+    if "rollback_check" in kinds and not (
+            kinds.index("deploy_new") < kinds.index("rollback_check") < kinds.index("retire_old")):
+        raise PlanError("rollback_check must come after deploy_new and before retire_old")
     if deploy_migration(plan) == "apply":
         # The deployed version's own Django migration changes the schema; SQL stages are optional
         # (e.g. "accept as-is" plans: deploy_new + retire_old). The contract gate still applies.
@@ -89,6 +100,12 @@ def deploy_migration(plan: dict) -> str:
     """How the deploy_new stage applies the new version's migration (default state_only)."""
     deploy = next(st for st in plan["stages"] if st.get("kind") == "deploy_new")
     return deploy.get("migration", "state_only")
+
+
+def deploy_variant(plan: dict) -> str:
+    """Which scenario variant to deploy: an explicit `variant`, else the migration mode."""
+    deploy = next(st for st in plan["stages"] if st.get("kind") == "deploy_new")
+    return deploy.get("variant") or deploy.get("migration", "state_only")
 
 
 def validate_tests(tests: dict | None) -> dict:

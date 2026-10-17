@@ -83,6 +83,7 @@ class Context:
     expected: dict[int, str | None]
     _free_seed: list[int] = field(default_factory=list)
     new_app_note_ops: bool = True   # False when the new app has no `note` field (scenario A3)
+    baseline: dict = field(default_factory=dict)  # column -> {id: value} at S0 (`unchanged`)
 
     @classmethod
     def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer],
@@ -231,6 +232,24 @@ def columns_after_contract(ctx: Context, stage: str, present: tuple[str, ...],
                          app_version="database",
                          expected={"present": list(present), "absent": list(absent)},
                          observed={"missing": missing, "still_present": lingering})
+
+
+def snapshot_columns(ctx: Context, columns: tuple[str, ...]) -> None:
+    """Remember pre-existing rows' values so `unchanged` can detect rewrites of customer data."""
+    ctx.baseline = {col: dict(db.query(ctx.dbname, f"SELECT id, {_ident(col)} FROM account_user"))
+                    for col in columns}
+
+
+def unchanged(ctx: Context, stage: str, column: str) -> bool:
+    before = ctx.baseline.get(column, {})
+    now = dict(db.query(ctx.dbname, f"SELECT id, {_ident(column)} FROM account_user"))
+    changed = [pk for pk, v in before.items() if pk in now and now[pk] != v]
+    examples = [{"id": pk, "before": before[pk], "after": now[pk]} for pk in changed[:5]]
+    return ctx.log.check(f"{stage}.unchanged.{column}", not changed, changed_rows=len(changed),
+                         examples=examples, app_version="database",
+                         expected={"column": column, "changed_rows": 0},
+                         observed={"column": column, "changed_rows": len(changed),
+                                   "rows_compared": len(before)})
 
 
 def app_smoke(ctx: Context, role: str, stage: str) -> bool:
