@@ -47,11 +47,16 @@ def cmd_unsafe(args) -> int:
 
 
 def cmd_staged(args) -> int:
-    from . import plans, staged
+    from . import plans, runner_api
     def go(log):
         plan = plans.load(args.plan)
         tests = plans.load(args.tests) if args.tests else None
-        return staged.run(log, plan, tests, provenance=args.provenance)
+        report = runner_api.execute_plan(
+            plan, run_context=runner_api.RunContext(log, provenance=args.provenance),
+            extra_tests=tests)
+        result = report.as_dict()
+        result["runner_verdict"] = result.pop("verdict")
+        return result
     return _run("staged", go)
 
 

@@ -3,7 +3,7 @@
 import json
 import re
 
-from .. import staged
+from .. import runner_api
 from ..config import PROPOSALS
 from ..runlog import SCRIPTED, RunLog, agent
 from . import roles
@@ -69,7 +69,9 @@ def run(log: RunLog, source: str) -> dict:
                 tests["provenance"] = prov
             log.event("attempt", provenance=prov, name=f"attempt {attempt}",
                       plan_id=plan_obj.get("plan_id") if isinstance(plan_obj, dict) else None)
-            result = staged.run(log, plan_obj, tests, provenance=prov)
+            result = runner_api.execute_plan(
+                plan_obj, run_context=runner_api.RunContext(log, provenance=prov),
+                extra_tests=tests).as_dict()
             report = call(f"tester-report-{attempt}", roles.report_evidence, result)
             attempts.append({"attempt": attempt, "plan_id": result.get("plan_id"),
                              "ok": result["ok"], "halted": result.get("halted"),
