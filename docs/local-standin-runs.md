@@ -26,6 +26,7 @@ They say nothing about topology quality. Each row is one run at temperature 1.0.
 | `20261017-154903` | single | 24k / 600 s | INCOMPLETE (wall, 1800 s) | 7 (4) | 34,827 | 1,971 s | Attempt 1 wrote `customer_note` before adding it; revision call timed out three times (600 s each) |
 | `20261017-163315` | roles | 24k / 120 s | FAIL | 8 (7) | 25,722 | 433 s | Attempt 1 refused by `retirement_gate` (contract before `retire_old`). Revision fixed the ordering, but attempt 2 used a one-time backfill with no sync; 15 of 28 checks failed and the contract was skipped |
 | `20261017-164455` | single | 24k / 120 s | INCOMPLETE (tokens, 43,397) | 6 (4) | 43,397 | 308 s | Attempt 1 wrote `customer_note` before adding it; one revision call timed out, the retry returned a plan with an invalid stage id and went over the token budget |
+| `20261017-165152` | roles | 24k / 120 s, after `c7c7fe5` | FAIL | 8 (7) | 20,969 | 241 s | Both attempts put the contract before `retire_old` and were refused by `retirement_gate`; the revision's first reply lacked a contract stage and its retry was valid. No timeouts; `request_timeout_s` recorded |
 
 Run directories are under `runs/` (git-ignored). No run produced a passing plan.
 
