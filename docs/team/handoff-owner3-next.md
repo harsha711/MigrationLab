@@ -27,7 +27,7 @@ Nothing here runs SQL against Saleor, starts the apps, or calls a model. `tests/
 ## Run it
 ```bash
 uv sync
-uv run pytest -q tests/memory        # 22 tests, under 1 s, no Docker needed
+uv run pytest -q tests/memory        # 28 tests, under 1 s, no Docker needed
 uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 ```
 - **No `uv`?** `python -m migproto ui` also works. The memory and UI code is stdlib only. The tests need `pytest`.
@@ -42,14 +42,15 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 | `migproto/ui/server.py` | `serve()`, `make_handler(conn, lock)` | Stdlib `ThreadingHTTPServer`. Endpoints: `/api/runs`, `/api/run?id=`, `/api/matrix?run=&attempt=`, `/api/observation?id=`, `/api/history?check=`. `POST` returns 503 (Run Review not wired) |
 | `migproto/ui/static/app.js` | `route()` plus one `page*` function per page | Hash routes: `#/`, `#/run/<id>`, `#/run/<id>/plan/<a>`, `#/run/<id>/matrix/<a>`, `#/run/<id>/agents`, `#/run/<id>/metrics`, `#/obs/<id>`, `#/compare/<a>/<b>`. No build step |
 | `migproto/cli.py` | `cmd_ui` | The only edit outside Owner 3's paths (Harsha owns `cli.py`) |
-| `tests/memory/` | `test_adapter.py` (10), `test_store.py` (8), `test_ui.py` (4) | Assert the fixture facts from the assignment's acceptance criteria |
+| `tests/memory/` | `test_adapter.py` (10), `test_store.py` (8), `test_ui.py` (4), `test_v1.py` (6) | Assert the fixture facts from the assignment's acceptance criteria. `test_v1.py` uses the synthetic v1 fixture |
 
 ## Concepts you need
 - **IDs:**
   - `observation_id` = `<run_id>/<attempt>/<check name>#<line number>`
   - `attempt_id` = `<run_id>/a<N>`
   - for `examples/`, `run_id` is the folder name (e.g. `live-ordering-revision`)
-- **`scope_source`:** `derived_v0` means scope was worked out from line order. `recorded_v1` means the runner wrote it explicitly (no v1 runs exist yet).
+- **`scope_source`:** `derived_v0` means scope was worked out from line order. `recorded_v1` means the runner wrote it explicitly. The v1 shape is defined in `docs/team/handoff-01.md` on Harsha's `runner/verification-v1` branch.
+- **v1 fields:** `outcome` (pass / fail / refused / error / skipped), `check_type`, `app_scope` (the runner's `app_version`: old / new / both / database), `app_commit`, `database_snapshot_id`, `expected` / `observed`. They are all NULL for v0 runs.
 - **App version** comes only from each step's `app` field: `old`, or `new-staged` / `new-unsafe` depending on the command. Checks without `steps` (database-level checks, runner gates, the `unsafe` run's single-op checks) have no app version.
 - **Schema state** is set only inside SQL stages (from the `schema` event). In `S0`, `deploy_new` and `retire_old` it is unknown.
 - **`status` vs `outcome`:** `status` is the raw `PASS`/`FAIL`. `outcome` stays NULL for v0, because v0 `FAIL` can mean a failed assertion, a refusal or an execution error (contracts G2).
@@ -57,7 +58,9 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 - **Claims:** today they are free text from `agents/*.json` (planner `write_consistency` / `revision_notes`, tester `summary` / `suspected_cause`, and investigator findings with `needs_change: true`). They have no evidence links, so `claim_evidence` is empty.
 
 ## Gotchas
-- **Delete `data/memory.sqlite` after changing the adapter or the schema.** Ingest is append-only (`INSERT OR IGNORE`), so rows already stored keep their old derived values. The tests use `:memory:` and aren't affected.
+- **Delete `data/memory.sqlite` after changing how the adapter derives values.** Ingest is append-only (`INSERT OR IGNORE`), so rows already stored keep their old derived values.
+  - New columns are different: add them to `SCHEMA` *and* to `store.ADDED_COLUMNS`, and existing stores gain them automatically.
+  - The tests use `:memory:` and aren't affected.
 - **The server ingests once, at startup.** Restart `migproto ui` to pick up new `runs/`.
 - **Windows console:** printing `→` fails with cp1252. That's why the matrix column labels use ASCII `->` and the UI swaps in `→` for display.
 - **Fixture leak:** `query_observations` can return `examples/` outcomes. Evaluated agents must never see those, so any agent-facing use must pass `source_kind="local_run"`.
@@ -68,9 +71,11 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
    - Open a PR from `memory-ui/scoped-review`.
    - Harsha reviews the `cli.py` change and the decisions listed in `handoff-owner3.md`.
    - Someone on Linux runs `uv run pytest` and `uv run migproto agent-loop --proposals scripted` before merging.
-2. **v1 fields (when Harsha ships them, G1–G3).**
-   - `_from_v1` in `adapter.py` is written against the example in `docs/contracts.md` section 4. Check it against the first real v1 run.
-   - Show `outcome` (`fail` / `refused` / `error`) in the matrix and on the Evidence page.
+2. **Confirm v1 against real data.** v1 support is implemented and shown in the UI, but it has only been tested against the synthetic fixture `tests/memory/fixtures/v1-synthetic-staged/`. When Harsha exports `examples/v1/` (their step 5):
+   - Ingest those runs.
+   - Copy `test_v1.py`'s assertions over to a real run.
+   - Delete the synthetic fixture.
+   - Check one loop run in particular: the handoff doesn't say what `attempt_id` the events before the first attempt carry.
 3. **Structured claims (when Owner 2 ships them, G7).**
    - Parse claims with `evidence[]` into `claims` / `claim_evidence`.
    - Add an `/api/claim?id=` endpoint around `query.evidence_for_claim`.

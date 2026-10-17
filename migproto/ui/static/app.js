@@ -23,9 +23,17 @@ const getRun = (id) => {
 
 function verdictBadge(v) {
   if (!v) return `<span class="badge">${unknown()}</span>`;
-  const cls = ["PASS", "REPRODUCED"].includes(v) ? "pass" : ["FAIL", "ERROR"].includes(v) ? "fail" : "";
+  const u = String(v).toUpperCase();
+  const cls = ["PASS", "REPRODUCED"].includes(u) ? "pass"
+    : ["FAIL", "ERROR", "REFUSED"].includes(u) ? "fail" : "";
   return `<span class="badge ${cls}">${esc(v)}</span>`;
 }
+
+// v1 outcome when recorded, else the v0 status. v0 FAIL stays FAIL (cause unknown, G2).
+const kindOf = (x) => (x.outcome || x.status || "").toUpperCase().replace("SKIPPED", "SKIP");
+const MARKS = { PASS: "✓", FAIL: "✗", REFUSED: "⊘", ERROR: "!", SKIP: "–" };
+const isBad = (x) => ["FAIL", "REFUSED", "ERROR"].includes(kindOf(x));
+const countsText = (c) => c ? Object.entries(c).map(([k, n]) => `${n} ${esc(k)}`).join(" · ") : "";
 
 function typeBadges(run) {
   const m = run.meta || {};
@@ -34,7 +42,8 @@ function typeBadges(run) {
   if (m.dev_only_model) model = `<span class="badge warn" title="${esc(m.model)}">dev run, outside submission budget</span>`;
   else if (m.model) model = `<span class="badge">live: ${esc(m.model)}</span>`;
   else model = `<span class="badge">scripted, no model</span>`;
-  return `<span class="badge">${source}</span> ${model}`;
+  const v1 = (m.contract_version || "").endsWith("/v1") ? ` <span class="badge">v1 scope</span>` : "";
+  return `<span class="badge">${source}</span> ${model}${v1}`;
 }
 
 function kv(rows) {
@@ -107,7 +116,8 @@ async function pageOverview(id) {
     return `<div class="card attempt ${cls}">
       <div class="row spread">
         <div class="row"><strong>${esc(s)}</strong> ${verdictBadge(a.status)}
-          <span class="muted">${a.checks_total} checks · ${a.checks_failed} failed</span></div>
+          <span class="muted">${a.outcome_counts ? countsText(a.outcome_counts)
+            : `${a.checks_total} checks · ${a.checks_failed} failed`}</span></div>
         <div class="row"><a href="#/run/${enc(id)}/plan/${s}">Plan</a> · <a href="#/run/${enc(id)}/matrix/${s}">Matrix</a></div>
       </div>
       ${a.halted ? `<p><span class="badge fail">halted</span> ${esc(a.halted)}</p>` : ""}
@@ -164,22 +174,23 @@ async function pageMatrix(id, s) {
       }
       body += `<tr><td title="${esc(r.path.join(" → "))}"><code>${esc(r.check_name.replace(/^case\./, ""))}</code></td>${
         m.columns.map((c) => `<td class="cell">${c === r.column
-          ? `<button class="mark ${esc(r.status)}" data-obs="${esc(r.observation_id)}" title="${esc(r.status)}">${r.status === "PASS" ? "✓" : "✗"}</button>`
+          ? `<button class="mark ${esc(kindOf(r))}" data-obs="${esc(r.observation_id)}" title="${esc(r.outcome || r.status)}">${MARKS[kindOf(r)] || "?"}</button>`
           : `<span class="dot">·</span>`}</td>`).join("")}</tr>`;
     }
     grid = `<div class="card table-wrap"><table class="matrix">
       <tr><th>case</th>${m.columns.map((c) => `<th class="col">${esc(c.replace(" -> ", " → "))}</th>`).join("")}</tr>
       ${body}</table>
-      <p class="legend">Columns: writer → reader app version. ✓ pass, ✗ fail, · not tested. Click a mark for its evidence.</p></div>`;
+      <p class="legend">Columns: writer → reader app version. ✓ pass, ✗ fail, ⊘ refused, ! error, – skipped, · not tested. Click a mark for its evidence.</p></div>`;
   }
-  const dbFail = m.db_checks.filter((d) => d.status !== "PASS");
-  const dbPass = m.db_checks.length - dbFail.length;
+  const dbBad = m.db_checks.filter(isBad);
+  const dbPass = m.db_checks.filter((d) => kindOf(d) === "PASS").length;
+  const dbSkip = m.db_checks.filter((d) => kindOf(d) === "SKIP").length;
   const db = m.db_checks.length ? `<h2>Other checks</h2>
-    <p class="muted">${dbPass} passed${dbFail.length ? `, ${dbFail.length} failed:` : ""}</p>
-    <div class="chips">${dbFail.map((d) =>
-      `<a class="chip" href="#/obs/${enc(d.observation_id)}">${esc(d.check_name)} (${val(d.stage_id)})</a>`).join("")}</div>
+    <p class="muted">${dbPass} passed${dbSkip ? `, ${dbSkip} skipped` : ""}${dbBad.length ? `, ${dbBad.length} not passed:` : ""}</p>
+    <div class="chips">${dbBad.map((d) =>
+      `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${MARKS[kindOf(d)] || ""} ${esc(d.check_name)} (${val(d.stage_id)})</a>`).join("")}</div>
     <details><summary>Show all</summary><div class="chips" style="margin-top:6px">${m.db_checks.map((d) =>
-      `<a class="chip ${esc(d.status)}" href="#/obs/${enc(d.observation_id)}">${esc(d.check_name)}</a>`).join("")}</div></details>` : "";
+      `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${esc(d.check_name)}</a>`).join("")}</div></details>` : "";
   return `${runHeader(run, "matrix")}${attemptPills(run, "matrix", s)}${grid}${db}`;
 }
 
@@ -211,7 +222,11 @@ async function pageMetrics(id) {
       ["model time (s)", nr(r.model_seconds)],
       ["tokens (in / out / total)", r.total_tokens == null ? nr(null) : `${r.prompt_tokens} / ${r.completion_tokens} / ${r.total_tokens}`],
       ["contract", val(run.meta?.contract_version)],
+      ["recorded run id", nr(r.recorded_run_id)],
+      ["database snapshot", r.database_snapshot_ids ? r.database_snapshot_ids.map((s) => `<code>${esc(s)}</code>`).join(", ") : nr(null)],
     ])}</div>
+    ${(r.start_states || []).length ? `<details><summary>Start state (app identity, patch hash)</summary>
+      <pre>${esc(JSON.stringify(r.start_states, null, 2))}</pre></details>` : ""}
     ${calls ? `<details><summary>Per call</summary><div class="table-wrap"><table>
       <tr><th>role</th><th>seconds</th><th>tokens</th></tr>${calls}</table></div></details>` : ""}
     <h2>NeMo Gym</h2><p class="muted">Not connected (no gym/results/ yet).</p>`;
@@ -231,15 +246,25 @@ async function pageEvidence(oid) {
         <td>${st.error ? esc(st.error) : st.value == null ? "" : `<code>${esc(st.value)}</code>`}</td></tr>`).join("")}
     </table></div>` : `<p class="muted">No steps (database- or runner-level check).</p>`;
   const others = hist.rows.filter((h) => h.observation_id !== o.observation_id);
-  return `<div class="row"><h1><code>${esc(o.check_name)}</code></h1>${verdictBadge(o.status)}</div>
-    <div class="card">${kv([
-      ["run", val(o.run_id)], ["attempt", val(s)], ["plan", val(o.plan_id)], ["stage", val(o.stage_id)],
-      ["schema state", o.schema_state ? `<code>${esc(JSON.stringify(o.schema_state))}</code>` : unknown()],
-      ["outcome type", o.outcome ? esc(o.outcome) : unknown(),
-        "v0 FAIL does not distinguish failed assertion, runner refusal and execution error (contracts G2)"],
-      ["defined by / executed by", `${val(o.definition_provenance)} / ${val(o.executed_by)}`],
-      ["scope source", val(o.scope_source)],
-    ])}</div>
+  const json = (x) => x == null ? unknown() : `<code>${esc(JSON.stringify(x))}</code>`;
+  const v1 = o.scope_source === "recorded_v1";
+  const rows = [
+    ["run", val(o.run_id)], ["attempt", val(s)], ["plan", val(o.plan_id)], ["stage", val(o.stage_id)],
+    ["outcome", o.outcome ? verdictBadge(o.outcome) : unknown(),
+      "v0 FAIL does not distinguish failed assertion, runner refusal and execution error (contracts G2)"],
+  ];
+  if (v1) rows.push(
+    ["check type", val(o.check_type)],
+    ["app scope (runner)", val(o.app_scope, "none")],
+    ["app commit", json(o.app_commit)],
+    ["database snapshot", val(o.database_snapshot_id)],
+    ["expected", json(o.expected)], ["observed", json(o.observed)]);
+  rows.push(
+    ["schema state", json(o.schema_state)],
+    ["defined by / executed by", `${val(o.definition_provenance)} / ${val(o.executed_by)}`],
+    ["scope source", val(o.scope_source)]);
+  return `<div class="row"><h1><code>${esc(o.check_name)}</code></h1>${verdictBadge(o.outcome || o.status)}</div>
+    <div class="card">${kv(rows)}</div>
     <h2>Steps</h2>${steps}
     ${o.error ? `<h2>Error</h2><pre>${esc(o.error)}</pre>` : ""}
     <details><summary>Recorded line</summary><pre>${esc(JSON.stringify(o.raw, null, 2))}</pre></details>

@@ -26,7 +26,7 @@
 
 ## Verification run
 ```bash
-uv run pytest -q tests/memory     # 22 passed (run here with Python 3.14 + pytest, since uv is not installed on this Windows machine)
+uv run pytest -q tests/memory     # 28 passed (run here with Python 3.14 + pytest, since uv is not installed on this Windows machine)
 uv run migproto ui                # http://127.0.0.1:8765/
 ```
 
@@ -43,6 +43,21 @@ uv run migproto ui                # http://127.0.0.1:8765/
 - `uv run migproto agent-loop --proposals scripted` (needs Linux and Docker)
 
 Please run both before merging the `cli.py` change.
+
+## v1 support (follow-up to `docs/team/handoff-01.md`)
+The adapter reads the runner's implemented v1 shape from Harsha's `runner/verification-v1` branch, not the older proposal in `docs/contracts.md`.
+- **Fields read:** `step_id` becomes the stage. Also `outcome`, `check_type`, `app_version` (stored as `app_scope`, so it isn't confused with per-step app versions), `app_commit`, `schema_state` (with `schema_hash`), `database_snapshot_id`, `expected` / `observed`, and `start_state` events.
+- **IDs:** runs are keyed by directory name. That keeps exported fixtures (`examples/v1/<name>/`) consistent even though their recorded `run_id` differs. The recorded `run_id` / `attempt_id` stay in `raw`. The recorded `observation_id` is the primary key, so claims can cite it.
+- **SKIP:** `status: "SKIP"` / `outcome: skipped` is never counted as a failure. `checks_failed` keeps its v0 meaning.
+- **UI:**
+  - The matrix and chips show ✓ pass, ✗ fail, ⊘ refused, ! error and – skipped.
+  - The Overview shows outcome counts.
+  - The Evidence page shows the v1 fields.
+  - Metrics shows the snapshot id and start state.
+- **Existing stores:** `data/memory.sqlite` gains the new columns through an additive `ALTER TABLE`. No rows are lost.
+- **Tested against a synthetic fixture only:** `tests/memory/fixtures/v1-synthetic-staged/` is hand-written from the handoff-01 field list. No real v1 run is in git yet. **Harsha:** once `examples/v1/` exists, add one of those runs to the tests and delete the synthetic fixture.
+
+**Merge note for Harsha:** on `runner/verification-v1`, `cli.py` imports `migproto.lock` at module level, and `lock.py` imports `fcntl`, which doesn't exist on Windows. After both branches merge, `migproto ui` (a read-only command) would crash on Windows at import time. Suggested fix: import `lock` inside `_run` / `cmd_all`, or give `lock.py` a non-`fcntl` fallback.
 
 ## Decisions to review
 1. **Schema state:** applied to every check inside a SQL stage, from that stage's `schema` event (rule 4). It's `None` in `S0`, `deploy_new` and `retire_old`.

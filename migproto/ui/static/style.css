@@ -75,12 +75,15 @@ tr.link:hover td { background: var(--code-bg); }
 .mark { display: inline-block; min-width: 30px; border-radius: 5px; padding: 1px 6px; font-weight: 700; border: none; cursor: pointer; }
 .mark.PASS { background: var(--pass-bg); color: var(--pass); }
 .mark.FAIL { background: var(--fail-bg); color: var(--fail); }
+.mark.REFUSED, .mark.ERROR, .chip.REFUSED, .chip.ERROR { background: var(--warn-bg); color: var(--warn); }
+.mark.SKIP, .chip.SKIP { background: var(--none-bg); color: var(--muted); }
 .dot { color: var(--none); }
 .stage-row td { background: var(--code-bg); font-size: 12px; font-weight: 600; color: var(--muted); }
 .legend { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border-radius: 6px; padding: 2px 8px; font-size: 12px; background: var(--fail-bg); color: var(--fail); }
 .chip.PASS { background: var(--pass-bg); color: var(--pass); }
+.chip.FAIL { background: var(--fail-bg); color: var(--fail); }
 
 .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 760px) { .compare { grid-template-columns: minmax(0, 1fr); } }
