@@ -28,6 +28,15 @@ if [ ! -x "$OUT/venv/bin/vllm" ]; then
   uv pip install --python "$OUT/venv/bin/python" "vllm==$VLLM_VERSION"
 fi
 
+# The PyPI vLLM wheel uses CUDA 13 PyTorch. On an instance whose driver is older (Brev's
+# Scaleway H100 image ships driver 570 / CUDA 12.8), CUDA_COMPAT=13-0 installs NVIDIA's
+# forward-compatibility libraries (data-center GPUs only) and puts them first on the path.
+if [ -n "${CUDA_COMPAT:-}" ]; then
+  dpkg -s "cuda-compat-$CUDA_COMPAT" >/dev/null 2>&1 \
+    || sudo apt-get install -y "cuda-compat-$CUDA_COMPAT"
+  export LD_LIBRARY_PATH="/usr/local/cuda-${CUDA_COMPAT/-/.}/compat${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 # "1x H100 (max throughput)" recipe from the model card (docs/bounties.md, section 5).
 # No speculative decoding, so no draft model (docs/model-inventory.md).
 FLAGS=(
@@ -50,6 +59,7 @@ DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
 CUDA=$(nvidia-smi | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)
 VLLM_INSTALLED=$("$OUT/venv/bin/python" -c "import vllm; print(vllm.__version__)")
 COMMAND="VLLM_HUMMING_MOE_GEMM_TYPE=indexed vllm serve $MODEL ${FLAGS[*]}"
+[ -n "${CUDA_COMPAT:-}" ] && COMMAND="LD_LIBRARY_PATH=$LD_LIBRARY_PATH (cuda-compat-$CUDA_COMPAT) $COMMAND"
 
 {
   echo "recorded_at: $(date -u +%FT%TZ)"

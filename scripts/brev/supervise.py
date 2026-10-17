@@ -116,8 +116,9 @@ class Supervisor:
         if r.returncode:
             raise RuntimeError(f"scp serve_lightning.sh failed: {r.stderr.strip()}")
         script = ""
-        if os.environ.get("HF_TOKEN"):
-            script += f"export HF_TOKEN={shlex.quote(os.environ['HF_TOKEN'])}\n"
+        for name in ("HF_TOKEN", "CUDA_COMPAT", "EXTRA_FLAGS"):
+            if os.environ.get(name):
+                script += f"export {name}={shlex.quote(os.environ[name])}\n"
         script += (f"mkdir -p {REMOTE_DIR}\n"
                    f"nohup setsid bash serve_lightning.sh > {REMOTE_DIR}/serve.out 2>&1 "
                    "< /dev/null &\necho started\n")
@@ -136,7 +137,10 @@ class Supervisor:
     def _tunnel_loop(self):
         while not self.stopping:
             self.tunnel = subprocess.Popen(
+                # Own connection: Brev's ssh_config sets ControlMaster auto, which would hand
+                # the forward to the shared master and exit immediately.
                 ["ssh", *SSH_OPTS, "-N", "-o", "ExitOnForwardFailure=yes",
+                 "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "RequestTTY=no",
                  "-L", f"{self.a.port}:127.0.0.1:8000", self.a.instance],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             self.tunnel.wait()
