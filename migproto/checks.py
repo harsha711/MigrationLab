@@ -69,18 +69,29 @@ class Context:
         return self._free_seed.pop()
 
 
+def case_app_version(steps: list[dict]) -> str | None:
+    """Apps named by a case definition: 'old', 'new', 'both', or None for no app steps."""
+    apps = {s.get("app") for s in steps} & {"old", "new"}
+    if len(apps) == 2:
+        return "both"
+    return next(iter(apps), None)
+
+
 def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MANUAL) -> bool:
     labels: dict[str, int] = {}
     trace = []
     ok = True
-    for step in steps:
+    infra_error = False
+    expected_reads, observed_reads = [], []
+    failed_step = None
+    for i, step in enumerate(steps):
         server = ctx.servers.get(step["app"])
         label, op = step["user"], step["op"]
         entry = dict(step)
         if server is None or not server.alive():
             entry.update(ok=False, error=f"{step['app']} app not running")
             trace.append(entry)
-            ok = False
+            ok, infra_error, failed_step = False, True, i
             break
         if op == "create":
             email = f"{case_id}-{label}-{uuid.uuid4().hex[:6]}@case.migproto.test".lower()
@@ -99,15 +110,26 @@ def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MA
                     ctx.expected[pk] = value
             else:
                 res = server.read_note(pk)
-                if res.ok and res.value != ctx.expected.get(pk):
+                want = ctx.expected.get(pk)
+                expected_reads.append({"step": i, "user_pk": pk, "value": want})
+                observed_reads.append({"step": i, "user_pk": pk,
+                                       "value": res.value if res.ok else None})
+                if res.ok and res.value != want:
                     res.ok = False
-                    res.error = f"read {res.value!r}, expected {ctx.expected.get(pk)!r}"
+                    res.error = f"read {res.value!r}, expected {want!r}"
         entry.update(user_pk=labels.get(label), ok=res.ok, value=res.value, error=res.error)
         trace.append(entry)
         if not res.ok:
-            ok = False
+            ok, failed_step = False, i
             break
-    ctx.log.check(f"case.{case_id}", ok, provenance=provenance, steps=trace)
+    ctx.log.check(
+        f"case.{case_id}", ok, provenance=provenance, steps=trace,
+        app_version=case_app_version(steps), outcome="error" if infra_error else None,
+        expected={"all_steps_ok": True, "reads": expected_reads},
+        observed={"all_steps_ok": ok, "failed_step": failed_step,
+                  "error": trace[failed_step]["error"] if failed_step is not None else None,
+                  "reads": observed_reads},
+    )
     return ok
 
 
@@ -119,12 +141,19 @@ def preservation(ctx: Context, column: str, stage: str) -> bool:
                 for pk in (missing + mismatched)[:5]]
     return ctx.log.check(f"{stage}.preservation.{column}", not missing and not mismatched,
                          rows=len(ctx.expected), missing=len(missing), mismatched=len(mismatched),
-                         examples=examples, checksum=seed.checksum(ctx.dbname, column))
+                         examples=examples, checksum=seed.checksum(ctx.dbname, column),
+                         app_version="database",
+                         expected={"column": column, "rows": len(ctx.expected), "missing": 0,
+                                   "mismatched": 0},
+                         observed={"column": column, "rows": len(actual),
+                                   "missing": len(missing), "mismatched": len(mismatched)})
 
 
 def columns_agree(ctx: Context, stage: str) -> bool:
     n, examples = _disagreements(ctx.dbname)
-    return ctx.log.check(f"{stage}.columns_agree", n == 0, disagreeing_rows=n, examples=examples)
+    return ctx.log.check(f"{stage}.columns_agree", n == 0, disagreeing_rows=n, examples=examples,
+                         app_version="database", expected={"disagreeing_rows": 0},
+                         observed={"disagreeing_rows": n})
 
 
 def _disagreements(dbname: str) -> tuple[int, list]:

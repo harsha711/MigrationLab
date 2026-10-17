@@ -27,7 +27,7 @@ Nothing here runs SQL against Saleor, starts the apps, or calls a model. `tests/
 ## Run it
 ```bash
 uv sync
-uv run pytest -q tests/memory        # 28 tests, under 1 s, no Docker needed
+uv run pytest -q tests/memory        # 48 tests, about 3 s, no Docker needed
 uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 ```
 - **No `uv`?** `python -m migproto ui` also works. The memory and UI code is stdlib only. The tests need `pytest`.
@@ -39,10 +39,12 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 | `migproto/memory/adapter.py` | `load(run_dir)` (entry point), `read_run`, `derive`, `plans_by_attempt`, `claims`, `run_meta` | Pure functions, no DB. `derive` walks `events.jsonl` once, tracking the current attempt and stage. v1 records go through `_from_v1` |
 | `migproto/memory/store.py` | `connect(path)`, `ingest(conn, run_dir)`, `ingest_all(conn)`, `run_dirs()` | Tables: `runs`, `attempts`, `plans`, `stages`, `observations`, `observation_steps`, `claims`, `claim_evidence`, `events`. `INSERT OR IGNORE` on primary keys |
 | `migproto/memory/query.py` | `query_observations(**filters)`, `get_observation`, `check_history`, `evidence_for_claim`, `list_runs`, `run_detail`, `matrix`, `results_panel` | Filters are exact. `None` means "don't filter". Unknown (NULL) never matches a concrete value |
-| `migproto/ui/server.py` | `serve()`, `make_handler(conn, lock)` | Stdlib `ThreadingHTTPServer`. Endpoints: `/api/runs`, `/api/run?id=`, `/api/matrix?run=&attempt=`, `/api/observation?id=`, `/api/history?check=`. `POST` returns 503 (Run Review not wired) |
-| `migproto/ui/static/app.js` | `route()` plus one `page*` function per page | Hash routes: `#/`, `#/run/<id>`, `#/run/<id>/plan/<a>`, `#/run/<id>/matrix/<a>`, `#/run/<id>/agents`, `#/run/<id>/metrics`, `#/obs/<id>`, `#/compare/<a>/<b>`. No build step |
+| `migproto/memory/retrieval.py` | `prior_evidence(change, db=, runs_root=, exclude_run_id=, limit=)` | For Owner 2's controller. Hard filters: only finished local runs (never `examples/`), only `agent:` provenance (no scripted `plan_v2`), only the same table, old column and new column (no request means unknown, excluded). Returns `excluded` counts for audit |
+| `migproto/ui/server.py` | `serve()`, `make_handler(conn, lock, review)` | Stdlib `ThreadingHTTPServer`. Replay endpoints: `/api/runs`, `/api/run?id=`, `/api/matrix?run=&attempt=`, `/api/observation?id=`, `/api/history?check=`. Review endpoints: `GET /api/review/status`, `POST /api/review`, `GET /api/review/events?run=&after=`. POST bodies are always read before replying (Windows resets otherwise) |
+| `migproto/ui/review.py` | `ReviewManager.available()`, `start(mode, topology)`, `events(run_id, after)` | Imports `migproto.agents.controller`, `migproto.lock` and `migproto.runlog` lazily (a test enforces this allowlist). One review at a time. Writes the summary with `cli._run`'s verdict rule, then ingests, then marks the review done |
+| `migproto/ui/static/app.js` | `route()` plus one `page*` function per page | Hash routes: `#/`, `#/run/<id>`, `#/run/<id>/plan/<a>`, `#/run/<id>/matrix/<a>`, `#/run/<id>/agents`, `#/run/<id>/metrics`, `#/obs/<id>`, `#/compare/<a>/<b>`, `#/review`, `#/review/<run_id>`. No build step |
 | `migproto/cli.py` | `cmd_ui` | The only edit outside Owner 3's paths (Harsha owns `cli.py`) |
-| `tests/memory/` | `test_adapter.py` (10), `test_store.py` (8), `test_ui.py` (4), `test_v1.py` (6) | Assert the fixture facts from the assignment's acceptance criteria. `test_v1.py` uses the synthetic v1 fixture |
+| `tests/memory/` | `test_adapter.py` (10), `test_store.py` (8), `test_ui.py` (6), `test_v1.py` (6), `test_owner2.py` (7), `test_retrieval.py` (4), `test_review.py` (7); `review_fakes.py` | Assert the fixture facts from the assignment's acceptance criteria. `fixtures/v1-synthetic-staged` and `fixtures/owner2-synthetic-loop` are SYNTHETIC (`fixtures/make_owner2_synthetic_loop.py` regenerates the loop fixture). Run Review tests use fakes |
 
 ## Concepts you need
 - **IDs:**
@@ -75,16 +77,16 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
    - Ingest those runs.
    - Copy `test_v1.py`'s assertions over to a real run.
    - Delete the synthetic fixture.
-   - Check one loop run in particular: the handoff doesn't say what `attempt_id` the events before the first attempt carry.
-3. **Structured claims (when Owner 2 ships them, G7).**
-   - Parse claims with `evidence[]` into `claims` / `claim_evidence`.
-   - Add an `/api/claim?id=` endpoint around `query.evidence_for_claim`.
-   - Link each claim to its observations on the Agents page.
-4. **Scoped retrieval for agents (integration step 3).** Agree with Owner 2 on which query functions the controller calls. Make sure fixtures are excluded and only local runs are reachable.
-5. **Run Review (blocked on G11, the controller and runner API).**
-   - Wire the disabled button to the controller entry point only.
-   - Show live progress by tailing `runs/<id>/events.jsonl`, or through the progress callback once it exists.
-   - Never shell out from the UI.
+   - Check one loop run in particular. Harsha's `RunLog` starts at attempt 1, so investigator events before the first `attempt` event carry `.../a1`. Investigator free-text claims are still stored with attempt unknown, and that should be confirmed on real data.
+3. **Confirm Owner 2's records against a real run.** Structured claims, plan lineage, the review request and budgets are ingested and shown, but only tested against `fixtures/owner2-synthetic-loop`. Once a real `agent-loop` run from Owner 2's controller exists, ingest it, compare it with the fixture, then replace the fixture.
+4. **Retrieval: Owner 2 wires the call.** `memory.retrieval.prior_evidence` is ready, and the suggested hook for `run_review` is in `handoff-owner3.md`.
+   - Once it's wired, the Agents page shows "Prior evidence given to the planner" from `retrieval` events.
+   - Whether retrieval helps planning is unmeasured. That belongs in Owner 2's single vs multi-agent evaluation.
+   - It does not filter by model yet. On the local runs it selected only qwen3:4b stand-in runs, which would then reach Nemotron prompts. Add a same-model filter (from the run's `agent:<model>` provenance) before wiring the call.
+5. **Run Review: test it for real.** It is implemented, but only tested with fakes. After both branches merge, on Linux with Docker (pair with Harsha):
+   - Start a scripted review from `#/review`.
+   - Confirm the live events, the lock refusal while a CLI run is active, and ingestion when the review finishes.
+   - On Windows it stays unavailable (`fcntl`).
 6. **NeMo Gym panel (blocked on G13).** Read `gym/results/` once Harsha defines the score record. Until then it says "not connected".
 7. **Small improvements:**
    - add a "re-ingest" action instead of restarting the server

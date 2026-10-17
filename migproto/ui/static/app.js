@@ -86,7 +86,7 @@ const humanize = (value) => String(value || "unknown").replace(/^case\./, "").re
 
 async function pageRuns() {
   crumbs([["Runs"]]);
-  const { runs, controller_available } = await api("/api/runs");
+  const { runs, controller_available, controller_reason } = await api("/api/runs");
   const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
   const defaultRun = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
   const demo = details.find((d) => d.run_id === state.dashboardRunId) || defaultRun;
@@ -151,7 +151,7 @@ async function pageRuns() {
       <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div><button aria-label="More options">⋮</button></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><nav><b>Evidence</b><span>Checks</span><span>Diffs</span><span>Logs</span></nav><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
     </section>
     <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
-      <div class="row"><button id="compare" disabled>Compare selected</button><button class="button-muted" disabled title="Controller integration is not available">Run Review <span class="soon">soon</span></button></div></section>
+      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_reason || "Start a review through the controller")}">Run Review</a></div></section>
     <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
       <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
       <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
@@ -159,7 +159,7 @@ async function pageRuns() {
       <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
       ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
     </table></div>
-    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review disabled?</strong><span>The replay UI is intentionally read-only until the stable controller API is connected.</span></div>`}`;
+    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(controller_reason || "The controller is not connected.")}</span></div>`}`;
 }
 
 function replaySteps(run) {
@@ -287,6 +287,53 @@ async function pageWorkspace(id) {
     </section>
     <section class="revision-section" id="revision-story"><div class="panel-heading"><div><span class="eyebrow">FAILED PLAN &#8594; REVISED PLAN</span><h2>The failure stays visible</h2></div><span class="source-pill">${run.attempts.length} attempts</span></div><div class="revision-grid">${planColumn(first, "Attempt 1 · unsafe ordering", "unsafe")}<div class="revision-evidence"><span>RUNNER FAILURE</span><strong>${esc(failed?.check_name || first?.failed?.[0] || "Recorded failure")}</strong><p>${esc(first?.halted || "The first plan did not complete.")}</p>${failed ? `<button class="button ghost" data-obs="${esc(failed.observation_id)}">Inspect evidence</button>` : ""}<hr><span>AGENT FEEDBACK</span><p>${esc(feedback?.text || "No revision note recorded.")}</p></div>${planColumn(revised, "Attempt 2 · revised ordering", "safe")}</div></section>
     <section class="evaluation-strip"><div><span class="eyebrow">EVALUATION RESULTS</span><h2>Recorded measurements</h2></div><div><span>Plan attempts</span><strong>${run.attempts.length}</strong></div><div><span>Final test-pass rate</span><strong>${revised?.checks_total ? Math.round((revised.checks_total - revised.checks_failed) / revised.checks_total * 100) : 0}%</strong></div><div><span>Token usage</span><strong>${fmt(run.results?.total_tokens)}</strong></div><div><span>Model latency</span><strong>${nr(run.results?.model_seconds)}s</strong></div><p>Single-agent vs. multi-agent safe-plan rate is not shown because no equivalent baseline has been recorded.</p></section>`;
+}
+
+async function pageReview() {
+  crumbs([["Runs", "#/"], ["Run Review"]]);
+  const status = await api("/api/review/status");
+  const current = status.current;
+  const running = current && current.state === "running";
+  return `<h1>Run Review</h1><p class="muted">Starts one review through the controller, which calls the runner. The UI never runs SQL or starts Saleor directly.</p>
+    ${current ? `<div class="card">Last review: <a href="#/review/${enc(current.run_id)}">${esc(current.run_id)}</a> ${running ? `<span class="badge">running</span>` : verdictBadge(current.verdict)} ${current.error ? `<span class="muted">${esc(current.error)}</span>` : ""}</div>` : ""}
+    <div class="card">${status.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(status.reason)}</p>`}<div class="row">
+      <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option><option value="llm">llm (configured endpoint)</option></select></label>
+      <label>Topology <select id="rv-topology"><option value="roles">roles</option><option value="single">single agent</option></select></label>
+      <button id="rv-start" ${status.ok && !running ? "" : "disabled"}>Start</button></div><p id="rv-msg" class="muted"></p></div>`;
+}
+
+async function startReview() {
+  const msg = $("#rv-msg");
+  msg.textContent = "Starting…";
+  const response = await fetch("/api/review", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: $("#rv-mode").value, topology: $("#rv-topology").value})});
+  const body = await response.json();
+  if (response.status === 202) { location.hash = `#/review/${enc(body.run_id)}`; return; }
+  msg.textContent = body.error + (body.owner ? ` (${JSON.stringify(body.owner)})` : "");
+}
+
+async function pageReviewLive(runId) {
+  crumbs([["Runs", "#/"], ["Run Review", "#/review"], [runId]]);
+  setTimeout(() => pollReview(runId, 0), 0);
+  return `<div class="row"><h1>${esc(runId)}</h1><span id="rv-state" class="badge">running</span></div><p class="muted">Live events from the controller-owned run log.</p><div class="card table-wrap"><table id="rv-events"><tr><th>t (s)</th><th>kind</th><th>name</th><th>status</th></tr></table></div>`;
+}
+
+async function pollReview(runId, after) {
+  if (location.hash !== `#/review/${enc(runId)}`) return;
+  let data;
+  try { data = await api(`/api/review/events?run=${enc(runId)}&after=${after}`); }
+  catch (err) { $("#rv-state").textContent = "error"; return; }
+  const table = $("#rv-events");
+  if (!table) return;
+  for (const event of data.events) {
+    const row = table.insertRow();
+    const outcome = event.kind === "check" ? kindOf(event) : "";
+    row.innerHTML = `<td>${event.t == null ? "" : Number(event.t).toFixed(1)}</td><td>${esc(event.kind)}</td><td>${esc(event.name || event.stage || event.msg || "")}</td><td>${outcome ? verdictBadge(event.outcome || event.status) : ""}</td>`;
+  }
+  if (!data.done) { setTimeout(() => pollReview(runId, data.next), 1500); return; }
+  const status = await api("/api/review/status");
+  const done = status.current && status.current.run_id === runId ? status.current : null;
+  runCache.delete(runId);
+  $("#rv-state").outerHTML = `${verdictBadge(done ? done.verdict : "done")} <a href="#/run/${enc(runId)}">Open run</a>`;
 }
 
 async function pageOverview(id) {
@@ -568,6 +615,8 @@ async function route() {
     else if (parts[0] === "run" && parts[2] === "metrics") html = await pageMetrics(parts[1]);
     else if (parts[0] === "obs") html = await pageEvidence(parts.slice(1).join("/"));
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
+    else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
+    else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     window.scrollTo(0, 0);
@@ -608,6 +657,7 @@ document.addEventListener("click", (ev) => {
   }
   const obs = ev.target.closest("[data-obs]");
   if (obs) { openEvidence(obs.dataset.obs); return; }
+  if (ev.target.id === "rv-start") { startReview(); return; }
   if (ev.target.closest("#drawer-close") || ev.target.id === "drawer-backdrop") { closeDrawer(); return; }
   const replayDot = ev.target.closest("[data-replay-step]");
   if (replayDot) { rerenderReplay(0, Number(replayDot.dataset.replayStep)); return; }

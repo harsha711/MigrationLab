@@ -6,7 +6,7 @@ Budget (event page, verified): total parameters ≤ 33B. Team rule: count total 
 
 | Model | Checkpoint and revision | Role | Parameters | Status |
 |---|---|---|---|---|
-| NVIDIA Nemotron 3.5 Lightning | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` @ `bee7596271d1495f6992ae224aefde4410e816b8` | all agent roles (investigator, planner, tester, single agent), one shared vLLM deployment | Model card: **30B total, 3B active**. Hugging Face metadata for the BF16 reference checkpoint (`...-BF16` @ `a9904d24bcc1d289a1950fa9d2b978c47cf903b9`): `safetensors.total` = 31,577,937,344, per-dtype sum = 32,913,263,168. The NVFP4 metadata (17.8B stored elements) counts packed 4-bit values, so it is not a parameter count | **planned**, not yet served or run |
+| NVIDIA Nemotron 3.5 Lightning | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` @ `bee7596271d1495f6992ae224aefde4410e816b8` | all agent roles (investigator, planner, tester, single agent), one shared vLLM deployment | Model card: **30B total, 3B active**. Hugging Face metadata for the BF16 reference checkpoint (`...-BF16` @ `a9904d24bcc1d289a1950fa9d2b978c47cf903b9`): `safetensors.total` = 31,577,937,344, per-dtype sum = 32,913,263,168. The NVFP4 metadata (17.8B stored elements) counts packed 4-bit values, so it is not a parameter count | Agent client/controller implemented; deployment and live run still **planned** |
 | Embedding, critic, judge models | none | none | 0 | none in use |
 
 ## Excluded unless organizers confirm accounting
@@ -21,7 +21,7 @@ Budget (event page, verified): total parameters ≤ 33B. Team rule: count total 
 
 | Model | Where used | Parameters | Notes |
 |---|---|---|---|
-| `gpt-oss:120b-cloud` via local Ollama (cloud-backed) | live run `20261017-123652-agent-loop-llm` (`examples/live-ordering-revision`) | about 120B class (far above budget) | development smoke test only, run through a personal Ollama cloud account. Do not use it again. Still the default in `migproto/agents/llm.py`, which Owner 2 must change before submission |
+| `gpt-oss:120b-cloud` via local Ollama (cloud-backed) | live run `20261017-123652-agent-loop-llm` (`examples/live-ordering-revision`) | about 120B class (far above budget) | development smoke test only, run through a personal Ollama cloud account. Do not use it again. It is no longer the client default; live runs require an explicit model id |
 
 ## Budget calculation
 

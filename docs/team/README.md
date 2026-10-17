@@ -15,6 +15,8 @@ Three owners, one shared runner, one contract file. Read the root `README.md` an
 - Shared contracts live in `docs/contracts.md`. Harsha coordinates every change. Propose changes in your handoff note with the field, producer, consumer and a JSON example.
 - Use `examples/` as the frozen integration fixtures. Do not commit `runs/`. Promote a new fixture with `uv run python scripts/export_example.py runs/<run_id> <name> --kind <kind>` (Harsha reviews).
 - Evaluated agents must never see `proposals/scripted/plan_v2.json`, `proposals/manual/`, `patches/`, held-out scenarios or `examples/` outcomes.
+- The agent workflow is sequential within one review: Investigator -> Planner -> Tester -> runner -> evidence summary -> optional revision. Roles use isolated contexts and exchange JSON only through Owner 2's controller. Serving-level batching or concurrent independent reviews does not make the dependent role chain parallel.
+- Terminology is fixed across team docs: Nemotron is the reasoning model, vLLM is the inference server, Owner 2's Python controller is the orchestrator, and Harsha's runner is the execution and verdict authority.
 
 ## Bounties and priority
 
@@ -28,6 +30,18 @@ Bounty owners: Nemotron 3.5 Lightning and Red Hat vLLM go to Owner 2, NeMo Gym g
 4. **UI → recorded runs.** "Replay Recorded Run" renders `examples/` and local `runs/` through the adapter. (Owner 3)
 5. **UI → live review.** "Run Review" calls the controller, which calls the runner. The UI never executes SQL or starts servers itself. (Owner 3 + Owner 2)
 6. **Small-model single-agent versus multi-agent comparison.** Same scenario, tools, evidence access, execution limits and total budget, repeated runs, held-out variation. Report results as measured, with no superiority claim beyond them. (Owner 2, scenario from Harsha)
+
+## Owner boundaries at integration points
+
+| Integration | Producer | Consumer | Coordination rule |
+|---|---|---|---|
+| Validated plan and tester proposal | Owner 2 controller | Harsha runner | Owner 2 calls the stable runner interface; runner behavior is not duplicated |
+| Scoped execution observations | Harsha runner | Owner 2 controller and Owner 3 adapter | Contract fields are coordinated by Harsha and added without dropping v0 evidence |
+| Scoped prior-evidence query | Owner 3 memory layer | Owner 2 controller | Owner 2 consumes the query API and does not read restricted answer fixtures into prompts |
+| Live-review entry point | Owner 2 controller | Owner 3 UI | UI starts or observes reviews but never executes SQL directly |
+| Recorded model and serving evidence | Owner 2 | Owner 3 presentation | Preserve failed attempts, model identity, budgets, latency, and usage |
+
+An owner who needs a change across one of these boundaries writes a handoff note rather than editing the other owner's implementation silently.
 
 ## Handoff note template
 

@@ -78,6 +78,78 @@ TESTER_SYSTEM = """You are the Tester in a database-migration review. You propos
 compatibility checks for a deterministic runner and later summarize execution evidence.
 You do not decide pass/fail; the runner does. Reply with one JSON object only."""
 
+PLAN_SCHEMA = {
+    "name": "migration_plan",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "plan_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "write_consistency": {"type": "string"},
+            "revision_notes": {"type": "string"},
+            "stages": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "kind": {"enum": ["sql", "deploy_new", "retire_old"]},
+                        "phase": {"enum": ["expand", "backfill", "contract"]},
+                        "description": {"type": "string"},
+                        "sql": {"type": "array", "items": {"type": "string"}},
+                        "repeat_until_zero_rows": {"type": "boolean"},
+                    },
+                    "required": ["id", "kind"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["plan_id", "stages"],
+        "additionalProperties": False,
+    },
+}
+
+TESTS_SCHEMA = {
+    "name": "tester_proposal",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "rationale": {"type": "string"},
+            "checks": {"type": "array", "items": {"type": "string"}},
+            "custom_cases": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "description": {"type": "string"},
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "app": {"enum": ["old", "new"]},
+                                    "op": {"enum": ["read", "write", "create", "clear"]},
+                                    "user": {"type": "string"},
+                                    "value": {"type": ["string", "null"]},
+                                },
+                                "required": ["app", "op", "user"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["id", "steps"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["checks", "custom_cases"],
+        "additionalProperties": False,
+    },
+}
+
 PLAN_CONTRACT = """\
 Facts about the deployment (all true, all enforced by the runner):
 - OLD app version: unmodified code. Its Django model only knows column "note". Django's
@@ -114,16 +186,21 @@ languages; no DROP TABLE, TRUNCATE, COPY, roles, extensions or database-level st
 """
 
 
-def _llm_call(llm: LLM, system: str, user: str, transcript: list) -> dict:
-    return llm.chat_json(system, user, transcript)
+def _llm_call(llm: LLM, system: str, user: str, transcript: list,
+              validator=None, schema: dict | None = None,
+              history: list | None = None) -> dict:
+    return llm.chat_json(system, user, transcript, validator=validator,
+                         response_schema=schema, history=history)
 
 
-def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list) -> dict:
+def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list,
+                scenario: str = SCENARIO, history: list | None = None,
+                system: str = INVESTIGATOR_SYSTEM) -> dict:
     if source == "scripted":
         return json.loads((PROPOSALS / "scripted" / "investigator.json").read_text())
     body = "\n\n".join(f"### {h['ref']}\n{h['context']}" for h in hits)
     user = (
-        f"{SCENARIO}\nThe runner searched the OLD code for the word `note` (excluding "
+        f"{scenario}\nThe runner searched the OLD code for the word `note` (excluding "
         f"migrations) under {SEARCH_ROOTS}. For EVERY hit decide whether it must change when "
         "the Django model attribute is renamed (model field definition, ORM attribute access, "
         "field-name strings used for tracking or bulk_update, tests that access the attribute) "
@@ -136,17 +213,19 @@ def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list
         '"implicit_paths": ["..."]}\n\n'
         f"Search hits:\n{body}"
     )
-    return _llm_call(llm, INVESTIGATOR_SYSTEM, user, transcript)
+    return _llm_call(llm, system, user, transcript, history=history)
 
 
 def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
-         feedback: dict | None = None, previous: dict | None = None) -> dict:
+         feedback: dict | None = None, previous: dict | None = None,
+         scenario: str = SCENARIO, history: list | None = None,
+         system: str = PLANNER_SYSTEM) -> dict:
     if source == "scripted":
         name = "plan_v2.json" if feedback else "plan_v1.json"
         return json.loads((PROPOSALS / "scripted" / name).read_text())
     affected = [f for f in investigation.get("findings", []) if f.get("needs_change")]
     user = (
-        f"{SCENARIO}\n{PLAN_CONTRACT}\n"
+        f"{scenario}\n{PLAN_CONTRACT}\n"
         f"Investigator findings (affected app code, already handled by the new app version):\n"
         f"{json.dumps(affected, indent=1)[:4000]}\n\n"
     )
@@ -159,15 +238,18 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
         )
     else:
         user += "Propose the plan."
-    return _llm_call(llm, PLANNER_SYSTEM, user, transcript)
+    return _llm_call(llm, system, user, transcript, validator=plans.validate_plan,
+                     schema=PLAN_SCHEMA, history=history)
 
 
-def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list) -> dict:
+def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list,
+                  scenario: str = SCENARIO, history: list | None = None,
+                  system: str = TESTER_SYSTEM) -> dict:
     if source == "scripted":
         return json.loads((PROPOSALS / "scripted" / "tester.json").read_text())
     catalogue = {k: v for k, v in checks.CATALOGUE.items()}
     user = (
-        f"{SCENARIO}\n{PLAN_CONTRACT}\nPlan under test:\n{json.dumps(plan_obj, indent=1)}\n\n"
+        f"{scenario}\n{PLAN_CONTRACT}\nPlan under test:\n{json.dumps(plan_obj, indent=1)}\n\n"
         "The runner ALWAYS runs this mandatory catalogue right after deploy_new (both versions "
         f"live):\n{json.dumps(catalogue, indent=1, ensure_ascii=False)}\n\n"
         "Propose additional interleaved cases that could expose a consistency bug in THIS plan. "
@@ -179,10 +261,12 @@ def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list
         'Reply as {"rationale": "...", "checks": ["catalogue ids to emphasize"], '
         '"custom_cases": [{"id": "snake_case", "description": "...", "steps": [...]}]}'
     )
-    return _llm_call(llm, TESTER_SYSTEM, user, transcript)
+    return _llm_call(llm, system, user, transcript, validator=plans.validate_tests,
+                     schema=TESTS_SCHEMA, history=history)
 
 
-def report_evidence(source: str, llm: LLM | None, result: dict, transcript: list) -> dict:
+def report_evidence(source: str, llm: LLM | None, result: dict, transcript: list,
+                    history: list | None = None, system: str = TESTER_SYSTEM) -> dict:
     failed = result.get("failed_checks", [])
     if source == "scripted":
         return {
@@ -196,4 +280,4 @@ def report_evidence(source: str, llm: LLM | None, result: dict, transcript: list
         f"{json.dumps(result, indent=1, ensure_ascii=False)[:8000]}\n"
         'Reply as {"summary": "...", "suspected_cause": "..."}'
     )
-    return _llm_call(llm, TESTER_SYSTEM, user, transcript)
+    return _llm_call(llm, system, user, transcript, history=history)

@@ -85,6 +85,25 @@ We target the NVIDIA Nemotron 3.5 Lightning, Red Hat vLLM and NVIDIA NeMo Gym bo
 - The live trigger design passed the catalogue but has not been reviewed beyond it.
 - Celery, webhooks, read replicas and other old-app `User` paths were not exercised individually.
 
+## Possible future enhancements
+
+Today the repository supports one migration: a staged or immediate rename of `account_user.note` to `customer_note`. Column names are hard-coded in `checks.py`, `seed.py` and `staged.py`.
+
+**Planned** (`docs/team/01-runner.md`, task 8, not started): one held-out variation, kept under `heldout/` and hidden from agents. The candidates are the same rename on a different noncritical text field, or a rename combined with a NOT NULL default.
+
+**Possible, not planned or owned.** Each of these first needs the scenario (table, columns, catalogue, seed) to be data instead of code:
+
+- Column type changes, such as text to varchar, or int to bigint on a large table.
+- Adding NOT NULL, a default value, or a CHECK constraint to an existing column.
+- Splitting one column into two, or merging two columns into one.
+- Moving a column to another table, or splitting a table.
+- Adding foreign keys and indexes, including `CREATE INDEX CONCURRENTLY`.
+- Dropping a column with no replacement, including detection of remaining readers.
+- Data transformations during backfill, such as normalization or reformatting.
+- Other Saleor models, and other Django or non-Django applications.
+- Truly concurrent old and new writers, backfill under load, and lock-wait measurements.
+- Celery tasks, webhooks and read replicas as additional old-version readers and writers.
+
 ## Repository layout
 
 ```

@@ -35,7 +35,8 @@ uv run migproto unsafe                        # reproduce the old-app breakage
 uv run migproto staged --plan proposals/scripted/plan_v2.json
 uv run migproto agent-loop --proposals scripted|llm
 uv run migproto all                           # setup + baseline + unsafe + scripted loop
-uv run pytest                                 # 34 runner tests (guard, schema, trigger semantics)
+uv run pytest                                 # 135 tests: runner, agents, memory/UI
+uv run migproto ui                            # Replay UI over examples/ and runs/ (section 9)
 ```
 
 Each invocation writes `runs/<timestamp>-<command>/` with `events.jsonl` (every event tagged `manual`, `scripted`, `runner`, or `agent:<model>`), `sql/`, server and migration logs, pytest output, model transcripts, and `summary.json`.
@@ -151,3 +152,22 @@ Three practical findings affected the runner:
 8. Model output is parsed only as JSON and its SQL runs only on local `migproto_run_*` databases behind a denylist. This is a prototype guard, not a sandbox, and it would need a stricter allowlist before running against anything non-disposable.
 
 Prior art: upstream already runs `.github/workflows/test-migrations-compatibility.yml`, which applies a PR's migrations and then runs the base branch's tests. That would plausibly catch the unsafe rename in section 4.2, but it does not exercise interleaved old and new writers or retirement ordering.
+
+## 9. Evidence store and review UI (added after the feasibility gate)
+
+Owner 3's work from branch `memory-ui/scoped-review` is merged through `integrate/memory-ui`. It was first verified with `pytest -q tests/memory` on Windows with Python 3.14, plus headless-browser screenshots of the UI. After the merge, `uv run pytest` passes 135 tests (50 in `tests/memory`) under `uv` with Python 3.12 on Linux, and the UI ingested all 33 local runs and fixtures on this machine.
+
+| Component | What it does | Verified against |
+|---|---|---|
+| Adapter and store (`migproto/memory/`) | Reads a finished run directory into an append-only SQLite store, using only the v0 derivation rules from `docs/contracts.md`. Missing scope stays unknown. v1 fields pass through | The four `examples/` fixtures reproduce their `summary.json` facts (7; 29 with 9 failed; 33; 71 with attempt 1 failing only `retirement_gate`) |
+| v1 and controller records | Runner v1 fields (`outcome`, `check_type`, `app_version`, `schema_state`, snapshot) and Owner 2's structured claims with evidence IDs, plan lineage, review request and budgets | Unit tests: synthetic fixtures (`tests/memory/fixtures/`). By hand after the merge: scripted run `20261017-165715` ingests with all 64 checks scoped to attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve. Investigator claims show attempt unknown |
+| Compatibility matrix | Shows each case's result by writer and reader app version, per stage and attempt | `scripted-sync-failure` at `deploy_new`: every old-writer/new-reader case fails and every new-writer/old-reader case passes |
+| `memory.retrieval.prior_evidence` | Gives the controller failed, refused and errored observations from earlier agent runs of the same change. Never `examples/`, scripted runs or runs with unknown scope | Temporary run directories in tests. On the local runs it selected only the six `agent:` runs (excluding 4 fixtures, 23 scripted or manual runs, 1 run with unknown or different change). The controller does not call it yet |
+| Run Review (`migproto/ui/review.py`) | Starts one review through `agents.controller.run_review` under the execution lock and shows live events | **A fake controller and a fake lock only.** With the controller and lock merged, the UI reports Run Review as available, but no review has been started from it |
+
+**Limits:**
+- **Unit tests use synthetic data:** real runs were checked by hand only; the unit fixtures are not replaced yet.
+- **No live review:** no review has been started from the UI.
+- **No measured benefit from retrieval:** whether prior evidence improves planning has not been measured.
+- **Retrieval does not filter by model:** local stand-in runs would be given to Nemotron runs. Add a same-model filter before the controller calls it.
+- **Windows:** `migproto/lock.py` imports `fcntl`, which does not exist on Windows, and `cli.py` imports the lock at module level, so `migproto ui` does not start on Windows. A lazy import in `cli.py` would fix it; that is a shared CLI change for the runner owner (noted in `docs/team/handoff-owner3.md`).
