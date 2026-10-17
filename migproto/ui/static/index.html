@@ -8,25 +8,10 @@
 </head>
 <body>
   <header class="topbar">
-    <div>
-      <h1>Replay Recorded Run</h1>
-      <p class="sub">Read-only view of runner evidence. Scope is shown as recorded or derived (v0 rules); anything else is <em>unknown</em>.</p>
-    </div>
-    <div class="topbar-actions">
-      <label>Run <select id="run-a"></select></label>
-      <label>Compare with <select id="run-b"><option value="">(none)</option></select></label>
-      <button id="run-review" disabled title="controller not available">Run Review (controller not available)</button>
-    </div>
+    <a href="#/" class="brand">Replay Recorded Run</a>
+    <nav id="crumbs" class="crumbs"></nav>
   </header>
-  <main id="panes" class="panes"></main>
-
-  <aside id="drawer" class="drawer" hidden>
-    <div class="drawer-head">
-      <h2>Evidence</h2>
-      <button id="drawer-close" aria-label="Close">×</button>
-    </div>
-    <div id="drawer-body"></div>
-  </aside>
+  <main id="view" class="view"></main>
   <script src="app.js"></script>
 </body>
 </html>

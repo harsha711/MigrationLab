@@ -13,7 +13,13 @@
   - Lookups: `get_observation`, `check_history` (one row per scope, never merged), `evidence_for_claim`, `run_detail`.
   - `matrix` builds the per-attempt old/new grid.
   - `results_panel` uses saved measurements only.
-- `migproto/ui/server.py` + `migproto/ui/static/` is the read-only "Replay Recorded Run" screen, built on stdlib `http.server` plus static HTML/JS with no build step. Run Review is disabled ("controller not available") and `POST` returns 503.
+- `migproto/ui/server.py` + `migproto/ui/static/` is the read-only "Replay Recorded Run" UI, built on stdlib `http.server` plus static HTML/JS with no build step. Hash-routed pages:
+  - Runs (`#/`)
+  - per-run Overview, Plan, Matrix, Agents and Metrics tabs (`#/run/<id>/...`), with an attempt switcher
+  - Evidence (`#/obs/<id>`)
+  - Compare (`#/compare/<a>/<b>`, separate runs side by side, never merged)
+
+  Run Review is disabled ("controller not available") and `POST` returns 503.
 - `migproto/cli.py` gets a small `ui` subcommand (`--port`, `--db`). **Harsha: please review. This is the only change outside my owned paths.**
 - `tests/memory/` adds 22 tests.
 - No new dependencies.
