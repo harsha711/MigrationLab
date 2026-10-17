@@ -6,7 +6,7 @@ import re
 from .. import plans, runner_api
 from ..config import PROPOSALS
 from ..runlog import SCRIPTED, RunLog, agent
-from . import roles, single
+from . import roles, single, tracing
 from .budget import BudgetExceeded, ReviewBudget
 from .llm import LLM, LLMError
 from .request import load_review_request, scenario_text
@@ -66,6 +66,17 @@ def run(log: RunLog, source: str, request=None, topology: str | None = None) -> 
 def run_review(log: RunLog, source: str, request=None, topology: str | None = None,
                llm: LLM | None = None) -> dict:
     """Run one review; safe for future CLI and UI callers to share."""
+    with tracing.review(log.run_id, source, topology or "roles") as trace:
+        result = _run_review(log, source, request=request, topology=topology, llm=llm)
+        tracing.update(trace, output={k: result.get(k) for k in (
+            "verdict", "reason", "agent_totals")} | {"attempts": [
+                {"attempt": a["attempt"], "ok": a["ok"], "failed_checks": a["failed_checks"]}
+                for a in result.get("attempts", [])]})
+        return result
+
+
+def _run_review(log: RunLog, source: str, request=None, topology: str | None = None,
+                llm: LLM | None = None) -> dict:
     budget = llm.budget if llm else ReviewBudget()
     if source not in {"scripted", "llm"}:
         return _finish(False, "ERROR", source, topology or "roles", None, None, [], budget,
@@ -115,6 +126,8 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
         scenario = scenario_text(review)
 
         def call(role: str, fn, *args, **kwargs):
+            if llm:
+                llm.trace_name = role
             transcript_role = "single" if shared_history is not None else role
             tx = transcripts.setdefault(transcript_role, [])
             if shared_history is not None:
@@ -169,6 +182,7 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
                 "failed_checks": [c["name"] for c in complete_failures],
                 "tester_summary": report,
             })
+            tracing.attempt(attempt, result, attempts[-1]["failed_checks"])
             log.event("attempt_result", provenance="runner", name=f"attempt {attempt}",
                       status="PASS" if result["ok"] else "FAIL",
                       failed=attempts[-1]["failed_checks"])

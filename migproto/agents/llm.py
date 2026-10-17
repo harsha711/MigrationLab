@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 import requests
 
+from . import tracing
 from .budget import ReviewBudget
 
 
@@ -34,6 +35,7 @@ class LLM:
         # vLLM's per-request cap on reasoning tokens; unset sends nothing (uncapped).
         budget_env = os.environ.get("MIGPROTO_LLM_THINKING_BUDGET")
         self.thinking_budget = int(budget_env) if budget_env else None
+        self.trace_name = "llm"  # set by the controller to the current role
 
     def serving_metadata(self) -> dict:
         env = os.environ
@@ -71,6 +73,13 @@ class LLM:
             usage = None
             content = ""
             reasoning = None
+            call_ok = False
+            trace_cm = tracing.generation(
+                self.trace_name, self.model,
+                {"temperature": self.temperature, "top_p": self.top_p,
+                 "thinking_token_budget": self.thinking_budget, "attempt": attempt},
+                messages)
+            trace = trace_cm.__enter__()
             try:
                 payload = {
                     "model": self.model,
@@ -114,6 +123,7 @@ class LLM:
                 self.budget.finish_call(usage, elapsed, valid=True)
                 if history is not None:
                     history.append({"role": "assistant", "content": content})
+                call_ok = True
                 return obj
             except requests.RequestException as exc:
                 elapsed = round(time.monotonic() - t0, 3)
@@ -128,6 +138,16 @@ class LLM:
                 _record(transcript, attempt, messages, content, usage, elapsed, last_err, False,
                         reasoning)
                 self.budget.finish_call(usage, elapsed)
+            finally:
+                usage_details = ({"input": usage.get("prompt_tokens") or 0,
+                                  "output": usage.get("completion_tokens") or 0}
+                                 if isinstance(usage, dict) else None)
+                tracing.update(trace, output=content or None, usage_details=usage_details,
+                               metadata={"reasoning": reasoning,
+                                         "seconds": round(time.monotonic() - t0, 3)},
+                               level="DEFAULT" if call_ok else "ERROR",
+                               status_message=None if call_ok else last_err)
+                trace_cm.__exit__(None, None, None)
             if attempt < retries:
                 messages = messages + [
                     {"role": "assistant", "content": content},
