@@ -66,17 +66,19 @@ def run(log: RunLog, source: str, request=None, topology: str | None = None) -> 
 def run_review(log: RunLog, source: str, request=None, topology: str | None = None,
                llm: LLM | None = None) -> dict:
     """Run one review; safe for future CLI and UI callers to share."""
-    with tracing.review(log.run_id, source, topology or "roles") as trace:
-        result = _run_review(log, source, request=request, topology=topology, llm=llm)
-        tracing.update(trace, output={k: result.get(k) for k in (
-            "verdict", "reason", "agent_totals")} | {"attempts": [
-                {"attempt": a["attempt"], "ok": a["ok"], "failed_checks": a["failed_checks"]}
-                for a in result.get("attempts", [])]})
+    with tracing.review(log, source) as trace:
+        try:
+            result = _run_review(log, source, request=request, topology=topology, llm=llm,
+                                 trace=trace)
+        except BaseException as exc:
+            tracing.fail(trace, exc)
+            raise
+        tracing.finish(trace, result)
         return result
 
 
 def _run_review(log: RunLog, source: str, request=None, topology: str | None = None,
-                llm: LLM | None = None) -> dict:
+                llm: LLM | None = None, trace: tracing.Review | None = None) -> dict:
     budget = llm.budget if llm else ReviewBudget()
     if source not in {"scripted", "llm"}:
         return _finish(False, "ERROR", source, topology or "roles", None, None, [], budget,
@@ -114,6 +116,11 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
+        tracing.configure(trace, topology=topology, model=model,
+                          thinking_budget=getattr(llm, "thinking_budget", None),
+                          reasoning_enabled=llm.reasoning_enabled if llm else None,
+                          max_revisions=budget.max_revisions,
+                          request_id=review.get("request_id"))
         log.write_json("agents/review-request.json", review)
 
         hits = roles.gather_hits()
