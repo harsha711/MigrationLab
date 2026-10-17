@@ -20,6 +20,7 @@ def test_one_customer_per_unique_id_with_review_notes():
     rows = by_uid(olist.customers(MINI))
     assert sorted(rows) == ["aaa1", "bbb2", "ccc3", "ddd4", "eee5"]
     # Two customer_ids share aaa1: both reviews, oldest first, verbatim (newline, accents, emoji).
+    # Review r1 is linked to two of their orders and still appears once.
     assert rows["aaa1"]["note"] == "Ótimo: Produto bom,\nentrega rápida.\nChegou antes do prazo 👍"
     assert rows["aaa1"]["last_name"] == "Sao Paulo"          # first city recorded
     assert rows["bbb2"]["note"] == "Péssimo"                  # title only

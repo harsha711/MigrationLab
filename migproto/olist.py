@@ -30,7 +30,7 @@ FILES = {
                   {"customer_id", "customer_unique_id", "customer_city"}),
     "orders": ("olist_orders_dataset.csv", {"order_id", "customer_id"}),
     "reviews": ("olist_order_reviews_dataset.csv",
-                {"order_id", "review_comment_title", "review_comment_message",
+                {"review_id", "order_id", "review_comment_title", "review_comment_message",
                  "review_creation_date"}),
 }
 
@@ -72,17 +72,21 @@ def customers(directory, limit: int | None = None) -> list[dict]:
         city_of.setdefault(uid, (row["customer_city"] or "").strip().title())
     customer_of_order = {row["order_id"]: row["customer_id"] for row in _rows(directory, "orders")}
 
-    comments: dict[str, list[tuple[str, str]]] = {}
+    # One review can be linked to several orders of the same customer; joining through orders
+    # would repeat its text. Keep each review_id once per customer (distinct reviews with the
+    # same wording are kept: that is what the customer wrote).
+    comments: dict[str, dict[str, tuple[str, str]]] = {}
     for review in _rows(directory, "reviews"):
         text = _comment(review)
         uid = unique_of.get(customer_of_order.get(review["order_id"], ""))
         if text is not None and uid is not None:
-            comments.setdefault(uid, []).append((review["review_creation_date"] or "", text))
+            comments.setdefault(uid, {}).setdefault(
+                review["review_id"], (review["review_creation_date"] or "", text))
 
     selected = sorted(city_of)[:limit] if limit is not None else sorted(city_of)
     out = []
     for uid in selected:
-        texts = [t for _, t in sorted(comments.get(uid, []))]
+        texts = [t for _, t in sorted(comments.get(uid, {}).values())]
         out.append({"email": f"{EMAIL_PREFIX}{uid}@{SEED_EMAIL_DOMAIN}",
                     "first_name": "Olist", "last_name": city_of[uid][:256],
                     "note": "\n".join(texts) if texts else None})
