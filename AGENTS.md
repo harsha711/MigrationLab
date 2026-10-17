@@ -16,7 +16,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Scripted one-way sync (plan v1, manually authored and deliberately flawed):** 9 of 29 checks failed (old writes never reached `customer_note`, 7 rows disagreed), and the runner refused the contract stage (`examples/scripted-sync-failure`).
 - **Scripted staged alternative (plan v2, manually authored):** 33 of 33 documented checks passed (`examples/scripted-staged-success`). The pass covers only those checks: sequential interleaving, 245 rows, one machine.
 - **Live run:** one `gpt-oss:120b-cloud` run (via Ollama, cloud-backed) generated its own SQL. Attempt 1 had 30 checks, of which 1 failed: `retirement_gate`, because the contract stage was placed before `retire_old`. After that feedback, attempt 2 reordered the stages and passed 41 of 41. The run made 8 model calls, used 30,036 total tokens, and took 88.2 s (`examples/live-ordering-revision`).
-- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. The Nemotron/vLLM agent client and controller are implemented but have not been deployed on vLLM or run with Nemotron; no NeMo Gym integration exists yet.
+- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. Nemotron 3.5 Lightning has been served on vLLM 0.27.1 on a Brev H100 (2026-10-17) and run through the controller in smoke tests only (one `roles` and one `single` run per configuration). No smoke run passed, and no measurement batch exists yet; see "Brev Lightning quick start" below. No NeMo Gym integration exists yet.
 - **Multi-agent claim:** no superiority over a single agent has been established. A `single` topology exists, but it has only been run with a local 4B stand-in model; none of those runs passed and they measure nothing about Lightning (`docs/local-standin-runs.md`).
 - **Tests:** `uv run pytest` runs 135 tests on Linux with `uv` / Python 3.12: 68 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 17 in `tests/agents`, and 50 in `tests/memory`.
 - **Evidence store and review UI (Owner 3, merged through `integrate/memory-ui`):**
@@ -142,6 +142,33 @@ Exit codes: 0 on `PASS` or `REPRODUCED`, 1 on `FAIL`, 2 on `ERROR`. Every comman
 - Compute: the final Nemotron 3.5 Lightning vLLM deployment, and every measurement reported for it, runs only on GPU instances paid for with the **event-provided NVIDIA Brev credits**. Never use a teammate's personal cloud account or personal credits for it. Scripted mode needs no GPU.
 - Local development models stay outside the submitted workflow. Report their results separately from the Brev Lightning/vLLM results and never mix them in the same table or claim.
 - Priority: (1) small-model loop on vLLM, (2) integrated evidence and UI, (3) NeMo Gym adapter and evaluation, (4) optional serving experiments.
+
+### Brev Lightning quick start
+
+Everything needed to serve Lightning and run reviews is in `scripts/brev/`; the full procedure and the recorded deployment are in `docs/serving.md`. vLLM runs on the Brev GPU and listens on `127.0.0.1` only; the runner, Saleor and Postgres stay on the Linux runner machine and reach vLLM through an SSH tunnel.
+
+1. Create a 1x H100 instance in the event's Brev organization (credits only; the Scaleway H100 at $3.96/h has **no stop/start**, so delete it when done). `brev login`, then check `ssh <name> nvidia-smi`.
+2. On the runner machine (Postgres seeded, `uv run migproto baseline --skip-pytest` after any reboot):
+   ```bash
+   MIGPROTO_LLM_THINKING_BUDGET=4096 CUDA_COMPAT=13-0 \
+     uv run python scripts/brev/supervise.py --instance <name> --instance-type "<type>" \
+       --started-at <creation time, ISO> --runs 1 --max-tokens 120000
+   ```
+   It keeps the machine awake, starts `serve_lightning.sh` on the instance (about 3 min from a fresh instance: install, 18 GB download, JIT kernels), holds the tunnel, runs `check_endpoint.sh`, alternates `roles` and `single` reviews, and stops starting runs at `--stop-usd` (default $18, estimated from `--started-at`). Output: `runs/brev-batch-<ts>/` (`supervisor.log`, `runs.jsonl`, serving record). `touch runs/brev-batch-<ts>/STOP` stops after the current run. `--delete-when-done` deletes the instance afterwards. `scripts/brev/summarize.py <batch dir>` prints `docs/results.md` rows.
+3. Detach it (`setsid nohup ... &`; tmux is not installed) and watch `supervisor.log`.
+
+Known problems already handled in `serve_lightning.sh` (do not rediscover them):
+- **Driver too old:** the Scaleway image has driver 570 (CUDA 12.8); the PyPI vLLM 0.27.1 wheel uses CUDA 13 PyTorch. `CUDA_COMPAT=13-0` installs `cuda-compat-13-0`.
+- **JIT toolchain:** Humming (the Hopper NVFP4 fallback) and FlashInfer compile kernels at startup with the pip CUDA toolkit. The script pins `nvidia-cuda-nvcc`, `-crt` and `nvidia-nvvm` to 13.0.88 (the resolver installs 13.4, which FlashInfer rejects against 13.0 headers), puts the venv and `nvidia/cu13/lib` on `PATH` / `LD_LIBRARY_PATH`, sets `CUDA_HOME`, and adds the `lib64`, `libcudart.so` and `libcuda` stub links.
+- **SSH:** Brev's `ssh_config` uses `ControlMaster auto`, so the tunnel opens its own connection.
+- The model is not gated on Hugging Face; no `HF_TOKEN` is needed. All recipe flags from `docs/bounties.md` are accepted by vLLM 0.27.1.
+
+Findings from the 2026-10-17 smoke tests (runs `20261017-1815*` to `-1832*`, none passed; not results):
+- **Uncapped reasoning does not fit a review budget:** single calls generated 18-24k completion tokens (about 250 tokens/s, 75-95 s each); both runs hit a 40k-token budget after 2 and 4 calls. Use `MIGPROTO_LLM_THINKING_BUDGET` (vLLM `thinking_token_budget`; 4096 gave about 2.6k completion tokens per call).
+- **Reasoning off:** both runs ended in ERROR before reaching the runner (invalid plans).
+- **Capped at 4096 with 120k tokens:** both runs reached the runner; the runner refused the plans (retirement gate; 19-22 failed cross-version checks, no bidirectional sync).
+- **Fixed:** the plan response schema let deploy/retire stages carry `"sql": []`, which `plans.validate_plan` rejects; the schema now has separate stage shapes (thinking budget `86e9b34`, schema `7d77778`).
+- **Open:** an invalid revision turns a run with a real attempt-1 runner FAIL into `ERROR`; consider `FAIL`/`INCOMPLETE` (controller change). The measurement configuration and the budget-fairness rule are not decided yet.
 
 ## Collaboration
 

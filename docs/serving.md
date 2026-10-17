@@ -3,8 +3,9 @@
 For the full input, dataset, output, setup, and validation procedure, see
 [`model-validation.md`](model-validation.md).
 
-Status: **planned, not yet deployed or measured**. Complete every placeholder from the actual
-Brev instance before treating a run as submission evidence.
+Status: **deployed once on Brev (2026-10-17) and smoke-tested; no measurement batch yet.** The table
+below is the recorded deployment. Smoke-test findings are summarized in AGENTS.md ("Brev Lightning
+quick start"); they are not results.
 
 ## Intended deployment
 
@@ -48,17 +49,17 @@ never public.
 
 | Field | Recorded value |
 |---|---|
-| Brev instance type | pending |
-| GPU model and count | pending |
-| Driver version | pending |
-| CUDA version | pending |
-| vLLM version or image digest | pending |
-| Exact checkpoint revision | pending |
-| Exact launch command and environment | pending |
-| Reasoning parser and thinking setting | pending |
-| Prefix caching enabled | pending |
-| Startup log excerpt | pending |
-| Endpoint health check | pending |
+| Brev instance type | `scaleway_H100` via Shadeform (`horizontal-jade-beetle`, 2026-10-17): 1x H100 80 GB PCIe, 24 vCPU, 235 GiB RAM, 451 GB disk, $3.96/h, no stop/start |
+| GPU model and count | 1x NVIDIA H100 PCIe |
+| Driver version | 570.124.06 (supports CUDA 12.8) |
+| CUDA version | CUDA 13.0 user space through `cuda-compat-13-0` (580.178.04); PyTorch 2.13.0+cu130; pip toolkit with nvcc/crt/nvvm pinned to 13.0.88 |
+| vLLM version or image digest | vLLM 0.27.1 from PyPI in a uv venv (Python 3.12.15) |
+| Exact checkpoint revision | `bee7596271d1495f6992ae224aefde4410e816b8` (matches the Hugging Face `sha` on 2026-10-17; not gated) |
+| Exact launch command and environment | `scripts/brev/serve_lightning.sh` with `CUDA_COMPAT=13-0`; the full command, including `LD_LIBRARY_PATH` and `CUDA_HOME`, is recorded in each batch's `environment.txt` and in `MIGPROTO_SERVING_FLAGS` |
+| Reasoning parser and thinking setting | `nemotron_v3`; thinking on by default. Client sends `enable_thinking` and `force_nonempty_content`; `MIGPROTO_LLM_THINKING_BUDGET` adds `thinking_token_budget` |
+| Prefix caching enabled | yes (`--enable-prefix-caching`) |
+| Startup log excerpt | `Available KV cache memory: 50.6 GiB`; `GPU KV cache size: 17,394,640 tokens`; `Maximum concurrency for 1,048,576 tokens per request: 16.59x`. Weights load in about 4 s once downloaded |
+| Endpoint health check | `scripts/brev/check_endpoint.sh` OK: served name listed; JSON content `{"ok": true, "answer": 5}`, 737 reasoning characters, usage reported |
 
 Mirror these values into the `MIGPROTO_*` environment variables documented in `.env.example`.
 The controller records them in `agent_config`; unset values remain `null` rather than being
