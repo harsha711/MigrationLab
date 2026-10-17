@@ -347,8 +347,9 @@ def run_meta(run: dict) -> dict:
         "scenario": scenario,
         "contract_version": ((run["manifest"] or {}).get("contract_version")
                              or summary.get("contract_version")
+                             # Observations decide: an agent_claim may be v1 while checks are v0.
                              or next((e["contract_version"] for e in run["events"]
-                                      if e.get("contract_version")), None)
+                                      if e["kind"] == "check" and e.get("contract_version")), None)
                              or "migproto.events/v0"),
         "recorded_run_id": run_meta_recorded_id(run),
         "start_states": [{k: v for k, v in e.items() if k != "seq"}

@@ -83,7 +83,7 @@ const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) ===
 
 async function pageRuns() {
   crumbs([["Runs"]]);
-  const { runs, controller_available } = await api("/api/runs");
+  const { runs, controller_available, controller_reason } = await api("/api/runs");
   const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
   const rows = details.map((d) => {
     const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
@@ -96,13 +96,78 @@ async function pageRuns() {
   return `<div class="row spread"><h1>Runs</h1>
       <div class="row">
         <button id="compare" disabled>Compare 2 selected</button>
-        <button disabled title="controller not available">Run Review</button>
+        <a class="pill${controller_available ? " active" : ""}" href="#/review"
+           title="${esc(controller_reason || "Start a live review")}">Run Review</a>
       </div></div>
     <div class="card table-wrap"><table>
       <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
       ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
-    </table></div>
-    ${controller_available ? "" : `<p class="muted">Run Review is disabled until the controller exists.</p>`}`;
+    </table></div>`;
+}
+
+async function pageReview() {
+  crumbs([["Runs", "#/"], ["Run Review"]]);
+  const s = await api("/api/review/status");
+  const cur = s.current;
+  const running = cur && cur.state === "running";
+  return `<h1>Run Review</h1>
+    <p class="muted">Starts one review through the agent controller, which calls the runner.
+      The UI itself never runs SQL or starts servers.</p>
+    ${cur ? `<div class="card">Last review: <a href="#/review/${enc(cur.run_id)}">${esc(cur.run_id)}</a>
+      ${running ? `<span class="badge">running</span>` : verdictBadge(cur.verdict)}
+      ${cur.error ? `<span class="muted">${esc(cur.error)}</span>` : ""}</div>` : ""}
+    <div class="card">
+      ${s.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(s.reason)}</p>`}
+      <div class="row">
+        <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option>
+          <option value="llm">llm (configured endpoint)</option></select></label>
+        <label>Topology <select id="rv-topology"><option value="roles">roles</option>
+          <option value="single">single agent</option></select></label>
+        <button id="rv-start" ${s.ok && !running ? "" : "disabled"}>Start</button>
+      </div>
+      <p id="rv-msg" class="muted"></p>
+    </div>`;
+}
+
+async function startReview() {
+  const msg = $("#rv-msg");
+  msg.textContent = "Starting…";
+  const r = await fetch("/api/review", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: $("#rv-mode").value, topology: $("#rv-topology").value }),
+  });
+  const body = await r.json();
+  if (r.status === 202) { location.hash = `#/review/${enc(body.run_id)}`; return; }
+  msg.textContent = body.error + (body.owner ? ` (${JSON.stringify(body.owner)})` : "");
+}
+
+async function pageReviewLive(runId) {
+  crumbs([["Runs", "#/"], ["Run Review", "#/review"], [runId]]);
+  setTimeout(() => pollReview(runId, 0), 0);
+  return `<div class="row"><h1>${esc(runId)}</h1><span id="rv-state" class="badge">running</span></div>
+    <p class="muted">Live events from <code>runs/${esc(runId)}/events.jsonl</code>.</p>
+    <div class="card table-wrap"><table id="rv-events"><tr><th>t (s)</th><th>kind</th><th>name</th><th>status</th></tr></table></div>`;
+}
+
+async function pollReview(runId, after) {
+  if (location.hash !== `#/review/${enc(runId)}`) return;   // user navigated away
+  let data;
+  try { data = await api(`/api/review/events?run=${enc(runId)}&after=${after}`); }
+  catch (err) { $("#rv-state").textContent = "error"; return; }
+  const table = $("#rv-events");
+  if (!table) return;
+  for (const e of data.events) {
+    const row = table.insertRow();
+    const k = e.kind === "check" ? kindOf(e) : "";
+    row.innerHTML = `<td>${e.t == null ? "" : Number(e.t).toFixed(1)}</td><td>${esc(e.kind)}</td>
+      <td>${esc(e.name || e.stage || e.msg || "")}</td><td>${k ? verdictBadge(e.outcome || e.status) : ""}</td>`;
+  }
+  if (!data.done) { setTimeout(() => pollReview(runId, data.next), 1500); return; }
+  const s = await api("/api/review/status");
+  const done = s.current && s.current.run_id === runId ? s.current : null;
+  runCache.delete(runId);
+  $("#rv-state").outerHTML = `${verdictBadge(done ? done.verdict : "done")}
+    <a href="#/run/${enc(runId)}">Open run</a>`;
 }
 
 async function pageOverview(id) {
@@ -327,6 +392,8 @@ async function route() {
     else if (parts[0] === "run" && parts[2] === "metrics") html = await pageMetrics(parts[1]);
     else if (parts[0] === "obs") html = await pageEvidence(parts.slice(1).join("/"));
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
+    else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
+    else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     window.scrollTo(0, 0);
@@ -338,6 +405,7 @@ async function route() {
 document.addEventListener("click", (ev) => {
   const obs = ev.target.closest("[data-obs]");
   if (obs) { location.hash = `#/obs/${enc(obs.dataset.obs)}`; return; }
+  if (ev.target.id === "rv-start") { startReview(); return; }
   if (ev.target.closest("a, input, button, summary")) return;
   const row = ev.target.closest("[data-href]");
   if (row) location.hash = row.dataset.href;

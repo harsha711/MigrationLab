@@ -72,6 +72,8 @@ def test_request_and_meta(detail):
     assert meta["topology"] == "roles"
     assert meta["checkpoint_revision"] == "bee7596271d1495f6992ae224aefde4410e816b8"
     assert meta["serving_version"] == "0.27.1" and meta["dev_only_model"] is False
+    # The agent_claim event is v1, but the runner's checks are v0: the run is v0.
+    assert meta["contract_version"] == "migproto.events/v0"
 
 
 def test_results_prefer_agent_totals(detail):
