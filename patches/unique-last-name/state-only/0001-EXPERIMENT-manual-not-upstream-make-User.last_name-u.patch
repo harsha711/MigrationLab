@@ -1,0 +1,55 @@
+From ea2d09a7dc8256af97169efd9ca378ba0545e801 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:32 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): make User.last_name unique
+ (state-only)
+
+---
+ .../0107_alter_user_last_name_unique.py       | 21 +++++++++++++++++++
+ saleor/account/models.py                      |  2 +-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+ create mode 100644 saleor/account/migrations/0107_alter_user_last_name_unique.py
+
+diff --git a/saleor/account/migrations/0107_alter_user_last_name_unique.py b/saleor/account/migrations/0107_alter_user_last_name_unique.py
+new file mode 100644
+index 0000000..167b830
+--- /dev/null
++++ b/saleor/account/migrations/0107_alter_user_last_name_unique.py
+@@ -0,0 +1,21 @@
++# EXPERIMENT (manual, not upstream): make User.last_name unique (state-only)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.AlterField(
++                    model_name="user", name="last_name",
++                    field=models.CharField(blank=True, max_length=256, unique=True),
++                ),
++            ],
++            database_operations=[],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..898f4eb 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -171,7 +171,7 @@ class User(
+ ):
+     email = models.EmailField(unique=True)
+     first_name = models.CharField(max_length=256, blank=True)
+-    last_name = models.CharField(max_length=256, blank=True)
++    last_name = models.CharField(max_length=256, blank=True, unique=True)
+     addresses = models.ManyToManyField(
+         Address, blank=True, related_name="user_addresses"
+     )
+-- 
+2.43.0
+
