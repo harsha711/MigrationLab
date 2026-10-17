@@ -617,6 +617,7 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("#theme-toggle")) {
     const root = document.documentElement;
     root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+    root.setAttribute("data-bs-theme", root.dataset.theme);
     localStorage.setItem("migrationlab-theme", root.dataset.theme); return;
   }
   if (ev.target.closest("a, input, button, summary")) return;
@@ -678,4 +679,5 @@ document.addEventListener("keydown", (ev) => {
 });
 window.addEventListener("hashchange", route);
 document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "dark";
+document.documentElement.setAttribute("data-bs-theme", document.documentElement.dataset.theme);
 route();

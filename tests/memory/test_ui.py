@@ -41,6 +41,9 @@ def test_static_and_runs(base_url):
     assert status == 200 and b"Replay Recorded Run" in body
     assert b"Guided demo" in body and b"evidence-drawer" in body
     assert b"welcome-tour" in body and b'id="toast"' in body
+    assert b"jquery-3.7.1.min.js" in body
+    assert b"bootstrap@5.3.8" in body
+    assert b"reactive-jquery.js" in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
@@ -105,3 +108,6 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "command-palette" in js
     assert "workspaceAttempt" in js
     assert "Rebuilt dashboard command center" in css
+    reactive = (ROOT / "migproto" / "ui" / "static" / "reactive-jquery.js").read_text(encoding="utf-8")
+    assert "window.jQuery" in reactive and "MutationObserver" in reactive
+    assert "data-bs-theme" in js
