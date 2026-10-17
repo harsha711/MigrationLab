@@ -28,8 +28,8 @@ def _steps(conn, observation_id):
 
 def _observation(conn, row) -> dict:
     o = dict(row)
-    o["schema_state"] = _obj(o.pop("schema_state_json"))
-    o["raw"] = _obj(o.pop("raw_json"))
+    for key in ("schema_state", "raw", "app_commit", "expected", "observed"):
+        o[key] = _obj(o.pop(f"{key}_json"))
     o["steps"] = _steps(conn, o["observation_id"])
     o["app_versions"] = sorted({s["app_version"] for s in o["steps"] if s["app_version"]},
                                key=APP_ORDER.index)
@@ -37,13 +37,20 @@ def _observation(conn, row) -> dict:
 
 
 def query_observations(conn: sqlite3.Connection, *, run_id=None, attempt_id=None, plan_id=None,
-                       stage_id=None, check_name=None, status=None, app_version=None,
+                       stage_id=None, check_name=None, status=None, outcome=None,
+                       check_type=None, app_scope=None, app_version=None,
                        source_kind=None) -> list[dict]:
-    """Exact-match filter. `app_version` matches checks with a step on that app version."""
+    """Exact-match filter.
+
+    `app_version` matches checks with a step on that app version (old / new-staged /
+    new-unsafe). `app_scope` matches the runner's v1 `app_version` field (old / new / both /
+    database); v0 checks have no app_scope and never match it.
+    """
     where, args = [], []
     for col, val in (("o.run_id", run_id), ("o.attempt_id", attempt_id), ("o.plan_id", plan_id),
                      ("o.stage_id", stage_id), ("o.check_name", check_name),
-                     ("o.status", status), ("r.source_kind", source_kind)):
+                     ("o.status", status), ("o.outcome", outcome), ("o.check_type", check_type),
+                     ("o.app_scope", app_scope), ("r.source_kind", source_kind)):
         if val is not None:
             where.append(f"{col} = ?")
             args.append(val)
@@ -67,7 +74,7 @@ def check_history(conn, check_name) -> list[dict]:
     """Every recorded outcome of one check, one row per scope, labeled, never merged."""
     return [{k: o[k] for k in ("observation_id", "run_id", "attempt_id", "plan_id", "stage_id",
                                "status", "outcome", "schema_state", "app_versions",
-                               "scope_source")}
+                               "app_scope", "database_snapshot_id", "scope_source")}
             for o in query_observations(conn, check_name=check_name)]
 
 
@@ -81,6 +88,14 @@ def list_runs(conn) -> list[dict]:
     rows = conn.execute("SELECT run_id, source_kind, command, verdict, elapsed_s, checks_total, "
                         "provenance, model FROM runs ORDER BY source_kind, run_id")
     return [dict(r) for r in rows]
+
+
+def outcome_counts(conn, attempt_id) -> dict | None:
+    """v1 outcome counts for one attempt; None when no observation recorded an outcome (v0)."""
+    rows = conn.execute("SELECT outcome, COUNT(*) AS n FROM observations "
+                        "WHERE attempt_id = ? AND outcome IS NOT NULL GROUP BY outcome",
+                        (attempt_id,)).fetchall()
+    return {r["outcome"]: r["n"] for r in rows} or None
 
 
 def run_detail(conn, run_id) -> dict | None:
@@ -103,6 +118,7 @@ def run_detail(conn, run_id) -> dict | None:
             "SELECT COUNT(*) AS total, SUM(status = 'FAIL') AS failed FROM observations "
             "WHERE attempt_id = ?", (aid,)).fetchone()
         a["checks_total"], a["checks_failed"] = counts["total"], counts["failed"] or 0
+        a["outcome_counts"] = outcome_counts(conn, aid)
         a["claims"] = [dict(c) for c in conn.execute(
             "SELECT claim_id, role, kind, text, provenance, structured FROM claims "
             "WHERE attempt_id = ? ORDER BY claim_id", (aid,))]
@@ -141,7 +157,8 @@ def matrix(conn, run_id, attempt_id) -> dict:
         apps = [s["app_version"] for s in o["steps"]]
         if not apps:
             db_checks.append({"observation_id": o["observation_id"], "stage_id": o["stage_id"],
-                              "check_name": o["check_name"], "status": o["status"]})
+                              "check_name": o["check_name"], "status": o["status"],
+                              "outcome": o["outcome"], "check_type": o["check_type"]})
             continue
         if apps[0] == apps[-1] and len(set(apps)) > 1:
             col = "mixed"  # starts and ends on one version but crosses to another in between
@@ -150,7 +167,8 @@ def matrix(conn, run_id, attempt_id) -> dict:
         if col not in columns:
             columns.append(col)
         rows.append({"observation_id": o["observation_id"], "stage_id": o["stage_id"],
-                     "check_name": o["check_name"], "status": o["status"], "column": col,
+                     "check_name": o["check_name"], "status": o["status"],
+                     "outcome": o["outcome"], "column": col,
                      "path": apps, "definition_provenance": o["definition_provenance"]})
     rank = lambda c: tuple(APP_ORDER.index(p) if p in APP_ORDER else 99
                            for p in c.split(" -> "))
@@ -170,6 +188,8 @@ def results_panel(conn, run_id) -> dict:
         "  (SELECT COUNT(*) FROM observations o WHERE o.attempt_id = a.attempt_id "
         "     AND o.status = 'FAIL') AS failed_or_refused "
         "FROM attempts a WHERE a.run_id = ? ORDER BY a.attempt", (run_id,))]
+    for a in per_attempt:
+        a["outcome_counts"] = outcome_counts(conn, a["attempt_id"])
     usage = [c.get("usage") or {} for c in calls]
     total = lambda key: sum(u.get(key) or 0 for u in usage) if calls else None
     return {
@@ -190,5 +210,11 @@ def results_panel(conn, run_id) -> dict:
         "prompt_tokens": total("prompt_tokens"),
         "completion_tokens": total("completion_tokens"),
         "total_tokens": total("total_tokens"),
+        "contract_version": meta.get("contract_version"),
+        "recorded_run_id": meta.get("recorded_run_id"),
+        "database_snapshot_ids": sorted({s.get("database_snapshot_id") for s in
+                                         meta.get("start_states") or []
+                                         if s.get("database_snapshot_id")}) or None,
+        "start_states": meta.get("start_states") or [],
         "gym": None,  # NeMo Gym results not connected (gym/results/ does not exist)
     }

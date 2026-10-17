@@ -1,0 +1,16 @@
+{
+  "note": "SYNTHETIC test fixture, hand-written to the v1 field list in docs/team/handoff-01.md. Not runner output. Replace with a real examples/v1/ run once Harsha exports one.",
+  "contract_version": "migproto.contracts/v1",
+  "run_id": "20261017-150000-staged",
+  "command": "staged",
+  "verdict": "FAIL",
+  "runner_verdict": "fail",
+  "elapsed_s": 24.0,
+  "checks_total": 8,
+  "checks_failed": ["case.old_write_new_read", "stage.contract.preconditions"],
+  "ok": false,
+  "plan_id": "scripted-v1",
+  "completed_all_stages": false,
+  "halted": "contract stage contract skipped: 1 earlier check failure",
+  "outcome_counts": {"pass": 5, "fail": 1, "refused": 1, "skipped": 1}
+}

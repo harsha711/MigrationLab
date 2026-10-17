@@ -118,7 +118,7 @@ def derive(run: dict) -> dict:
             continue
 
         if e.get("contract_version") == V1:
-            obs = _from_v1(run_id, e)
+            obs = _from_v1(run_id, e, attempt, attempt_plan.get(attempt))
         else:
             plan_id = e.get("plan_id") or attempt_plan.get(attempt)
             schema = (schema_by_stage.get((attempt, stage))
@@ -132,7 +132,12 @@ def derive(run: dict) -> dict:
                 "check_name": e["name"],
                 "status": e.get("status"),
                 "outcome": None,       # v0 cannot tell fail / refused / error apart (G2)
-                "expectation": None,
+                "check_type": None,
+                "app_scope": None,
+                "app_commit": None,
+                "database_snapshot_id": None,
+                "expected": None,
+                "observed": None,
                 "schema_state": schema,
                 "definition_provenance": e.get("provenance"),
                 "executed_by": "runner",
@@ -156,7 +161,7 @@ def derive(run: dict) -> dict:
         attempts["a1"] = {"attempt": "a1", "plan_id": plan_id,
                           "status": summary.get("verdict"), "failed": summary.get("checks_failed")}
         for o in observations:
-            if o["scope_source"] == "derived_v0" and o["plan_id"] is None:
+            if o["plan_id"] is None and o["attempt"] == "a1":
                 o["plan_id"] = plan_id
     for s in summary.get("attempts") or []:
         label = f"a{s.get('attempt')}"
@@ -170,19 +175,30 @@ def derive(run: dict) -> dict:
             "observations": observations, "events": others}
 
 
-def _from_v1(run_id: str, e: dict) -> dict:
-    """Pass explicit v1 scope fields through unchanged."""
+def _from_v1(run_id: str, e: dict, attempt: str | None, plan_id: str | None) -> dict:
+    """Pass the runner's explicit v1 fields through (shape: docs/team/handoff-01.md).
+
+    The store keys runs by directory name (v0 rule 1), so the attempt is normalized to
+    `<directory>/a<N>`; the recorded `run_id` / `attempt_id` stay in `raw`. The recorded
+    `observation_id` is kept as the primary key so agent claims can cite it.
+    """
     attempt_id = e.get("attempt_id")
+    label = attempt_id.rsplit("/", 1)[-1] if attempt_id else attempt
     return {
-        "observation_id": e.get("observation_id"),
-        "run_id": e.get("run_id", run_id),
-        "attempt": attempt_id.rsplit("/", 1)[-1] if attempt_id else None,
-        "plan_id": e.get("plan_id"),
-        "stage_id": e.get("stage_id"),
+        "observation_id": e.get("observation_id") or f"{run_id}/{label or '-'}/{e['name']}#{e['seq']}",
+        "run_id": run_id,
+        "attempt": label,
+        "plan_id": e.get("plan_id") or plan_id,
+        "stage_id": e.get("step_id", e.get("stage_id")),  # recorded; absent -> unknown
         "check_name": e.get("name"),
         "status": e.get("status"),
         "outcome": e.get("outcome"),
-        "expectation": e.get("expectation"),
+        "check_type": e.get("check_type"),
+        "app_scope": e.get("app_version"),  # old / new / both / database / None, set by the runner
+        "app_commit": e.get("app_commit"),
+        "database_snapshot_id": e.get("database_snapshot_id"),
+        "expected": e.get("expected"),
+        "observed": e.get("observed"),
         "schema_state": e.get("schema_state"),
         "definition_provenance": e.get("definition_provenance", e.get("provenance")),
         "executed_by": e.get("executed_by"),
@@ -257,8 +273,14 @@ def run_meta(run: dict) -> dict:
         "hardware": cfg.get("hardware") if cfg else None,
         "dev_only_model": model in DEV_ONLY_MODELS,
         "scenario": scenario,
-        "contract_version": (run["manifest"] or {}).get("contract_version")
-                            or ("migproto.events/v0"),
+        "contract_version": ((run["manifest"] or {}).get("contract_version")
+                             or summary.get("contract_version")
+                             or next((e["contract_version"] for e in run["events"]
+                                      if e.get("contract_version")), None)
+                             or "migproto.events/v0"),
+        "recorded_run_id": summary.get("run_id") or (run["manifest"] or {}).get("source_run_id"),
+        "start_states": [{k: v for k, v in e.items() if k != "seq"}
+                         for e in run["events"] if e["kind"] == "start_state"],
     }
 
 

@@ -46,6 +46,10 @@ CREATE TABLE IF NOT EXISTS observations (
   status TEXT,                           -- as recorded (v0: PASS / FAIL)
   outcome TEXT,                          -- v1 pass/fail/refused/error/skipped; NULL in v0
   expectation TEXT,
+  check_type TEXT,                       -- v1 assertion / safety_gate / execution
+  app_scope TEXT,                        -- v1 app_version: old / new / both / database
+  app_commit_json TEXT, database_snapshot_id TEXT,
+  expected_json TEXT, observed_json TEXT,
   schema_state_json TEXT,                -- NULL = unknown
   definition_provenance TEXT, executed_by TEXT, scope_source TEXT,
   seq INTEGER, error TEXT, raw_json TEXT
@@ -74,6 +78,23 @@ CREATE INDEX IF NOT EXISTS steps_app ON observation_steps (app_version);
 """
 
 
+# Columns added after the first schema. Older stores get them via ALTER TABLE (additive,
+# existing rows kept, new columns NULL = unknown for runs ingested before the upgrade).
+ADDED_COLUMNS = {
+    "observations": ["check_type", "app_scope", "app_commit_json", "database_snapshot_id",
+                     "expected_json", "observed_json"],
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in ADDED_COLUMNS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for col in columns:
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+    conn.commit()
+
+
 def connect(path=None) -> sqlite3.Connection:
     """Open (and initialize) the store. `":memory:"` works for tests."""
     path = DEFAULT_DB if path is None else path
@@ -82,6 +103,7 @@ def connect(path=None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
 
 
@@ -126,7 +148,11 @@ def ingest(conn: sqlite3.Connection, run_dir) -> str:
                 "observation_id": o["observation_id"], "run_id": o["run_id"],
                 "attempt_id": _aid(o["run_id"], o["attempt"]), "plan_id": o["plan_id"],
                 "stage_id": o["stage_id"], "check_name": o["check_name"], "status": o["status"],
-                "outcome": o["outcome"], "expectation": o["expectation"],
+                "outcome": o["outcome"], "expectation": o.get("expectation"),
+                "check_type": o["check_type"], "app_scope": o["app_scope"],
+                "app_commit_json": _j(o["app_commit"]),
+                "database_snapshot_id": o["database_snapshot_id"],
+                "expected_json": _j(o["expected"]), "observed_json": _j(o["observed"]),
                 "schema_state_json": _j(o["schema_state"]),
                 "definition_provenance": o["definition_provenance"],
                 "executed_by": o["executed_by"], "scope_source": o["scope_source"],
