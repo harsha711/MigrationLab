@@ -1,0 +1,4 @@
+{
+  "summary": "The migration plan a2-a2-rename-note-002 completed successfully. All stages—expand-add-column-and-triggers, backfill-data, deploy_new, retire_old, and contract-drop-old-column—finished without any failed checks. Total runtime was roughly 20.3 seconds (0.1 s, 0.1 s, 19.2 s, 0.8 s, 0.2 s respectively). The run reported ok:true, completed_all_stages:true, and no halt condition. No errors or check failures were recorded.",
+  "suspected_cause": "None (no failure detected)"
+}

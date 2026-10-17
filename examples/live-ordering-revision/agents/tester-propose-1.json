@@ -1,0 +1,172 @@
+{
+  "rationale": "The provided plan relies on two BEFORE triggers to keep `note` and `customer_note` identical. However, if the old and new applications write to the same row concurrently but to different columns, the triggers can leave the columns out of sync (e.g., old writes `note` → trigger copies to `customer_note`, then new writes `customer_note` → trigger copies to `note`). The standard catalogue does not test this exact interleaving. The custom cases below introduce overlapping writes, clears, Unicode data, and create‑then‑update patterns that can surface such divergence or loss of data.",
+  "checks": [
+    "alternating_same_user",
+    "clear_from_old",
+    "clear_from_new",
+    "unicode_new_write_old_read"
+  ],
+  "custom_cases": [
+    {
+      "id": "concurrent_write_divergence",
+      "description": "Old writes a value, then new writes a different value to the same user without an intervening read. This can expose column divergence when both triggers fire on different columns.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "old-first"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "A",
+          "value": "new-second"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A"
+        }
+      ]
+    },
+    {
+      "id": "clear_then_write",
+      "description": "Old clears the note (sets NULL) and then new writes a non‑NULL value. Checks that the clear is propagated and the subsequent write overwrites correctly.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "clear",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "A",
+          "value": "new-after-clear"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A"
+        }
+      ]
+    },
+    {
+      "id": "alternating_updates",
+      "description": "A series of alternating writes and reads between the two versions on the same user, stressing trigger stability over multiple cycles.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "v1"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "A",
+          "value": "v2"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "v3"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "A",
+          "value": "v4"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "A"
+        }
+      ]
+    },
+    {
+      "id": "unicode_concurrent",
+      "description": "Old writes a plain ASCII string, then new writes a Unicode string. Verifies that Unicode data is correctly mirrored across columns and not corrupted by the triggers.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "plain"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "A",
+          "value": "Üñïçødé ✓ 配達 \"q\" ;--"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "A"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A"
+        }
+      ]
+    },
+    {
+      "id": "create_then_update",
+      "description": "Old creates a new user, then new updates the same user's note. Ensures that the triggers correctly sync the newly created row and that the update does not break consistency.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "create",
+          "user": "N",
+          "value": "created by old"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "N",
+          "value": "new-updated"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "N"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "N"
+        }
+      ]
+    }
+  ]
+}

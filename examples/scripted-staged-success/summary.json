@@ -1,0 +1,50 @@
+{
+  "command": "staged",
+  "verdict": "PASS",
+  "elapsed_s": 31.3,
+  "checks_total": 33,
+  "checks_failed": [],
+  "ok": true,
+  "plan_id": "scripted-v2",
+  "completed_all_stages": true,
+  "halted": null,
+  "stages": [
+    {
+      "stage": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "failed_checks": 0,
+      "seconds": 0.2
+    },
+    {
+      "stage": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "failed_checks": 0,
+      "seconds": 0.1
+    },
+    {
+      "stage": "deploy_new",
+      "kind": "deploy_new",
+      "phase": null,
+      "failed_checks": 0,
+      "seconds": 20.1
+    },
+    {
+      "stage": "retire_old",
+      "kind": "retire_old",
+      "phase": null,
+      "failed_checks": 0,
+      "seconds": 0.8
+    },
+    {
+      "stage": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "failed_checks": 0,
+      "seconds": 0.2
+    }
+  ],
+  "failed_checks": [],
+  "run_db": "migproto_run_staged_scripted-v2_4f39fc50"
+}

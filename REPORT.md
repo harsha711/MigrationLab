@@ -1,5 +1,7 @@
 # Migration Reviewer Feasibility Prototype: Saleor `User.note` Rename
 
+> Links to `runs/...` point to local, git-ignored run directories on the machine that produced them. Sanitized copies of the key runs are in [`examples/`](examples/README.md): `unsafe-rename` (from `runs/20261017-123935-unsafe`), `scripted-sync-failure` (`runs/20261017-123256-staged`), `scripted-staged-success` (`runs/20261017-123138-staged`), and `live-ordering-revision` (`runs/20261017-123652-agent-loop-llm`).
+
 ## 1. Outcome
 
 The feasibility gate is met for one field and one rename pattern. An immediate column rename migrated successfully and the new application worked, while every old-application operation that loads a `User` row failed with `column account_user.note does not exist`. A staged expand, sync, backfill, retire, contract sequence passed all 33 deterministic checks with no data loss. In both the scripted run and one live model run, the agent loop revised its plan once after execution feedback and the revised plan passed. All pass and fail decisions came from Python code, not from the model.

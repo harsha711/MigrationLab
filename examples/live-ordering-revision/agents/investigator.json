@@ -1,0 +1,220 @@
+{
+  "findings": [
+    {
+      "ref": "saleor/account/__init__.py:16",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Event constant names, not tied to model field."
+    },
+    {
+      "ref": "saleor/account/__init__.py:22",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Event constant names, not tied to model field."
+    },
+    {
+      "ref": "saleor/account/__init__.py:37",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Event description strings, unrelated to model attribute."
+    },
+    {
+      "ref": "saleor/account/__init__.py:41",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Event description strings, unrelated to model attribute."
+    },
+    {
+      "ref": "saleor/account/models.py:182",
+      "kind": "definition",
+      "needs_change": true,
+      "reason": "Model field definition `note` must be renamed to `customer_note`."
+    },
+    {
+      "ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:592",
+      "kind": "write",
+      "needs_change": true,
+      "reason": "String list of updatable fields includes \"note\"; must be changed to \"customer_note\"."
+    },
+    {
+      "ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:714",
+      "kind": "read",
+      "needs_change": true,
+      "reason": "Direct attribute access `old_instance.note` / `updated_instance.note` must use `customer_note`."
+    },
+    {
+      "ref": "saleor/graphql/account/mutations/authentication/request_password_reset.py:38",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Word appears in docstring, not code referencing the field."
+    },
+    {
+      "ref": "saleor/graphql/account/mutations/base.py:182",
+      "kind": "definition",
+      "needs_change": false,
+      "reason": "GraphQL input field name stays `note`; no model attribute reference here."
+    },
+    {
+      "ref": "saleor/graphql/account/mutations/staff/utils.py:6",
+      "kind": "write",
+      "needs_change": true,
+      "reason": "Allowed input keys list contains \"note\"; must be updated to \"customer_note\"."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:22",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL variable name; GraphQL schema keeps the name `note`."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:34",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:72",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL response field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:108",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Local test variable, not model attribute."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:123",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input dict key; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:158",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Assertion on GraphQL response field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:223",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Local test variable."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:240",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input dict key; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:277",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Assertion on GraphQL response field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:383",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Local test variable."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:396",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input dict key; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:536",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input dict key; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:52",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL query field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:91",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Local test variable."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:111",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL input dict key; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:134",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "Assertion on GraphQL response field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/queries/test_me.py:82",
+      "kind": "test",
+      "needs_change": false,
+      "reason": "GraphQL query field; unchanged."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/queries/test_me.py:86",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Comment text, not code."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/queries/test_me.py:90",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Comment text, not code."
+    },
+    {
+      "ref": "saleor/graphql/account/tests/queries/test_me.py:97",
+      "kind": "test",
+      "needs_change": true,
+      "reason": "Direct ORM attribute access `staff_api_client.user.note`; must be changed to `customer_note`."
+    },
+    {
+      "ref": "saleor/graphql/account/types.py:506",
+      "kind": "definition",
+      "needs_change": false,
+      "reason": "GraphQL field name stays `note`; no model attribute reference."
+    },
+    {
+      "ref": "saleor/graphql/account/types.py:508",
+      "kind": "definition",
+      "needs_change": false,
+      "reason": "GraphQL field name stays `note`; no model attribute reference."
+    },
+    {
+      "ref": "saleor/graphql/account/types.py:800",
+      "kind": "read",
+      "needs_change": true,
+      "reason": "Resolver returns `root.note`; must return `root.customer_note`."
+    },
+    {
+      "ref": "saleor/core/utils/anonymization.py:81",
+      "kind": "write",
+      "needs_change": true,
+      "reason": "Dictionary used to create a user includes key \"note\"; must be renamed to \"customer_note\"."
+    },
+    {
+      "ref": "saleor/core/utils/anonymization.py:137",
+      "kind": "unrelated",
+      "needs_change": false,
+      "reason": "Assigns to `anonymized_checkout.note`, which belongs to Checkout, not User."
+    }
+  ],
+  "implicit_paths": [
+    "Any generic update routine that iterates over input dict keys (e.g., BaseMutation.perform_mutation) and does setattr(user, key, value) will break because the key will be \"note\" while the model attribute is now \"customer_note\".",
+    "Django ModelForm or serializer for the User model that relies on the field name \"note\" will need to be updated to map to \"customer_note\".",
+    "Signal handlers or audit logging that reference `instance.note` directly.",
+    "Any raw SQL or queryset annotations that use the column name \"note\" (e.g., .values('note')) must be updated to \"customer_note\"."
+  ]
+}

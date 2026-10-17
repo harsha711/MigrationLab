@@ -1,0 +1,35 @@
+{
+  "fixture": "live-ordering-revision",
+  "kind": "agent_loop_live",
+  "contract_version": "migproto.events/v0",
+  "source_run_id": "20261017-123652-agent-loop-llm",
+  "verdict": "PASS",
+  "checks_total": 71,
+  "checks_failed": [
+    "retirement_gate"
+  ],
+  "files": [
+    "summary.json",
+    "events.jsonl",
+    "plan-a1-rename-note-001.json",
+    "plan-a2-a2-rename-note-002.json",
+    "sql/new-staged-0107-sqlmigrate.sql",
+    "sql/plan-a1-rename-note-001.sql",
+    "sql/plan-a2-a2-rename-note-002.sql",
+    "agents/investigator.json",
+    "agents/planner-1.json",
+    "agents/planner-2.json",
+    "agents/tester-propose-1.json",
+    "agents/tester-propose-2.json",
+    "agents/tester-report-1.json",
+    "agents/tester-report-2.json",
+    "agents/search_hits.json",
+    "agents/model_calls.json (derived from transcripts)"
+  ],
+  "sanitization": [
+    "absolute repo path -> <repo>, home path -> <home>",
+    "model transcripts reduced to role/latency/usage/error (prompts and responses dropped)",
+    "server, migration and pytest logs not copied"
+  ],
+  "note": "Development smoke test with gpt-oss:120b-cloud via Ollama. Not the qualifying small-model run. Plan id a2-a2-* reflects a prefix bug fixed after this run."
+}

@@ -1,0 +1,56 @@
+{
+  "plan_id": "a2-a2-rename-note-002",
+  "summary": "Add a nullable `customer_note` column and two BEFORE triggers that keep `note` and `customer_note` identical. Backfill existing rows, deploy the new code, retire the old version, then drop the triggers and the old `note` column.",
+  "write_consistency": "During the overlap each version writes to its own column; the two BEFORE triggers mirror the change to the other column, so reads from either version always see the latest value and no data is lost.",
+  "revision_notes": "The previous plan failed because the contract stage (dropping the old column) was executed before the `retire_old` stage. The runner blocks column removal while the old app is still running, causing a halt. The contract stage is now moved after `retire_old` so the old version is fully stopped before the column and triggers are removed.",
+  "stages": [
+    {
+      "id": "expand-add-column-and-triggers",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new column and create triggers that keep `note` and `customer_note` in sync.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text;",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n    IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN\n        IF NEW.note IS DISTINCT FROM OLD.note THEN\n            NEW.customer_note := NEW.note;\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;\n$$;",
+        "CREATE OR REPLACE FUNCTION sync_customer_note_to_note() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n    IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN\n        IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n            NEW.note := NEW.customer_note;\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;\n$$;",
+        "CREATE TRIGGER trg_sync_note_to_customer_note BEFORE INSERT OR UPDATE OF note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();",
+        "CREATE TRIGGER trg_sync_customer_note_to_note BEFORE INSERT OR UPDATE OF customer_note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_note_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing values from `note` to `customer_note` in batches until all rows are synchronized.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE note IS NOT NULL AND (customer_note IS DISTINCT FROM note) LIMIT 1000) UPDATE account_user SET customer_note = note FROM batch WHERE account_user.id = batch.id;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new Saleor version that uses the `customer_note` field."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old application version; only the new version remains."
+    },
+    {
+      "id": "contract-drop-old-column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove synchronization triggers and drop the obsolete `note` column now that the old version is retired.",
+      "sql": [
+        "DROP TRIGGER trg_sync_note_to_customer_note ON account_user;",
+        "DROP TRIGGER trg_sync_customer_note_to_note ON account_user;",
+        "DROP FUNCTION sync_note_to_customer_note();",
+        "DROP FUNCTION sync_customer_note_to_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

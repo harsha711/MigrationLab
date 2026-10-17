@@ -1,0 +1,177 @@
+[
+  {
+    "ref": "saleor/account/__init__.py:16",
+    "line": "NOTE_ADDED_TO_ORDER = \"note_added_to_order\"  # added a note to one of their orders",
+    "context": "    # Order related events\n    PLACED_ORDER = \"placed_order\"  # created an order\n    NOTE_ADDED_TO_ORDER = \"note_added_to_order\"  # added a note to one of their orders\n\n    # Staff actions over customers events"
+  },
+  {
+    "ref": "saleor/account/__init__.py:22",
+    "line": "NOTE_ADDED = \"note_added\"  # the staff user added a note to the customer",
+    "context": "    EMAIL_ASSIGNED = \"email_assigned\"  # the staff user assigned a email to the customer\n    NAME_ASSIGNED = \"name_assigned\"  # the staff user added set a name to the customer\n    NOTE_ADDED = \"note_added\"  # the staff user added a note to the customer\n\n    CHOICES = ["
+  },
+  {
+    "ref": "saleor/account/__init__.py:37",
+    "line": "(NOTE_ADDED_TO_ORDER, \"A note was added\"),",
+    "context": "        (EMAIL_CHANGED, \"The account email address was changed\"),\n        (PLACED_ORDER, \"An order was placed\"),\n        (NOTE_ADDED_TO_ORDER, \"A note was added\"),\n        (CUSTOMER_DELETED, \"A customer was deleted\"),\n        (NAME_ASSIGNED, \"A customer's name was edited\"),"
+  },
+  {
+    "ref": "saleor/account/__init__.py:41",
+    "line": "(NOTE_ADDED, \"A note was added to the customer\"),",
+    "context": "        (NAME_ASSIGNED, \"A customer's name was edited\"),\n        (EMAIL_ASSIGNED, \"A customer's email address was edited\"),\n        (NOTE_ADDED, \"A note was added to the customer\"),\n    ]"
+  },
+  {
+    "ref": "saleor/account/models.py:182",
+    "line": "note = models.TextField(null=True, blank=True)",
+    "context": "    is_confirmed = models.BooleanField(default=True)\n    last_confirm_email_request = models.DateTimeField(null=True, blank=True)\n    note = models.TextField(null=True, blank=True)\n    date_joined = models.DateTimeField(default=timezone.now, editable=False)\n    updated_at = models.DateTimeField(auto_now=True, db_index=True)"
+  },
+  {
+    "ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:592",
+    "line": "\"note\",",
+    "context": "                \"is_active\",\n                \"is_confirmed\",\n                \"note\",\n                \"language_code\",\n                \"external_reference\","
+  },
+  {
+    "ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:714",
+    "line": "note_changed = old_instance.note != updated_instance.note",
+    "context": "                )\n\n            note_changed = old_instance.note != updated_instance.note\n            language_code_changed = (\n                old_instance.language_code != updated_instance.language_code"
+  },
+  {
+    "ref": "saleor/graphql/account/mutations/authentication/request_password_reset.py:38",
+    "line": "\"Please note that mutation will not fail if the channel is not provided. \"",
+    "context": "                \"Slug of a channel which will be used to notify the user. \"\n                \"It is needed for customers, if not provided, the notification may not happen. \"\n                \"Please note that mutation will not fail if the channel is not provided. \"\n            )\n        )"
+  },
+  {
+    "ref": "saleor/graphql/account/mutations/base.py:182",
+    "line": "note = graphene.String(description=\"A note about the user.\")",
+    "context": "    email = graphene.String(description=\"The unique email address of the user.\")\n    is_active = graphene.Boolean(required=False, description=\"User account is active.\")\n    note = graphene.String(description=\"A note about the user.\")\n    metadata = NonNullList(\n        MetadataInput,"
+  },
+  {
+    "ref": "saleor/graphql/account/mutations/staff/utils.py:6",
+    "line": "\"note\",",
+    "context": "    \"email\",\n    \"is_active\",\n    \"note\",\n    \"external_reference\",\n    \"is_confirmed\","
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:22",
+    "line": "$note: String, $billing: AddressInput, $shipping: AddressInput,",
+    "context": "    mutation CreateCustomer(\n        $email: String, $firstName: String, $lastName: String, $channel: String\n        $note: String, $billing: AddressInput, $shipping: AddressInput,\n        $redirect_url: String, $languageCode: LanguageCodeEnum,\n        $externalReference: String, $metadata: [MetadataInput!],"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:34",
+    "line": "note: $note,",
+    "context": "            isActive: $isActive,\n            isConfirmed: $isConfirmed,\n            note: $note,\n            defaultShippingAddress: $shipping,\n            defaultBillingAddress: $billing,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:72",
+    "line": "note",
+    "context": "                isStaff\n                isConfirmed\n                note\n                externalReference\n                metadata {"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:108",
+    "line": "note = \"Test user\"",
+    "context": "    first_name = \"api_first_name\"\n    last_name = \"api_last_name\"\n    note = \"Test user\"\n    address_data = convert_dict_keys_to_camel_case(address.as_data())\n    metadata = [{\"key\": \"test key\", \"value\": \"test value\"}]"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:123",
+    "line": "\"note\": note,",
+    "context": "        \"firstName\": first_name,\n        \"lastName\": last_name,\n        \"note\": note,\n        \"shipping\": address_data,\n        \"billing\": address_data,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:158",
+    "line": "assert data[\"user\"][\"note\"] == note",
+    "context": "    assert data[\"user\"][\"firstName\"] == first_name\n    assert data[\"user\"][\"lastName\"] == last_name\n    assert data[\"user\"][\"note\"] == note\n    assert data[\"user\"][\"languageCode\"] == \"PL\"\n    assert data[\"user\"][\"externalReference\"] == external_reference"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:223",
+    "line": "note = \"Test user\"",
+    "context": "    first_name = \"api_first_name\"\n    last_name = \"api_last_name\"\n    note = \"Test user\"\n    address_data = convert_dict_keys_to_camel_case(address.as_data())\n    metadata = [{\"key\": \"test key\", \"value\": \"test value\"}]"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:240",
+    "line": "\"note\": note,",
+    "context": "        \"firstName\": first_name,\n        \"lastName\": last_name,\n        \"note\": note,\n        \"shipping\": address_data,\n        \"billing\": address_data,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:277",
+    "line": "assert data[\"user\"][\"note\"] == note",
+    "context": "    assert data[\"user\"][\"firstName\"] == first_name\n    assert data[\"user\"][\"lastName\"] == last_name\n    assert data[\"user\"][\"note\"] == note\n    assert data[\"user\"][\"languageCode\"] == \"PL\"\n    assert data[\"user\"][\"externalReference\"] == external_reference"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:383",
+    "line": "note = \"Test user\"",
+    "context": "    first_name = \"api_first_name\"\n    last_name = \"api_last_name\"\n    note = \"Test user\"\n    address_data = convert_dict_keys_to_camel_case(address.as_data())\n    address_data.pop(\"metadata\")"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:396",
+    "line": "\"note\": note,",
+    "context": "        \"firstName\": first_name,\n        \"lastName\": last_name,\n        \"note\": note,\n        \"shipping\": address_data,\n        \"billing\": address_data,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_create.py:536",
+    "line": "\"note\": \"Test user\",",
+    "context": "        \"firstName\": \"api_first_name\",\n        \"lastName\": \"api_last_name\",\n        \"note\": \"Test user\",\n        \"shipping\": address_data,\n        \"billing\": address_data,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:52",
+    "line": "note",
+    "context": "                languageCode\n                isActive\n                note\n                externalReference\n                metadata {"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:91",
+    "line": "note = \"Test update note\"",
+    "context": "    first_name = \"new_first_name\"\n    last_name = \"new_last_name\"\n    note = \"Test update note\"\n    external_reference = \"test-ext-ref\"\n    address_data = convert_dict_keys_to_camel_case(address.as_data())"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:111",
+    "line": "\"note\": note,",
+    "context": "            \"lastName\": last_name,\n            \"isActive\": False,\n            \"note\": note,\n            \"defaultBillingAddress\": address_data,\n            \"defaultShippingAddress\": address_data,"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/mutations/staff/test_customer_update.py:134",
+    "line": "assert data[\"user\"][\"note\"] == note",
+    "context": "    assert data[\"user\"][\"firstName\"] == first_name\n    assert data[\"user\"][\"lastName\"] == last_name\n    assert data[\"user\"][\"note\"] == note\n    assert data[\"user\"][\"languageCode\"] == \"PL\"\n    assert data[\"user\"][\"externalReference\"] == external_reference"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/queries/test_me.py:82",
+    "line": "note",
+    "context": "            id\n            email\n            note\n        }\n    }"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/queries/test_me.py:86",
+    "line": "# Random person (even staff) can't see own note without permissions",
+    "context": "    }\n    \"\"\"\n    # Random person (even staff) can't see own note without permissions\n    response = staff_api_client.post_graphql(query)\n    assert_no_permission(response)"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/queries/test_me.py:90",
+    "line": "# Add permission and ensure staff can see own note",
+    "context": "    assert_no_permission(response)\n\n    # Add permission and ensure staff can see own note\n    response = staff_api_client.post_graphql(\n        query, permissions=[permission_manage_users]"
+  },
+  {
+    "ref": "saleor/graphql/account/tests/queries/test_me.py:97",
+    "line": "assert data[\"note\"] == staff_api_client.user.note",
+    "context": "    data = content[\"data\"][\"me\"]\n    assert data[\"email\"] == staff_api_client.user.email\n    assert data[\"note\"] == staff_api_client.user.note\n\n"
+  },
+  {
+    "ref": "saleor/graphql/account/types.py:506",
+    "line": "note = PermissionsField(",
+    "context": "        description=\"List of the user gift cards.\",\n    )\n    note = PermissionsField(\n        graphene.String,\n        description=\"A note about the customer.\","
+  },
+  {
+    "ref": "saleor/graphql/account/types.py:508",
+    "line": "description=\"A note about the customer.\",",
+    "context": "    note = PermissionsField(\n        graphene.String,\n        description=\"A note about the customer.\",\n        permissions=[AccountPermissions.MANAGE_USERS, AccountPermissions.MANAGE_STAFF],\n    )"
+  },
+  {
+    "ref": "saleor/graphql/account/types.py:800",
+    "line": "return root.note",
+    "context": "    @staticmethod\n    def resolve_note(root: models.User, _info: ResolveInfo):\n        return root.note\n\n    @staticmethod"
+  },
+  {
+    "ref": "saleor/core/utils/anonymization.py:81",
+    "line": "\"note\": fake.paragraph(),",
+    "context": "        \"default_shipping_address\": address,\n        \"is_active\": True,\n        \"note\": fake.paragraph(),\n        \"date_joined\": fake.date_time(tzinfo=datetime.UTC),\n    }"
+  },
+  {
+    "ref": "saleor/core/utils/anonymization.py:137",
+    "line": "anonymized_checkout.note = fake.paragraph()",
+    "context": "    anonymized_checkout.shipping_address = generate_fake_address()\n    anonymized_checkout.billing_address = generate_fake_address()\n    anonymized_checkout.note = fake.paragraph()\n    anonymized_checkout_metadata = get_or_create_checkout_metadata(anonymized_checkout)\n    anonymized_checkout_metadata.metadata = generate_fake_metadata()"
+  }
+]

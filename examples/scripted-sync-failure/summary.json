@@ -1,0 +1,319 @@
+{
+  "command": "staged",
+  "verdict": "FAIL",
+  "elapsed_s": 24.1,
+  "checks_total": 29,
+  "checks_failed": [
+    "case.old_write_new_read",
+    "case.old_create_new_read",
+    "case.alternating_same_user",
+    "case.clear_from_old",
+    "case.tester.create_old_then_cross_updates",
+    "case.tester.clear_new_then_write_old",
+    "deploy_new.columns_agree",
+    "deploy_new.preservation.customer_note",
+    "stage.contract.preconditions"
+  ],
+  "ok": false,
+  "plan_id": "scripted-v1",
+  "completed_all_stages": false,
+  "halted": "contract stage contract skipped: 8 earlier check failures",
+  "stages": [
+    {
+      "stage": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "failed_checks": 0,
+      "seconds": 0.2
+    },
+    {
+      "stage": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "failed_checks": 0,
+      "seconds": 0.1
+    },
+    {
+      "stage": "deploy_new",
+      "kind": "deploy_new",
+      "phase": null,
+      "failed_checks": 8,
+      "seconds": 17.7
+    },
+    {
+      "stage": "retire_old",
+      "kind": "retire_old",
+      "phase": null,
+      "failed_checks": 0,
+      "seconds": 0.9
+    }
+  ],
+  "failed_checks": [
+    {
+      "name": "case.old_write_new_read",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "old wrote this",
+          "user_pk": 240,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A",
+          "user_pk": 240,
+          "ok": false,
+          "value": "seed#194: wholesale fragile priority allergy reseller allergy gift gift loyal",
+          "error": "read 'seed#194: wholesale fragile priority allergy reseller allergy gift gift loyal', expected 'old wrote this'"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "case.old_create_new_read",
+      "steps": [
+        {
+          "app": "old",
+          "op": "create",
+          "user": "N",
+          "value": 246,
+          "user_pk": 246,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "N",
+          "user_pk": 246,
+          "ok": false,
+          "value": null,
+          "error": "read None, expected 'created by old'"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "case.alternating_same_user",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "A",
+          "value": "alt-1 old",
+          "user_pk": 237,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A",
+          "user_pk": 237,
+          "ok": false,
+          "value": "seed#191: wholesale invoice reseller allergy",
+          "error": "read 'seed#191: wholesale invoice reseller allergy', expected 'alt-1 old'"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "case.clear_from_old",
+      "steps": [
+        {
+          "app": "old",
+          "op": "clear",
+          "user": "A",
+          "user_pk": 236,
+          "ok": true,
+          "value": null,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "A",
+          "user_pk": 236,
+          "ok": false,
+          "value": "seed#190: invoice gift loyal invoice gift monthly",
+          "error": "read 'seed#190: invoice gift loyal invoice gift monthly', expected None"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "case.tester.create_old_then_cross_updates",
+      "steps": [
+        {
+          "app": "old",
+          "op": "create",
+          "user": "C",
+          "value": 248,
+          "user_pk": 248,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "C",
+          "value": "c1 by new",
+          "user_pk": 248,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "C",
+          "user_pk": 248,
+          "ok": true,
+          "value": "c1 by new",
+          "error": null
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "C",
+          "value": "c2 by old",
+          "user_pk": 248,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "C",
+          "user_pk": 248,
+          "ok": false,
+          "value": "c1 by new",
+          "error": "read 'c1 by new', expected 'c2 by old'"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "case.tester.clear_new_then_write_old",
+      "steps": [
+        {
+          "app": "new",
+          "op": "clear",
+          "user": "D",
+          "user_pk": 233,
+          "ok": true,
+          "value": null,
+          "error": null
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "D",
+          "user_pk": 233,
+          "ok": true,
+          "value": null,
+          "error": null
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "D",
+          "value": "d after clear",
+          "user_pk": 233,
+          "ok": true,
+          "error": null
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "D",
+          "user_pk": 233,
+          "ok": false,
+          "value": null,
+          "error": "read None, expected 'd after clear'"
+        }
+      ],
+      "error": null,
+      "examples": null
+    },
+    {
+      "name": "deploy_new.columns_agree",
+      "steps": null,
+      "error": null,
+      "examples": [
+        {
+          "id": 233,
+          "note": "d after clear",
+          "customer_note": null
+        },
+        {
+          "id": 236,
+          "note": null,
+          "customer_note": "seed#190: invoice gift loyal invoice gift monthly"
+        },
+        {
+          "id": 237,
+          "note": "alt-1 old",
+          "customer_note": "seed#191: wholesale invoice reseller allergy"
+        },
+        {
+          "id": 240,
+          "note": "old wrote this",
+          "customer_note": "seed#194: wholesale fragile priority allergy reseller allergy gift gift loyal"
+        },
+        {
+          "id": 241,
+          "note": "smoke old @ deploy_new",
+          "customer_note": "seed#195: gift loyal allergy loyal allergy invoice gift fragile"
+        }
+      ]
+    },
+    {
+      "name": "deploy_new.preservation.customer_note",
+      "steps": null,
+      "error": null,
+      "examples": [
+        {
+          "id": 233,
+          "expected": "d after clear",
+          "actual": null
+        },
+        {
+          "id": 236,
+          "expected": null,
+          "actual": "seed#190: invoice gift loyal invoice gift monthly"
+        },
+        {
+          "id": 237,
+          "expected": "alt-1 old",
+          "actual": "seed#191: wholesale invoice reseller allergy"
+        },
+        {
+          "id": 240,
+          "expected": "old wrote this",
+          "actual": "seed#194: wholesale fragile priority allergy reseller allergy gift gift loyal"
+        },
+        {
+          "id": 241,
+          "expected": "smoke old @ deploy_new",
+          "actual": "seed#195: gift loyal allergy loyal allergy invoice gift fragile"
+        }
+      ]
+    },
+    {
+      "name": "stage.contract.preconditions",
+      "steps": null,
+      "error": null,
+      "examples": null
+    }
+  ],
+  "run_db": "migproto_run_staged_scripted-v1_409bbe69"
+}

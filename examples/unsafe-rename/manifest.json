@@ -1,0 +1,22 @@
+{
+  "fixture": "unsafe-rename",
+  "kind": "unsafe_rename",
+  "contract_version": "migproto.events/v0",
+  "source_run_id": "20261017-123935-unsafe",
+  "verdict": "REPRODUCED",
+  "checks_total": 7,
+  "checks_failed": [],
+  "files": [
+    "summary.json",
+    "events.jsonl",
+    "evidence.json",
+    "reproduce.sh",
+    "sql/unsafe_0107.sql"
+  ],
+  "sanitization": [
+    "absolute repo path -> <repo>, home path -> <home>",
+    "model transcripts reduced to role/latency/usage/error (prompts and responses dropped)",
+    "server, migration and pytest logs not copied"
+  ],
+  "note": "Intentionally introduced scenario. Checks named *_fails PASS when the old app operation fails as expected."
+}

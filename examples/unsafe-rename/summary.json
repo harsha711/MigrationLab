@@ -1,0 +1,30 @@
+{
+  "command": "unsafe",
+  "verdict": "REPRODUCED",
+  "elapsed_s": 22.2,
+  "checks_total": 7,
+  "checks_failed": [],
+  "run_db": "migproto_run_unsafe_b123877a",
+  "user_pk": 46,
+  "migration_sql": "BEGIN;\n--\n-- Rename field note on user to customer_note\n--\nALTER TABLE \"account_user\" RENAME COLUMN \"note\" TO \"customer_note\";\nCOMMIT;",
+  "old_anonymous_shop_query_ok": true,
+  "new_operation": {
+    "write": {
+      "ok": true,
+      "value": "written by NEW app after rename",
+      "error": null
+    },
+    "read": {
+      "ok": true,
+      "value": "written by NEW app after rename",
+      "error": null
+    }
+  },
+  "old_read_error": "ProgrammingError: column account_user.note does not exist\nLINE 1: ...ed\", \"account_user\".\"last_confirm_email_request\", \"account_u...\n                                                             ^",
+  "old_write_error": "ProgrammingError: column account_user.note does not exist\nLINE 1: ...ed\", \"account_user\".\"last_confirm_email_request\", \"account_u...\n                                                             ^",
+  "old_create_error": "ProgrammingError: column account_user.note does not exist\nLINE 1: ...ed\", \"account_user\".\"last_confirm_email_request\", \"account_u...\n                                                             ^",
+  "old_server_errors": [
+    "django.db.utils.ProgrammingError: column account_user.note does not exist",
+    "psycopg.errors.UndefinedColumn: column account_user.note does not exist"
+  ]
+}

@@ -1,0 +1,279 @@
+{
+  "rationale": "The plan relies on two BEFORE triggers to keep `note` and `customer_note` in sync while both app versions run. Edge‑cases such as null → non‑null transitions, rapid alternating writes, concurrent creates, and Unicode payloads can reveal timing gaps where the triggers might not fire (e.g., UPDATE OF note does not fire when only customer_note changes) or where the backfill has not yet caught up. The custom interleaved scenarios below stress those paths and verify that the runner’s read‑after‑write checks still succeed.",
+  "checks": [
+    "old_write_new_read",
+    "new_write_old_read",
+    "old_create_new_read",
+    "new_create_old_read",
+    "alternating_same_user",
+    "clear_from_old",
+    "clear_from_new",
+    "unicode_new_write_old_read"
+  ],
+  "custom_cases": [
+    {
+      "id": "null_to_value_transition",
+      "description": "Old app writes a NULL, then new app writes a non‑NULL value. Checks that the trigger correctly propagates NULL→value and that reads see the latest non‑NULL.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "B",
+          "value": ""
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "B"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "B",
+          "value": "new non‑null"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "B"
+        }
+      ]
+    },
+    {
+      "id": "simultaneous_update_conflict",
+      "description": "Both versions update the same row without waiting for the other, exposing any race where one trigger overwrites the other’s change.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "C",
+          "value": "old first"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "C",
+          "value": "new second"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "C"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "C"
+        }
+      ]
+    },
+    {
+      "id": "create_then_immediate_update",
+      "description": "Create a user with the old app, then immediately update it with the new app before the backfill runs, ensuring the trigger copies the value forward.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "create",
+          "user": "D",
+          "value": "created by old"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "D",
+          "value": "new overwrite"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "D"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "D"
+        }
+      ]
+    },
+    {
+      "id": "clear_then_write",
+      "description": "Old app clears a note (sets NULL), new app writes a value, then old app reads – validates that the trigger does not resurrect the cleared NULL.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "E",
+          "value": "to be cleared"
+        },
+        {
+          "app": "old",
+          "op": "clear",
+          "user": "E"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "E",
+          "value": "new after clear"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "E"
+        }
+      ]
+    },
+    {
+      "id": "unicode_and_sql_injection",
+      "description": "New app writes a string containing quotes, semicolons and Unicode characters; old app reads to ensure the trigger stores it verbatim and does not break SQL parsing.",
+      "steps": [
+        {
+          "app": "new",
+          "op": "write",
+          "user": "F",
+          "value": "Ünïcødé ✓ 配達 \"q\" ;--"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "F"
+        }
+      ]
+    },
+    {
+      "id": "batch_backfill_gap",
+      "description": "During the backfill stage, old app writes a new value that the current batch has not yet processed; after backfill completes, both apps read to confirm the value was not lost.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "G",
+          "value": "pre‑backfill"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "G"
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "G",
+          "value": "mid‑backfill"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "G"
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "G",
+          "value": "post‑backfill"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "G"
+        }
+      ]
+    },
+    {
+      "id": "trigger_on_update_of_other_column",
+      "description": "New app updates only `customer_note`; verify that the trigger on `customer_note` fires and updates `note`, while the trigger on `note` does not fire (since `note` unchanged).",
+      "steps": [
+        {
+          "app": "new",
+          "op": "write",
+          "user": "H",
+          "value": "only new column"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "H"
+        }
+      ]
+    },
+    {
+      "id": "multiple_rapid_writes",
+      "description": "Rapid sequence of writes from both apps on the same user to stress ordering and trigger execution.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "I",
+          "value": "v1"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "I",
+          "value": "v2"
+        },
+        {
+          "app": "old",
+          "op": "write",
+          "user": "I",
+          "value": "v3"
+        },
+        {
+          "app": "new",
+          "op": "write",
+          "user": "I",
+          "value": "v4"
+        },
+        {
+          "app": "old",
+          "op": "read",
+          "user": "I"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "I"
+        }
+      ]
+    },
+    {
+      "id": "delete_and_recreate",
+      "description": "Old app clears (sets NULL) then creates a new row with the same user label; ensures the new row is independent and triggers work on the fresh record.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "clear",
+          "user": "J"
+        },
+        {
+          "app": "old",
+          "op": "create",
+          "user": "J",
+          "value": "recreated by old"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "J"
+        }
+      ]
+    },
+    {
+      "id": "contract_stage_before_retire_simulation",
+      "description": "Simulate a premature contract step (dropping triggers/column) while old app still writes; the runner should detect inconsistency. This case is not part of the normal plan but demonstrates the bug the plan avoids.",
+      "steps": [
+        {
+          "app": "old",
+          "op": "write",
+          "user": "K",
+          "value": "still alive"
+        },
+        {
+          "app": "new",
+          "op": "read",
+          "user": "K"
+        }
+      ]
+    }
+  ]
+}

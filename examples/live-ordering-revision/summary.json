@@ -1,0 +1,49 @@
+{
+  "command": "agent-loop-llm",
+  "verdict": "PASS",
+  "elapsed_s": 88.2,
+  "checks_total": 71,
+  "checks_failed": [
+    "retirement_gate"
+  ],
+  "ok": true,
+  "source": "llm",
+  "provenance": "agent:gpt-oss:120b-cloud",
+  "investigator": {
+    "precision": 1.0,
+    "recall": 0.875,
+    "false_positives": [],
+    "false_negatives": [
+      "saleor/graphql/account/mutations/base.py:182"
+    ],
+    "invalid_refs": []
+  },
+  "attempts": [
+    {
+      "attempt": 1,
+      "plan_id": "a1-rename-note-001",
+      "ok": false,
+      "halted": "contract stage contract-drop-old-column refused: old app still running",
+      "failed_checks": [
+        "retirement_gate"
+      ],
+      "tester_summary": {
+        "summary": "The migration plan a1-rename-note-001 ran three stages—expand, backfill, and deploy_new—successfully, taking a total of ~19 seconds. However, it did not complete all stages and was halted. The halt occurred at the contract stage \"contract-drop-old-column\" because the system detected that the old application was still running, preventing the column drop. No explicit check failures were reported, though the retirement_gate check is listed without details.",
+        "suspected_cause": "Old application still running, causing the contract-drop-old-column stage to refuse the column removal."
+      }
+    },
+    {
+      "attempt": 2,
+      "plan_id": "a2-a2-rename-note-002",
+      "ok": true,
+      "halted": null,
+      "failed_checks": [],
+      "tester_summary": {
+        "summary": "The migration plan a2-a2-rename-note-002 completed successfully. All stages—expand-add-column-and-triggers, backfill-data, deploy_new, retire_old, and contract-drop-old-column—finished without any failed checks. Total runtime was roughly 20.3 seconds (0.1 s, 0.1 s, 19.2 s, 0.8 s, 0.2 s respectively). The run reported ok:true, completed_all_stages:true, and no halt condition. No errors or check failures were recorded.",
+        "suspected_cause": "None (no failure detected)"
+      }
+    }
+  ],
+  "revision_exercised": true,
+  "revision_fixed_failures": true
+}

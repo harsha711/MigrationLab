@@ -1,0 +1,32 @@
+{
+  "fixture": "scripted-sync-failure",
+  "kind": "staged_plan_fail",
+  "contract_version": "migproto.events/v0",
+  "source_run_id": "20261017-123256-staged",
+  "verdict": "FAIL",
+  "checks_total": 29,
+  "checks_failed": [
+    "case.old_write_new_read",
+    "case.old_create_new_read",
+    "case.alternating_same_user",
+    "case.clear_from_old",
+    "case.tester.create_old_then_cross_updates",
+    "case.tester.clear_new_then_write_old",
+    "deploy_new.columns_agree",
+    "deploy_new.preservation.customer_note",
+    "stage.contract.preconditions"
+  ],
+  "files": [
+    "summary.json",
+    "events.jsonl",
+    "plan-scripted-v1.json",
+    "sql/new-staged-0107-sqlmigrate.sql",
+    "sql/plan-scripted-v1.sql"
+  ],
+  "sanitization": [
+    "absolute repo path -> <repo>, home path -> <home>",
+    "model transcripts reduced to role/latency/usage/error (prompts and responses dropped)",
+    "server, migration and pytest logs not copied"
+  ],
+  "note": "Scripted plan v1 (manually authored, deliberately flawed one-way sync)."
+}

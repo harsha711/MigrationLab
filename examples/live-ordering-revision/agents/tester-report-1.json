@@ -1,0 +1,4 @@
+{
+  "summary": "The migration plan a1-rename-note-001 ran three stages—expand, backfill, and deploy_new—successfully, taking a total of ~19 seconds. However, it did not complete all stages and was halted. The halt occurred at the contract stage \"contract-drop-old-column\" because the system detected that the old application was still running, preventing the column drop. No explicit check failures were reported, though the retirement_gate check is listed without details.",
+  "suspected_cause": "Old application still running, causing the contract-drop-old-column stage to refuse the column removal."
+}
