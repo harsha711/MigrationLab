@@ -4,13 +4,41 @@
 
 Turn the existing investigator, planner and tester loop into a budgeted, fully recorded controller that runs on an eligible small model. It must support both one agent and cooperating roles under equivalent conditions, so that a fair comparison becomes possible.
 
-## Current status (at `feasibility-v1`)
+## System role and execution order
+
+Owner 2 supplies the reasoning and orchestration layer, not the execution authority:
+
+```text
+Review request
+    -> controller (`migproto/agents/loop.py`)
+    -> isolated Investigator call
+    -> isolated Planner call
+    -> isolated Tester call
+    -> runner API (owned by Harsha)
+    -> isolated Tester evidence-summary call
+    -> optional isolated Planner revision call
+    -> Tester and runner again
+    -> final runner verdict
+```
+
+The role topology is sequential within one review. Each call depends on a recorded artifact from the preceding step, and agents never communicate through shared chat history. The controller mediates every handoff as JSON. Multiple independent reviews may later be served concurrently, allowing vLLM to batch work, but parallel role execution is not part of the current design.
+
+Technology boundaries:
+
+- **Controller:** sequences roles, enforces the shared budget, records handoffs, and decides whether a revision is available.
+- **Nemotron 3.5 Lightning:** reasons over scoped inputs and proposes findings, plans, tests, summaries, and revisions. It does not execute SQL or decide pass/fail.
+- **vLLM:** hosts the one shared Nemotron checkpoint and provides the OpenAI-compatible API, structured-output support, inference scheduling, and usage metadata. It is not the workflow orchestrator.
+- **Schema validation:** treats every model response as untrusted proposal data and validates it with the existing `plans.py` functions.
+- **Runner:** executes validated proposals, creates observations, enforces mandatory checks, and owns `PASS`/`FAIL`.
+- **RunLog:** records model configuration, calls, artifacts, attempts, observations, and totals for later evidence and UI consumers.
+
+## Current status
 
 - `migproto/agents/loop.py::run(log, source)` runs investigate → plan → propose tests → `staged.run` → report evidence, with at most one revision (`MAX_REVISIONS = 1`).
 - `migproto/agents/roles.py` holds the prompts (`SCENARIO`, `PLAN_CONTRACT`), the deterministic search tool `gather_hits` (35 hits for `note`), and `score_investigator` against `proposals/manual/investigator_ground_truth.json`.
-- `migproto/agents/llm.py` is an OpenAI-compatible client configured by `MIGPROTO_LLM_BASE_URL`, `MIGPROTO_LLM_MODEL` and `MIGPROTO_LLM_API_KEY`. It retries invalid JSON up to 2 times, and each retry is recorded in the transcript.
-- Recorded today: `agent_config` event (model, base URL, max revisions), `agents/<role>.json` proposals, `agents/transcript-<role>.json` (messages, response, seconds, usage). Token usage is not summed or budgeted.
-- Only the roles topology exists. There is no single-agent mode, no review request input, and no `incomplete` outcome.
+- `migproto/agents/llm.py` is a budgeted OpenAI-compatible vLLM client configured by `MIGPROTO_LLM_*`. It requests structured output, validates responses in code, and records every retry.
+- The controller records `agent_config`, proposal and transcript artifacts, per-call usage, claims, attempts and aggregate model totals.
+- Both `roles` and `single` topologies, review-request input, shared budgets, and the `INCOMPLETE` outcome are implemented. Live Nemotron/vLLM validation is still pending.
 - Scripted mode (`--proposals scripted`) reads `proposals/scripted/`. It exercises the plumbing only, and its investigator copies the ground truth.
 - The single live run used `gpt-oss:120b-cloud`. That is a development smoke test, **not** the qualifying small-model run.
 
@@ -36,7 +64,7 @@ Eligibility and requirements are in `docs/bounties.md`. Track requirements are *
 
 Ordered bounty tasks. These replace task 3 above and feed tasks 4-9.
 
-1. **Remove the 120B default.** In `migproto/agents/llm.py`, require `MIGPROTO_LLM_MODEL` to be set explicitly for `--proposals llm`, or default it to the served Lightning name. `gpt-oss:120b-cloud` stays out of the submitted workflow. Its runs are labeled development-only.
+1. **Remove the 120B default (implemented).** `MIGPROTO_LLM_MODEL` is required for `--proposals llm`. `gpt-oss:120b-cloud` stays out of the submitted workflow. Its runs are labeled development-only.
 2. **Confirm compatibility before provisioning.** Lightning NVFP4 needs vLLM ≥ 0.27.1 and Hopper or Blackwell (or Ampere through W4A16). Weights are about 18 GB. Provision an H100-class instance with the **event-provided NVIDIA Brev credits** only, never personal machines, accounts or credits.
 3. **One shared vLLM deployment.** Serve `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` at the pinned revision with the no-speculative-decoding H100 recipe in `docs/bounties.md`, section 5 (no draft model, which keeps the parameter budget clear). All roles and the single-agent mode call this one endpoint.
 4. **Record serving facts.** Write `docs/serving.md` with the exact command, `vllm --version` or image digest, checkpoint and revision, flags, GPU model, driver and CUDA version, Brev instance type, and startup log excerpt. Mirror the key fields into each run's `agent_config` event (`model`, `revision`, `serving_backend`, `serving_version`, `hardware`).
@@ -56,6 +84,20 @@ Bounty acceptance: one Lightning-on-vLLM run of each topology completes through 
 - Inputs: Review request, `runner_api.execute_plan` results (Harsha), memory query API (Owner 3), model endpoint.
 - Outputs: candidate plans and tester proposals (validated by `plans.py`), agent claims, agent events, totals in `summary.json`.
 
+## Integration points
+
+| Boundary | Owner 2 responsibility | External owner or system |
+|---|---|---|
+| Review request -> controller | Parse the request and construct scoped role inputs | Contract coordinated by Harsha |
+| Controller -> model | Isolated prompts, shared total budget, retries and telemetry | Nemotron served by vLLM |
+| Model -> validators | Parse structured JSON and call existing validators; never bypass them | `migproto/plans.py` owned by Harsha |
+| Controller -> runner | Submit validated plan and tester proposals through `runner_api` when available | Runner owned by Harsha |
+| Runner -> revision loop | Preserve scoped observations and failed/refused/error distinctions in feedback | Feedback contract coordinated with Harsha |
+| Memory -> controller | Query only the allowed prior observations through the stable adapter | Query API owned by Owner 3 |
+| Controller -> UI | Expose a stable review entry point and recorded progress/results | UI owned by Owner 3 |
+
+If an integration requires changing another owner's module or `docs/contracts.md`, stop at the boundary and write a handoff proposal containing the field or function, producer, consumer, and a JSON example.
+
 ## Dependencies
 
 - Harsha: `runner_api.execute_plan`, complete feedback fields (G5), held-out scenario flag. Until `runner_api` lands, keep calling `staged.run`.
@@ -70,6 +112,19 @@ Bounty acceptance: one Lightning-on-vLLM run of each topology completes through 
 - `--topology single` and `--topology roles` run against the same request with identical budgets and mandatory checks (assert this in `tests/agents/`).
 - No prompt, tool or file access exposes `proposals/scripted/plan_v2.json`, `proposals/manual/`, `patches/`, `heldout/` or `examples/` outcomes to the evaluated model. Add a test that greps rendered prompts for these paths and for known solution strings such as `migproto_note_sync`.
 
+Expected behavior by outcome:
+
+| Condition | Expected controller result |
+|---|---|
+| Runner executes the plan and every mandatory check passes | `PASS` from runner evidence |
+| Runner executes the plan and checks fail after the allowed revision | `FAIL` from runner evidence |
+| First plan fails, revision passes | Preserve both attempts and report final `PASS` |
+| Shared token, call, wall-time, or revision budget is exhausted before a verdict | `INCOMPLETE` with a recorded reason |
+| vLLM endpoint fails or no usable response can be obtained | `ERROR` with recorded call failures |
+| Model output violates the schema | Retry within budget; never execute it and never treat it as a pass |
+
+For the current rename scenario, the intended successful behavior is a plan that supports both app versions during coexistence, preserves existing values, keeps both columns consistent under the tested sequential interleavings, retires the old application before contract, and removes the old column only after the retirement gate. This is an expected behavior to test, not a claim of zero downtime or concurrency safety.
+
 Verification commands:
 
 ```bash
@@ -80,7 +135,7 @@ MIGPROTO_LLM_BASE_URL=... MIGPROTO_LLM_MODEL=... uv run migproto agent-loop --pr
 
 ## Out of scope
 
-Rewriting `staged.py`, `checks.py` or `db.py`. Weakening, skipping or reordering mandatory checks. Deciding pass/fail in agent code. UI and SQLite storage. Claiming multi-agent superiority from a single run or from the 120B smoke test.
+Rewriting `staged.py`, `checks.py`, `db.py` or `plans.py`. Weakening, skipping or reordering mandatory checks. Deciding pass/fail in agent code. UI and SQLite storage. NeMo Gym. Saleor worktrees and patches. Direct edits to shared contracts without Harsha's coordination. Claiming multi-agent superiority from a single run or from the 120B smoke test.
 
 ## Suggested branch
 
