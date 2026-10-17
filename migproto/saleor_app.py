@@ -164,7 +164,16 @@ class AppServer:
         token, err = self.token()
         if err:
             return {"errors": [{"message": f"tokenCreate failed: {err}"}]}
-        return self._post(query, variables, token)
+        body = self._post(query, variables, token)
+        if token_expired(body):
+            # Saleor checks JWT expiry against the wall clock; a clock jump (e.g. WSL2 resyncing
+            # after sleep) can expire a token we just fetched. Log in again once and retry.
+            self._token = None
+            token, err = self.token()
+            if err:
+                return {"errors": [{"message": f"tokenCreate failed: {err}"}]}
+            body = self._post(query, variables, token)
+        return body
 
     def read_note(self, pk: int) -> OpResult:
         body = self.gql("query($id:ID!){user(id:$id){id email note}}", {"id": gid(pk)})
@@ -192,6 +201,11 @@ class AppServer:
             return OpResult(False, error=err, raw=body)
         return OpResult(True, value=pk_from_gid(body["data"]["customerCreate"]["user"]["id"]),
                         raw=body)
+
+
+def token_expired(body: dict) -> bool:
+    return any("Signature has expired" in str(e.get("message", ""))
+               for e in (body.get("errors") or []) if isinstance(e, dict))
 
 
 def create_customer_request(email: str, note: str | None, include_note: bool = True):

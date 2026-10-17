@@ -4,7 +4,7 @@ import pytest
 
 from migproto import checks, plans, scenarios, staged  # noqa: F401  (staged.recommendation)
 from migproto.config import WORKTREES
-from migproto.saleor_app import create_customer_request
+from migproto.saleor_app import AppServer, create_customer_request, token_expired
 
 
 def plan(*stages):
@@ -108,6 +108,27 @@ def test_create_customer_without_note_field():
     assert "note:$note" in q and v == {"email": "a@b.test", "note": "hi"}
     q, v = create_customer_request("a@b.test", None, include_note=False)
     assert "note" not in q and v == {"email": "a@b.test"}
+
+
+def test_expired_token_is_refreshed_once(monkeypatch):
+    assert token_expired({"errors": [{"message": "ExpiredSignatureError: Signature has expired"}]})
+    assert not token_expired({"errors": [{"message": "column note does not exist"}]})
+    assert not token_expired({"data": {}})
+    server = AppServer.__new__(AppServer)
+    server._token, server._token_at = "stale", 0.0
+    tokens = iter(["fresh-1", "fresh-2"])
+    monkeypatch.setattr(AppServer, "token", lambda self: (self._token or next(tokens), None))
+    calls = []
+
+    def post(self, query, variables, token):
+        calls.append(token)
+        if token == "stale":
+            return {"errors": [{"message": "ExpiredSignatureError: Signature has expired"}]}
+        return {"data": {"ok": True}}
+
+    monkeypatch.setattr(AppServer, "_post", post)
+    assert server.gql("query{x}") == {"data": {"ok": True}}
+    assert calls == ["stale", "fresh-1"]
 
 
 def test_note_free_new_app_skips_note_cases():
