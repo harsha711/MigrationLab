@@ -78,6 +78,9 @@ TESTER_SYSTEM = """You are the Tester in a database-migration review. You propos
 compatibility checks for a deterministic runner and later summarize execution evidence.
 You do not decide pass/fail; the runner does. Reply with one JSON object only."""
 
+# Safety cap on runner evidence in prompts; compact evidence normally fits well under it.
+EVIDENCE_CHARS = 24000
+
 PLAN_SCHEMA = {
     "name": "migration_plan",
     "strict": True,
@@ -250,7 +253,7 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
             "Your previous plan was EXECUTED and FAILED these deterministic checks. Revise the "
             "plan. Explain the root cause in revision_notes.\n"
             f"Previous plan:\n{json.dumps(previous, indent=1)}\n\n"
-            f"Execution feedback:\n{json.dumps(feedback, indent=1, ensure_ascii=False)[:8000]}\n"
+            f"Execution feedback:\n{json.dumps(feedback, indent=1, ensure_ascii=False)[:EVIDENCE_CHARS]}\n"
         )
     else:
         user += "Propose the plan."
@@ -293,7 +296,7 @@ def report_evidence(source: str, llm: LLM | None, result: dict, transcript: list
     user = (
         "Summarize this execution evidence for the planner in <=120 words and name the most "
         "likely root cause of any failure. You do not decide pass/fail.\n"
-        f"{json.dumps(result, indent=1, ensure_ascii=False)[:8000]}\n"
+        f"{json.dumps(result, indent=1, ensure_ascii=False)[:EVIDENCE_CHARS]}\n"
         'Reply as {"summary": "...", "suspected_cause": "..."}'
     )
     return _llm_call(llm, system, user, transcript, history=history)

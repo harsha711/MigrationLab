@@ -23,14 +23,37 @@ def _tag(obj: dict, attempt: int) -> dict:
     return obj
 
 
-def _feedback(result: dict, tester_report: dict, failed_checks: list[dict]) -> dict:
+# Fields of a runner check record that a model needs to diagnose it. Full records (schema
+# hashes, snapshot ids, provenance, timestamps) are ~1.2k chars each; a 13-failure attempt
+# used to be cut to 4 visible failures, and the tester summary was cut off entirely.
+_CHECK_FIELDS = ("name", "observation_id", "outcome", "app_version", "step_id", "error",
+                 "expected", "observed")
+
+
+def _compact_check(check: dict) -> dict:
+    out = {k: check[k] for k in _CHECK_FIELDS if check.get(k) not in (None, "", [], {})}
+    schema = check.get("schema_state") or {}
+    if "note_columns" in schema or "triggers" in schema:
+        out["schema"] = {k: schema.get(k) for k in ("note_columns", "triggers")}
+    return out
+
+
+def _evidence(result: dict, failed_checks: list[dict]) -> dict:
+    """Runner evidence for model prompts: every failed check, compacted."""
     return {
+        "ok": result.get("ok"),
+        "plan_id": result.get("plan_id"),
         "halted": result.get("halted"),
         "error": result.get("error"),
+        "outcome_counts": result.get("outcome_counts"),
         "stages": result.get("stages"),
-        "failed_checks": failed_checks[:10],
-        "tester_summary": tester_report,
+        "failed_checks": [_compact_check(c) for c in failed_checks],
     }
+
+
+def _feedback(result: dict, tester_report: dict, failed_checks: list[dict]) -> dict:
+    # Tester summary first, so a prompt-length cap can never drop it.
+    return {"tester_summary": tester_report, **_evidence(result, failed_checks)}
 
 
 def _failure_records(log: RunLog, start: int) -> list[dict]:
@@ -157,7 +180,7 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
             last_result = result
             complete_failures = _failure_records(log, check_start)
             report = call(f"tester-report-{attempt}", roles.report_evidence,
-                          {**result, "failed_checks": complete_failures})
+                          _evidence(result, complete_failures))
             transcript_role = "single" if shared_history is not None else f"tester-report-{attempt}"
             last_call = transcripts.get(transcript_role, [])[-1:] or [None]
             _emit_claim(log, prov, attempt, report, complete_failures, last_call[0])
