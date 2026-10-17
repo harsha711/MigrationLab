@@ -16,14 +16,14 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Scripted one-way sync (plan v1, manually authored and deliberately flawed):** 9 of 29 checks failed (old writes never reached `customer_note`, 7 rows disagreed), and the runner refused the contract stage (`examples/scripted-sync-failure`).
 - **Scripted staged alternative (plan v2, manually authored):** 33 of 33 documented checks passed (`examples/scripted-staged-success`). The pass covers only those checks: sequential interleaving, 245 rows, one machine.
 - **Live run:** one `gpt-oss:120b-cloud` run (via Ollama, cloud-backed) generated its own SQL. Attempt 1 had 30 checks, of which 1 failed: `retirement_gate`, because the contract stage was placed before `retire_old`. After that feedback, attempt 2 reordered the stages and passed 41 of 41. The run made 8 model calls, used 30,036 total tokens, and took 88.2 s (`examples/live-ordering-revision`).
-- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. The Nemotron/vLLM agent client and controller are implemented but have not been deployed or run; no NeMo Gym integration exists yet.
-- **Multi-agent claim:** no superiority over a single agent has been established. No single-agent baseline exists yet.
-- **Runner tests:** `uv run pytest` runs 34 runner tests covering the SQL guard, plan schema, and trigger semantics on a scratch table. On the memory-ui branch it also collects the 48 tests in `tests/memory`.
-- **Evidence store and review UI (Owner 3, branch `memory-ui/scoped-review`, not merged):** `tests/memory` has 48 tests, run on Windows with Python 3.14 (not yet under `uv` / 3.12).
+- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. The Nemotron/vLLM agent client and controller are implemented but have not been deployed on vLLM or run with Nemotron; no NeMo Gym integration exists yet.
+- **Multi-agent claim:** no superiority over a single agent has been established. A `single` topology exists, but it has only been run with a local 4B stand-in model; none of those runs passed and they measure nothing about Lightning (`docs/local-standin-runs.md`).
+- **Tests:** `uv run pytest` runs 135 tests on Linux with `uv` / Python 3.12: 68 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 17 in `tests/agents`, and 50 in `tests/memory`.
+- **Evidence store and review UI (Owner 3, merged through `integrate/memory-ui`):**
   - **Fixtures:** ingesting the four `examples/` fixtures reproduces their `summary.json` facts. For `scripted-sync-failure` at `deploy_new`, every old-writer/new-reader case fails and every new-writer/old-reader case passes.
-  - **v1 records and Owner 2's controller output** (structured claims, plan lineage, review request, budgets) are tested **only against synthetic fixtures** in `tests/memory/fixtures/`, not against real runs.
-  - **Run Review** has been exercised **only with a fake controller and a fake lock**, and no real review has been started from the UI.
-  - **`memory.retrieval.prior_evidence`** exists, but the controller does not call it yet.
+  - **v1 records and Owner 2's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
+  - **Run Review** reports itself available now that the controller and lock exist, but it has been exercised **only with a fake controller and a fake lock**. No real review has been started from the UI.
+  - **`memory.retrieval.prior_evidence`** exists, but the controller does not call it yet. It does not filter by model, so local stand-in runs would be selected for Nemotron runs; add a same-model filter before wiring it.
 
 ## Architecture
 
@@ -93,8 +93,8 @@ uv run migproto staged --plan proposals/scripted/plan_v2.json   # about 31 s, an
 uv run migproto agent-loop --proposals scripted # no model needed, about 55 s
 uv run migproto agent-loop --proposals llm      # live model, see configuration
 uv run migproto all [--skip-pytest]             # setup + baseline + unsafe + scripted loop
-uv run pytest                                   # 34 runner tests (+48 memory/UI), under 5 s, needs local Postgres for trigger tests
-uv run pytest -q tests/memory                   # 48 memory/UI tests, no Docker or Postgres needed
+uv run pytest                                   # 135 tests (68 runner, 17 agents, 50 memory/UI), under 5 s, needs local Postgres for trigger tests
+uv run pytest -q tests/memory                   # 50 memory/UI tests, no Docker or Postgres needed
 uv run migproto ui [--port 8765] [--db PATH]    # Replay UI at http://127.0.0.1:8765/ (reads examples/ and runs/)
 ```
 

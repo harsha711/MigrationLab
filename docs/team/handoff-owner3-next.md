@@ -82,6 +82,7 @@ uv run migproto ui                   # http://127.0.0.1:8765/  (--port, --db)
 4. **Retrieval: Owner 2 wires the call.** `memory.retrieval.prior_evidence` is ready, and the suggested hook for `run_review` is in `handoff-owner3.md`.
    - Once it's wired, the Agents page shows "Prior evidence given to the planner" from `retrieval` events.
    - Whether retrieval helps planning is unmeasured. That belongs in Owner 2's single vs multi-agent evaluation.
+   - It does not filter by model yet. On the local runs it selected only qwen3:4b stand-in runs, which would then reach Nemotron prompts. Add a same-model filter (from the run's `agent:<model>` provenance) before wiring the call.
 5. **Run Review: test it for real.** It is implemented, but only tested with fakes. After both branches merge, on Linux with Docker (pair with Harsha):
    - Start a scripted review from `#/review`.
    - Confirm the live events, the lock refusal while a CLI run is active, and ingestion when the review finishes.
