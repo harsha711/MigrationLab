@@ -154,21 +154,22 @@ Prior art: upstream already runs `.github/workflows/test-migrations-compatibilit
 
 ## 10. Scenario catalogue (branch `scenarios/catalogue`, not merged)
 
-The runner now reviews more than the rename. A scenario registry (`migproto/scenarios.py`) plus Saleor patch series for five more changes:
-- D1: add an optional column
-- D3: rename in code only with `db_column`
-- A4: add a required column
-- A3: drop a column
-- B1: shorten `note` to `varchar(255)`
+The runner now reviews 14 schema changes, not just the rename. Each scenario has its own Saleor patch series, scripted plans, and expected verdicts written before the runs:
+- **Safe controls:** add a column (D1), add a table (D2), rename with `db_column` (D3), add an index concurrently (D4), lengthen a varchar (D5)
+- **Unsafe changes:** required column (A4), backfill then require (A5), drop a column (A3), raw-SQL rename (A8), shorten a column (B1), unique on duplicates (B2), foreign key over orphans (B3), irreversible data migration (B4)
 
-Plans can now apply the new version's own migration, so the tool can recommend **accept as-is**.
+Plans can apply the new version's own migration (so the tool can recommend **accept as-is**) and include a rollback check.
 
-**Results:** on the Olist 10k seed (real public review text, not production data), 9 of 9 scripted plans matched their expected verdicts, and the rename results were unchanged. The full table is in [`docs/results-scenarios.md`](docs/results-scenarios.md).
+**Results:** on the Olist 10k seed (real public review text, not production data), **22 of 22** scripted plans matched their expected verdicts, and the rename results were unchanged. Two incidents occurred and were fixed: a WSL2 clock jump that expired a login token, and a bug in my refactor. Both are described in [`docs/results-scenarios.md`](docs/results-scenarios.md).
 
-**The key finding is B1.** Django's naive `AlterField` exits successfully but silently truncates the 6 Olist reviews longer than 255 characters. Only the runner's preservation check catches it.
+**Key findings:** in three scenarios the migration ran without error but customer data was damaged, and only the runner's data checks caught it:
+- **B1:** Django's `AlterField` silently truncates 6 real reviews.
+- **B4:** an irreversible data migration empties 4,364 notes under the old app.
+- **B2:** a dedupe plan rewrites customers' last names.
 
 **Limits:**
 - Agents have not been run on the new scenarios.
 - Interleaving is sequential.
 - No timing, lock or concurrency claims.
-- The other catalogue rows (A2, A5 to A8, B2 to B4, C, D2/D4/D5) were not attempted.
+- Not attempted: A2, A6, A7, and group C.
+- A8 is rejected through the ORM, so the runner cannot isolate the raw-SQL path.
