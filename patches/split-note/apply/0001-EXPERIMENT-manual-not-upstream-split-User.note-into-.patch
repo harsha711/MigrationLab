@@ -1,0 +1,200 @@
+From 7ba39933239642e135d6092e00f0378a3c84a348 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 19:33:35 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): split User.note into
+ note_title + note_body (data migration, new app only)
+
+---
+ .../migrations/0107_split_user_note.py        | 44 +++++++++++++++++++
+ saleor/account/models.py                      | 19 +++++++-
+ saleor/core/utils/anonymization.py            |  2 +-
+ .../bulk_mutations/customer_bulk_update.py    | 12 ++++-
+ saleor/graphql/account/mutations/base.py      |  6 +++
+ .../graphql/account/mutations/staff/utils.py  |  3 +-
+ saleor/graphql/account/types.py               |  4 +-
+ 7 files changed, 84 insertions(+), 6 deletions(-)
+ create mode 100644 saleor/account/migrations/0107_split_user_note.py
+
+diff --git a/saleor/account/migrations/0107_split_user_note.py b/saleor/account/migrations/0107_split_user_note.py
+new file mode 100644
+index 0000000..ee07005
+--- /dev/null
++++ b/saleor/account/migrations/0107_split_user_note.py
+@@ -0,0 +1,44 @@
++# EXPERIMENT (manual, not upstream): split User.note into note_title + note_body (data migration, new app only)
++
++from django.db import migrations, models
++
++
++def split_existing(apps, schema_editor):
++    User = apps.get_model("account", "User")
++    batch = []
++    for user in User.objects.exclude(note=None).only("id", "note").iterator(chunk_size=2000):
++        i = user.note.find(": ")
++        if i < 0:
++            user.note_title, user.note_body = None, user.note
++        else:
++            user.note_title, user.note_body = user.note[:i], user.note[i + 2 :]
++        batch.append(user)
++        if len(batch) >= 2000:
++            User.objects.bulk_update(batch, ["note_title", "note_body"])
++            batch = []
++    if batch:
++        User.objects.bulk_update(batch, ["note_title", "note_body"])
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.AddField(
++            model_name="user", name="note_title",
++            field=models.TextField(blank=True, null=True),
++        ),
++        migrations.AddField(
++            model_name="user", name="note_body",
++            field=models.TextField(blank=True, null=True),
++        ),
++        migrations.RunPython(split_existing),
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.RemoveField(model_name="user", name="note"),
++            ],
++            database_operations=[],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..806568c 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -179,7 +179,8 @@ class User(
+     is_active = models.BooleanField(default=True)
+     is_confirmed = models.BooleanField(default=True)
+     last_confirm_email_request = models.DateTimeField(null=True, blank=True)
+-    note = models.TextField(null=True, blank=True)
++    note_title = models.TextField(null=True, blank=True)
++    note_body = models.TextField(null=True, blank=True)
+     date_joined = models.DateTimeField(default=timezone.now, editable=False)
+     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+     last_password_reset_request = models.DateTimeField(null=True, blank=True)
+@@ -479,3 +480,19 @@ class Group(models.Model):
+ 
+     def natural_key(self):
+         return (self.name,)
++
++
++def split_note(note):
++    """EXPERIMENT (manual): 'title: body' -> (title, body); no ': ' -> (None, note)."""
++    if note is None:
++        return None, None
++    i = note.find(": ")
++    if i < 0:
++        return None, note
++    return note[:i], note[i + 2 :]
++
++
++def compose_note(title, body):
++    if title is None:
++        return body
++    return f"{title}: {body or ''}"
+diff --git a/saleor/core/utils/anonymization.py b/saleor/core/utils/anonymization.py
+index 5be3fc9..6d418d5 100644
+--- a/saleor/core/utils/anonymization.py
++++ b/saleor/core/utils/anonymization.py
+@@ -78,7 +78,7 @@ def generate_fake_user(
+         "default_billing_address": address,
+         "default_shipping_address": address,
+         "is_active": True,
+-        "note": fake.paragraph(),
++        "note_body": fake.paragraph(),
+         "date_joined": fake.date_time(tzinfo=datetime.UTC),
+     }
+ 
+diff --git a/saleor/graphql/account/bulk_mutations/customer_bulk_update.py b/saleor/graphql/account/bulk_mutations/customer_bulk_update.py
+index 1f5f47b..4999b6b 100644
+--- a/saleor/graphql/account/bulk_mutations/customer_bulk_update.py
++++ b/saleor/graphql/account/bulk_mutations/customer_bulk_update.py
+@@ -434,6 +434,10 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
+                     billing_address = None
+ 
+                     old_instance = filtered_customers[0]
++                    if "note" in data:
++                        from ....account.models import split_note
++
++                        data["note_title"], data["note_body"] = split_note(data.pop("note"))
+                     new_instance = cls.construct_instance(deepcopy(old_instance), data)
+                     new_instance.full_clean(exclude=["password"])
+ 
+@@ -589,7 +593,8 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
+                 "email",
+                 "is_active",
+                 "is_confirmed",
+-                "note",
++                "note_title",
++                "note_body",
+                 "language_code",
+                 "external_reference",
+                 "customer_type",
+@@ -711,7 +716,10 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
+                     )
+                 )
+ 
+-            note_changed = old_instance.note != updated_instance.note
++            note_changed = (old_instance.note_title, old_instance.note_body) != (
++                updated_instance.note_title,
++                updated_instance.note_body,
++            )
+             language_code_changed = (
+                 old_instance.language_code != updated_instance.language_code
+             )
+diff --git a/saleor/graphql/account/mutations/base.py b/saleor/graphql/account/mutations/base.py
+index a3ddc3c..40bac3c 100644
+--- a/saleor/graphql/account/mutations/base.py
++++ b/saleor/graphql/account/mutations/base.py
+@@ -303,6 +303,12 @@ class BaseCustomerCreate(DeprecatedModelMutation, I18nMixin):
+         billing_address_data = data.pop(BILLING_ADDRESS_FIELD, None)
+         customer_type_id = data.pop("customer_type", None)
+         cleaned_input = super().clean_input(info, instance, data, **kwargs)
++        if "note" in cleaned_input:
++            from ....account.models import split_note
++
++            cleaned_input["note_title"], cleaned_input["note_body"] = split_note(
++                cleaned_input.pop("note")
++            )
+ 
+         if customer_type_id:
+             cleaned_input["customer_type"] = cls.get_node_or_error(
+diff --git a/saleor/graphql/account/mutations/staff/utils.py b/saleor/graphql/account/mutations/staff/utils.py
+index 581aadb..ed7932d 100644
+--- a/saleor/graphql/account/mutations/staff/utils.py
++++ b/saleor/graphql/account/mutations/staff/utils.py
+@@ -3,7 +3,8 @@ CUSTOMER_UPDATE_FIELDS = {
+     "last_name",
+     "email",
+     "is_active",
+-    "note",
++    "note_title",
++    "note_body",
+     "external_reference",
+     "is_confirmed",
+     "language_code",
+diff --git a/saleor/graphql/account/types.py b/saleor/graphql/account/types.py
+index 2168633..513eb19 100644
+--- a/saleor/graphql/account/types.py
++++ b/saleor/graphql/account/types.py
+@@ -797,7 +797,9 @@ class User(ModelObjectType[models.User]):
+ 
+     @staticmethod
+     def resolve_note(root: models.User, _info: ResolveInfo):
+-        return root.note
++        from ...account.models import compose_note
++
++        return compose_note(root.note_title, root.note_body)
+ 
+     @staticmethod
+     def resolve_events(root: models.User, info: ResolveInfo):
+-- 
+2.43.0
+

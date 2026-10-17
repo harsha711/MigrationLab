@@ -204,14 +204,18 @@ class AppServer:
             return OpResult(False, error=err, raw=body)
         return OpResult(True, value=body["data"]["customerUpdate"]["user"]["lastName"], raw=body)
 
-    def read_events(self, pk: int) -> OpResult:
-        """Number of CustomerEvent rows visible for the user (reads the events table)."""
-        body = self.gql("query($id:ID!){user(id:$id){id events{id type}}}", {"id": gid(pk)})
+    def read_staff_events(self) -> OpResult:
+        """Number of CustomerEvent rows of the acting staff user (reads the events table).
+
+        Saleor records NAME_ASSIGNED events against the staff member who made the change, not
+        against the renamed customer, so name changes are visible on `me { events }`.
+        """
+        body = self.gql("query{me{id events{id type}}}")
         err = _first_error(body)
-        user = (body.get("data") or {}).get("user")
-        if err or user is None:
-            return OpResult(False, error=err or "user not found", raw=body)
-        return OpResult(True, value=len(user["events"] or []), raw=body)
+        me = (body.get("data") or {}).get("me")
+        if err or me is None:
+            return OpResult(False, error=err or "no current user", raw=body)
+        return OpResult(True, value=len(me["events"] or []), raw=body)
 
     def write_language(self, pk: int, code: str) -> OpResult:
         body = self.gql(

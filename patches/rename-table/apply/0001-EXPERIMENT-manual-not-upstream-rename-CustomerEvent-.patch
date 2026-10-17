@@ -1,0 +1,46 @@
+From 278cfdfabdd1789dd7fe779ceba8b7c78bda1b7c Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 19:33:32 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): rename CustomerEvent table
+ to account_customer_event (apply)
+
+---
+ .../account/migrations/0107_customerevent_table.py  | 13 +++++++++++++
+ saleor/account/models.py                            |  1 +
+ 2 files changed, 14 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_customerevent_table.py
+
+diff --git a/saleor/account/migrations/0107_customerevent_table.py b/saleor/account/migrations/0107_customerevent_table.py
+new file mode 100644
+index 0000000..13a8f12
+--- /dev/null
++++ b/saleor/account/migrations/0107_customerevent_table.py
+@@ -0,0 +1,13 @@
++# EXPERIMENT (manual, not upstream): rename CustomerEvent table to account_customer_event (apply)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.AlterModelTable(name="customerevent", table="account_customer_event"),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..a226817 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -408,6 +408,7 @@ class CustomerEvent(models.Model):
+ 
+     class Meta:
+         ordering = ("date",)
++        db_table = "account_customer_event"
+ 
+     def __repr__(self):
+         return f"{self.__class__.__name__}(type={self.type!r}, user={self.user!r})"
+-- 
+2.43.0
+

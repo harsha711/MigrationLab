@@ -71,8 +71,8 @@ CATALOGUE.update({
         {"app": "old", "op": "write", "user": "A", "value": "long note " + "x" * 290},
         {"app": "old", "op": "read", "user": "A"},
     ],
-    # A2 (table rename): a last-name change writes a CustomerEvent row; the other version reads
-    # the user's events back from the (renamed) events table.
+    # A2 (table rename): a last-name change writes a CustomerEvent row (attached by Saleor to the
+    # acting staff user); the other version reads the staff user's events from the events table.
     "old_name_write_new_events": [
         {"app": "old", "op": "write_name", "user": "E", "value": "Renamed-By-Old"},
         {"app": "new", "op": "read_events", "user": "E"},
@@ -100,7 +100,7 @@ class Context:
     _free_seed: list[int] = field(default_factory=list)
     new_app_note_ops: bool = True   # False when the new app has no `note` field (scenario A3)
     baseline: dict = field(default_factory=dict)  # column -> {id: value} at S0 (`unchanged`)
-    events_min: dict = field(default_factory=dict)  # pk -> CustomerEvents this run has caused
+    events_min: dict = field(default_factory=dict)  # "staff" -> CustomerEvents this run caused
 
     @classmethod
     def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer],
@@ -200,15 +200,16 @@ def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MA
 def _other_op(ctx: Context, server, op: str, pk: int, step: dict):
     """Non-note operations used by the A2 / A7 cases."""
     if op == "write_name":
+        # Saleor attaches NAME_ASSIGNED events to the acting staff user (shared by both apps).
         res = server.write_last_name(pk, step.get("value"))
         if res.ok:
-            ctx.events_min[pk] = ctx.events_min.get(pk, 0) + 1
+            ctx.events_min["staff"] = ctx.events_min.get("staff", 0) + 1
         return res
     if op == "read_events":
-        res = server.read_events(pk)
-        want = ctx.events_min.get(pk, 0)
+        res = server.read_staff_events()
+        want = ctx.events_min.get("staff", 0)
         if res.ok and res.value < want:
-            res.ok, res.error = False, f"saw {res.value} events, expected at least {want}"
+            res.ok, res.error = False, f"saw {res.value} staff events, expected at least {want}"
         return res
     if op in ("write_lang", "try_write_lang"):
         return server.write_language(pk, step.get("value"))
