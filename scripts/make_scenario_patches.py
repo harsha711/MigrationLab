@@ -133,6 +133,96 @@ def raw_resolver(column: str) -> str:
             "        return row[0] if row else None\n")
 
 
+# --- Tier 3 building blocks ---
+EVENT_META = ("        ordering = (\"date\",)\n\n    def __repr__(self):\n"
+              "        return f\"{self.__class__.__name__}(type={self.type!r}, user={self.user!r})\"\n")
+RENAME_EVENT_TABLE = ("        migrations.AlterModelTable(name=\"customerevent\", "
+                      "table=\"account_customer_event\"),\n")
+SPLIT_HELPERS = (
+    "\n\ndef split_note(note):\n"
+    "    \"\"\"EXPERIMENT (manual): 'title: body' -> (title, body); no ': ' -> (None, note).\"\"\"\n"
+    "    if note is None:\n        return None, None\n"
+    "    i = note.find(\": \")\n"
+    "    if i < 0:\n        return None, note\n"
+    "    return note[:i], note[i + 2 :]\n\n\n"
+    "def compose_note(title, body):\n"
+    "    if title is None:\n        return body\n"
+    "    return f\"{title}: {body or ''}\"\n")
+ADD_TITLE_BODY = (
+    "        migrations.AddField(\n            model_name=\"user\", name=\"note_title\",\n"
+    "            field=models.TextField(blank=True, null=True),\n        ),\n"
+    "        migrations.AddField(\n            model_name=\"user\", name=\"note_body\",\n"
+    "            field=models.TextField(blank=True, null=True),\n        ),\n")
+SPLIT_RUNPYTHON_HEADER = (
+    "\n\ndef split_existing(apps, schema_editor):\n"
+    "    User = apps.get_model(\"account\", \"User\")\n"
+    "    batch = []\n"
+    "    for user in User.objects.exclude(note=None).only(\"id\", \"note\").iterator(chunk_size=2000):\n"
+    "        i = user.note.find(\": \")\n"
+    "        if i < 0:\n            user.note_title, user.note_body = None, user.note\n"
+    "        else:\n            user.note_title, user.note_body = user.note[:i], user.note[i + 2 :]\n"
+    "        batch.append(user)\n"
+    "        if len(batch) >= 2000:\n"
+    "            User.objects.bulk_update(batch, [\"note_title\", \"note_body\"])\n"
+    "            batch = []\n"
+    "    if batch:\n        User.objects.bulk_update(batch, [\"note_title\", \"note_body\"])\n")
+SPLIT_NOTE_EDITS = [
+    (MODELS, NOTE_LINE, "    note_title = models.TextField(null=True, blank=True)\n"
+                        "    note_body = models.TextField(null=True, blank=True)\n"),
+    (MODELS, None, SPLIT_HELPERS),
+    ("saleor/core/utils/anonymization.py", '        "note": fake.paragraph(),\n',
+     '        "note_body": fake.paragraph(),\n'),
+    ("saleor/graphql/account/bulk_mutations/customer_bulk_update.py", '                "note",\n',
+     '                "note_title",\n                "note_body",\n'),
+    ("saleor/graphql/account/bulk_mutations/customer_bulk_update.py",
+     "note_changed = old_instance.note != updated_instance.note",
+     "note_changed = (old_instance.note_title, old_instance.note_body) != (\n"
+     "                updated_instance.note_title,\n                updated_instance.note_body,\n"
+     "            )"),
+    ("saleor/graphql/account/bulk_mutations/customer_bulk_update.py",
+     "                    old_instance = filtered_customers[0]\n"
+     "                    new_instance = cls.construct_instance(deepcopy(old_instance), data)\n",
+     "                    old_instance = filtered_customers[0]\n"
+     "                    if \"note\" in data:\n"
+     "                        from ....account.models import split_note\n\n"
+     "                        data[\"note_title\"], data[\"note_body\"] = split_note(data.pop(\"note\"))\n"
+     "                    new_instance = cls.construct_instance(deepcopy(old_instance), data)\n"),
+    ("saleor/graphql/account/mutations/base.py",
+     "        customer_type_id = data.pop(\"customer_type\", None)\n"
+     "        cleaned_input = super().clean_input(info, instance, data, **kwargs)\n",
+     "        customer_type_id = data.pop(\"customer_type\", None)\n"
+     "        cleaned_input = super().clean_input(info, instance, data, **kwargs)\n"
+     "        if \"note\" in cleaned_input:\n"
+     "            from ....account.models import split_note\n\n"
+     "            cleaned_input[\"note_title\"], cleaned_input[\"note_body\"] = split_note(\n"
+     "                cleaned_input.pop(\"note\")\n            )\n"),
+    ("saleor/graphql/account/mutations/staff/utils.py", '    "note",\n',
+     '    "note_title",\n    "note_body",\n'),
+    ("saleor/graphql/account/types.py",
+     "    @staticmethod\n    def resolve_note(root: models.User, _info: ResolveInfo):\n"
+     "        return root.note\n",
+     "    @staticmethod\n    def resolve_note(root: models.User, _info: ResolveInfo):\n"
+     "        from ...account.models import compose_note\n\n"
+     "        return compose_note(root.note_title, root.note_body)\n"),
+]
+SETTINGS_LANG = "LANGUAGES: list[tuple[str, str]] = CORE_LANGUAGES\n"
+LANG_FIELD_OP = ("        migrations.AlterField(\n            model_name=\"user\", name=\"language_code\",\n"
+                 "            field=models.CharField(choices=settings.LANGUAGES, "
+                 "default=settings.LANGUAGE_CODE, max_length=35),\n        ),\n")
+READERS_FIRST_GUARD = (
+    "        customer_type_id = data.pop(\"customer_type\", None)\n"
+    "        cleaned_input = super().clean_input(info, instance, data, **kwargs)\n",
+    "        customer_type_id = data.pop(\"customer_type\", None)\n"
+    "        cleaned_input = super().clean_input(info, instance, data, **kwargs)\n"
+    "        if cleaned_input.get(\"language_code\") == \"tlh\":\n"
+    "            # EXPERIMENT (manual): readers first; tlh is readable but not writable yet.\n"
+    "            raise ValidationError(\n                {\n"
+    "                    \"language_code\": ValidationError(\n"
+    "                        \"Language tlh can be read but not written yet.\",\n"
+    "                        code=AccountErrorCode.INVALID.value,\n"
+    "                    )\n                }\n            )\n")
+
+
 def rename_series(kind: str) -> list[Path]:
     """The original rename patches: kind 'new-unsafe' (RenameField) or 'new-staged' (state-only)."""
     return sorted((PATCHES / kind).glob("*.patch"))
@@ -266,6 +356,39 @@ SPECS = {
                                   OLD_RESOLVER.format(attr="customer_note"),
                                   raw_resolver("customer_note"))],
                        "migration": None},
+    },
+    # --- Tier 3 ---
+    "rename-table": {
+        v: {"subject": f"rename CustomerEvent table to account_customer_event ({v})",
+            "edits": [(MODELS, EVENT_META, EVENT_META.replace(
+                "        ordering = (\"date\",)\n",
+                "        ordering = (\"date\",)\n        db_table = \"account_customer_event\"\n"))],
+            "migration": ("0107_customerevent_table",
+                          RENAME_EVENT_TABLE if v == "apply"
+                          else state_only(indent(RENAME_EVENT_TABLE, 8)))}
+        for v in ("apply", "state-only")
+    },
+    "split-note": {
+        "apply": {"subject": "split User.note into note_title + note_body (data migration, new app only)",
+                  "edits": SPLIT_NOTE_EDITS,
+                  "migration": ("0107_split_user_note",
+                                ADD_TITLE_BODY + "        migrations.RunPython(split_existing),\n"
+                                + state_only(indent(REMOVE_NOTE, 8)),
+                                SPLIT_RUNPYTHON_HEADER)},
+        "state-only": {"subject": "split User.note into note_title + note_body (state-only)",
+                       "edits": SPLIT_NOTE_EDITS,
+                       "migration": ("0107_split_user_note",
+                                     state_only(indent(ADD_TITLE_BODY + REMOVE_NOTE, 8)))},
+    },
+    "new-language-value": {
+        v: {"subject": f"add language code tlh ({v})",
+            "edits": [("saleor/settings.py", SETTINGS_LANG,
+                       "LANGUAGES: list[tuple[str, str]] = [*CORE_LANGUAGES, (\"tlh\", \"Klingon\")]\n")]
+                     + ([("saleor/graphql/account/mutations/base.py", *READERS_FIRST_GUARD)]
+                        if v == "readers-first" else []),
+            "migration": ("0107_user_language_code_tlh", LANG_FIELD_OP,
+                          "from django.conf import settings\n")}
+        for v in ("apply", "readers-first")
     },
 }
 

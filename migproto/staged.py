@@ -129,6 +129,9 @@ def _data_checks(ctx, sc: scenarios.Scenario, sid: str, cols: list[str], phase: 
     for col in sc.unchanged:
         if col in cols:
             checks.unchanged(ctx, sid, col)
+    for label, expr, needs, phases in sc.preserve_exprs:
+        if phase in phases and all(c in cols for c in needs):
+            checks.preservation_expr(ctx, sid, label, expr)
 
 
 def _after_sql_stage(ctx, sc, st, sid, cols, old, new) -> None:

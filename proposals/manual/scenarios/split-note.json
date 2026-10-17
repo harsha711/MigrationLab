@@ -1,0 +1,17 @@
+{
+  "scenario": "split-note",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The old version keeps writing note only, so the new columns (and the new version's composed note) go stale; new-version writes are invisible to the old version."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "The trigger keeps both shapes in sync until the old version is retired; the composed note equals every original note after the contract."
+    }
+  }
+}

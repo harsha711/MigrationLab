@@ -194,6 +194,42 @@ class AppServer:
             return OpResult(False, error=err, raw=body)
         return OpResult(True, value=body["data"]["customerUpdate"]["user"]["note"], raw=body)
 
+    def write_last_name(self, pk: int, value: str) -> OpResult:
+        """customerUpdate(lastName); Saleor also records a NAME_ASSIGNED CustomerEvent row."""
+        body = self.gql(
+            "mutation($id:ID!,$v:String){customerUpdate(id:$id,input:{lastName:$v})"
+            "{user{id lastName} errors{field message code}}}", {"id": gid(pk), "v": value})
+        err = _first_error(body, "customerUpdate")
+        if err:
+            return OpResult(False, error=err, raw=body)
+        return OpResult(True, value=body["data"]["customerUpdate"]["user"]["lastName"], raw=body)
+
+    def read_events(self, pk: int) -> OpResult:
+        """Number of CustomerEvent rows visible for the user (reads the events table)."""
+        body = self.gql("query($id:ID!){user(id:$id){id events{id type}}}", {"id": gid(pk)})
+        err = _first_error(body)
+        user = (body.get("data") or {}).get("user")
+        if err or user is None:
+            return OpResult(False, error=err or "user not found", raw=body)
+        return OpResult(True, value=len(user["events"] or []), raw=body)
+
+    def write_language(self, pk: int, code: str) -> OpResult:
+        body = self.gql(
+            "mutation($id:ID!,$l:LanguageCodeEnum){customerUpdate(id:$id,input:{languageCode:$l})"
+            "{user{id languageCode} errors{field message code}}}", {"id": gid(pk), "l": code})
+        err = _first_error(body, "customerUpdate")
+        if err:
+            return OpResult(False, error=err, raw=body)
+        return OpResult(True, value=body["data"]["customerUpdate"]["user"]["languageCode"], raw=body)
+
+    def read_language(self, pk: int) -> OpResult:
+        body = self.gql("query($id:ID!){user(id:$id){id languageCode}}", {"id": gid(pk)})
+        err = _first_error(body)
+        user = (body.get("data") or {}).get("user")
+        if err or user is None:
+            return OpResult(False, error=err or "user not found", raw=body)
+        return OpResult(True, value=user["languageCode"], raw=body)
+
     def create_customer(self, email: str, note: str | None, include_note: bool = True) -> OpResult:
         body = self.gql(*create_customer_request(email, note, include_note))
         err = _first_error(body, "customerCreate")

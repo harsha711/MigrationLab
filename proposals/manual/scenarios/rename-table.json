@@ -1,0 +1,17 @@
+{
+  "scenario": "rename-table",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The table is renamed while the old version still reads and writes account_customerevent, so its name changes (which insert events) and event reads fail."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "Both names resolve to the same table during the overlap."
+    }
+  }
+}

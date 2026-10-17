@@ -1,0 +1,19 @@
+{
+  "plan_id": "a7-readers-first",
+  "summary": "Deploy a version that can read tlh but does not write it yet; enable writers in a later release after the old version is retired.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run.",
+      "variant": "apply-readers-first"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

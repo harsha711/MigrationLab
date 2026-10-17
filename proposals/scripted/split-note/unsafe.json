@@ -1,0 +1,18 @@
+{
+  "plan_id": "a6-unsafe",
+  "summary": "Deploy with a data migration that splits notes; the new version reads only the new columns.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

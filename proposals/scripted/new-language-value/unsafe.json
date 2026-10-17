@@ -1,0 +1,18 @@
+{
+  "plan_id": "a7-unsafe",
+  "summary": "Deploy the version that accepts and writes tlh.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

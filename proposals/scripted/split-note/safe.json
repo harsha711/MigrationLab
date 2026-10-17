@@ -1,0 +1,51 @@
+{
+  "plan_id": "a6-safe",
+  "summary": "Add the new columns with a two-way sync trigger, backfill, deploy, retire, then drop the old column.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-columns-and-sync-trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "A BEFORE trigger keeps note and (note_title, note_body) consistent in both directions.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN note_title text",
+        "ALTER TABLE account_user ADD COLUMN note_body text",
+        "CREATE OR REPLACE FUNCTION migproto_split_note_sync() RETURNS trigger LANGUAGE plpgsql AS $$\nDECLARE p int;\nBEGIN\n    IF TG_OP = 'INSERT' THEN\n        IF NEW.note IS NOT NULL AND NEW.note_title IS NULL AND NEW.note_body IS NULL THEN\n            p := position(': ' in NEW.note);\n            IF p = 0 THEN NEW.note_title := NULL; NEW.note_body := NEW.note;\n            ELSE NEW.note_title := substr(NEW.note, 1, p - 1); NEW.note_body := substr(NEW.note, p + 2); END IF;\n        ELSIF NEW.note IS NULL AND (NEW.note_title IS NOT NULL OR NEW.note_body IS NOT NULL) THEN\n            NEW.note := CASE WHEN NEW.note_title IS NULL THEN NEW.note_body ELSE NEW.note_title || ': ' || coalesce(NEW.note_body, '') END;\n        END IF;\n    ELSIF NEW.note IS DISTINCT FROM OLD.note THEN\n        IF NEW.note IS NULL THEN NEW.note_title := NULL; NEW.note_body := NULL;\n        ELSE\n            p := position(': ' in NEW.note);\n            IF p = 0 THEN NEW.note_title := NULL; NEW.note_body := NEW.note;\n            ELSE NEW.note_title := substr(NEW.note, 1, p - 1); NEW.note_body := substr(NEW.note, p + 2); END IF;\n        END IF;\n    ELSIF NEW.note_title IS DISTINCT FROM OLD.note_title OR NEW.note_body IS DISTINCT FROM OLD.note_body THEN\n        NEW.note := CASE WHEN NEW.note_title IS NULL THEN NEW.note_body ELSE NEW.note_title || ': ' || coalesce(NEW.note_body, '') END;\n    END IF;\n    RETURN NEW;\nEND;\n$$",
+        "CREATE TRIGGER migproto_split_note_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION migproto_split_note_sync()"
+      ]
+    },
+    {
+      "id": "backfill-split",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Batched split of existing notes.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE note IS NOT NULL AND note_body IS NULL LIMIT 1000) UPDATE account_user u SET note_title = CASE WHEN position(': ' in u.note) = 0 THEN NULL ELSE substr(u.note, 1, position(': ' in u.note) - 1) END, note_body = CASE WHEN position(': ' in u.note) = 0 THEN u.note ELSE substr(u.note, position(': ' in u.note) + 2) END FROM batch WHERE u.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-drop-note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the sync machinery and the old column.",
+      "sql": [
+        "DROP TRIGGER migproto_split_note_sync ON account_user",
+        "DROP FUNCTION migproto_split_note_sync()",
+        "ALTER TABLE account_user DROP COLUMN note"
+      ]
+    }
+  ]
+}

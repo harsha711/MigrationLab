@@ -29,7 +29,7 @@ def test_registry_is_consistent():
         assert set(s.not_null_phases) <= set(scenarios.ALL_PHASES)
         for v in s.variants.values():
             assert v.version in WORKTREES and v.migration.startswith("0107_")
-    assert len(scenarios.SCENARIOS) == 14
+    assert len(scenarios.SCENARIOS) == 17
     assert "raw-sql-rename/old" in scenarios.variant_versions()
     with pytest.raises(KeyError):
         scenarios.get("no-such-scenario")
@@ -129,6 +129,77 @@ def test_expired_token_is_refreshed_once(monkeypatch):
     monkeypatch.setattr(AppServer, "_post", post)
     assert server.gql("query{x}") == {"data": {"ok": True}}
     assert calls == ["stale", "fresh-1"]
+
+
+class _Res:
+    def __init__(self, ok, value=None, error=None):
+        self.ok, self.value, self.error = ok, value, error
+
+
+class _FakeServer:
+    def __init__(self, write_ok, read_ok=True):
+        self.write_ok, self.read_ok, self.calls = write_ok, read_ok, []
+
+    def alive(self):
+        return True
+
+    def write_language(self, pk, code):
+        self.calls.append(("write_language", pk, code))
+        return _Res(self.write_ok, code if self.write_ok else None,
+                    None if self.write_ok else "rejected")
+
+    def read_language(self, pk):
+        self.calls.append(("read_language", pk))
+        return _Res(self.read_ok, "EN" if self.read_ok else None,
+                    None if self.read_ok else "Enum cannot represent value: 'tlh'")
+
+
+class _Log:
+    def __init__(self):
+        self.checks = []
+
+    def check(self, name, passed, **kw):
+        self.checks.append((name, passed, kw))
+        return passed
+
+
+def _lang_ctx(new, old):
+    return checks.Context(log=_Log(), dbname="x", servers={"new": new, "old": old},
+                          expected={}, _free_seed=[101, 102, 103])
+
+
+def test_try_write_lang_rejection_is_tolerated_but_old_read_must_succeed():
+    steps = checks.CATALOGUE["new_lang_write_old_read"]
+    ctx = _lang_ctx(_FakeServer(write_ok=False), _FakeServer(write_ok=True))
+    assert checks.run_case(ctx, "new_lang_write_old_read", steps)          # readers-first shape
+    ctx = _lang_ctx(_FakeServer(write_ok=True), _FakeServer(write_ok=True, read_ok=False))
+    assert not checks.run_case(ctx, "new_lang_write_old_read", steps)      # writer breaks old read
+    name, passed, kw = ctx.log.checks[-1]
+    assert name == "case.new_lang_write_old_read" and not passed
+    assert kw["steps"][1]["error"].startswith("Enum cannot represent")
+
+
+def test_split_note_helpers_round_trip_every_note():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location(
+        "gen", Path(__file__).resolve().parents[1] / "scripts" / "make_scenario_patches.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+    ns = {}
+    exec(gen.SPLIT_HELPERS, ns)   # the exact code that goes into the Saleor patch
+    samples = [None, "", "plain", "Ótimo: Produto bom,\r\nentrega rápida.", "a: b: c", "x: ",
+               ": leading", "no colon-space:here", "👍🏻👌🏻", "Bom.: Recebi o produto."]
+    for note in samples:
+        assert ns["compose_note"](*ns["split_note"](note)) == note, note
+    assert ns["split_note"]("Bom.: Recebi") == ("Bom.", "Recebi")
+    assert ns["split_note"]("plain") == (None, "plain")
+
+
+def test_composed_note_sql_matches_python_helper():
+    # The SQL used by preservation_expr must express the same composition as compose_note.
+    assert "note_title IS NULL THEN note_body" in scenarios.COMPOSED_NOTE_SQL
+    assert "note_title || ': ' || coalesce(note_body, '')" in scenarios.COMPOSED_NOTE_SQL
 
 
 def test_note_free_new_app_skips_note_cases():

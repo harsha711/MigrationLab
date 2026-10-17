@@ -1,0 +1,17 @@
+{
+  "scenario": "new-language-value",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The new version writes tlh; the old version's LanguageCodeEnum cannot represent it, so reading that user fails on the old version."
+    },
+    "readers-first.json": {
+      "verdict": "PASS",
+      "recommendation": "accept_as_is",
+      "why": "No tlh value is written while the old version runs, so it never meets a value it cannot read."
+    }
+  }
+}

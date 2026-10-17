@@ -1,0 +1,37 @@
+{
+  "plan_id": "a2-safe",
+  "summary": "Rename the table, keep an updatable view under the old name until the old version is retired.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-rename-and-view",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "The old version keeps using the old name through an auto-updatable view.",
+      "sql": [
+        "ALTER TABLE account_customerevent RENAME TO account_customer_event",
+        "CREATE VIEW account_customerevent AS SELECT * FROM account_customer_event"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-drop-view",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "No version uses the old name any more.",
+      "sql": [
+        "DROP VIEW account_customerevent"
+      ]
+    }
+  ]
+}

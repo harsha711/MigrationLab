@@ -71,6 +71,22 @@ CATALOGUE.update({
         {"app": "old", "op": "write", "user": "A", "value": "long note " + "x" * 290},
         {"app": "old", "op": "read", "user": "A"},
     ],
+    # A2 (table rename): a last-name change writes a CustomerEvent row; the other version reads
+    # the user's events back from the (renamed) events table.
+    "old_name_write_new_events": [
+        {"app": "old", "op": "write_name", "user": "E", "value": "Renamed-By-Old"},
+        {"app": "new", "op": "read_events", "user": "E"},
+    ],
+    "new_name_write_old_events": [
+        {"app": "new", "op": "write_name", "user": "E", "value": "Renamed-By-New"},
+        {"app": "old", "op": "read_events", "user": "E"},
+    ],
+    # A7 (new allowed value): the new version may write the new language code (or reject it);
+    # either way the old version must still be able to read the user's language.
+    "new_lang_write_old_read": [
+        {"app": "new", "op": "try_write_lang", "user": "L", "value": "TLH"},
+        {"app": "old", "op": "read_lang", "user": "L"},
+    ],
 })
 NOTE_OPS = {"read", "write", "clear"}
 
@@ -84,6 +100,7 @@ class Context:
     _free_seed: list[int] = field(default_factory=list)
     new_app_note_ops: bool = True   # False when the new app has no `note` field (scenario A3)
     baseline: dict = field(default_factory=dict)  # column -> {id: value} at S0 (`unchanged`)
+    events_min: dict = field(default_factory=dict)  # pk -> CustomerEvents this run has caused
 
     @classmethod
     def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer],
@@ -138,6 +155,18 @@ def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MA
             if label not in labels:
                 labels[label] = ctx.fresh_seed_user()
             pk = labels[label]
+            if op in ("write_name", "read_events", "write_lang", "try_write_lang", "read_lang"):
+                res = _other_op(ctx, server, op, pk, step)
+                entry.update(user_pk=pk, ok=res.ok, value=res.value, error=res.error)
+                if op == "try_write_lang" and not res.ok:
+                    entry["note"] = "write rejected by this version (allowed for this step)"
+                    trace.append(entry)
+                    continue
+                trace.append(entry)
+                if not res.ok:
+                    ok, failed_step = False, i
+                    break
+                continue
             if op in ("write", "clear"):
                 value = None if op == "clear" else step.get("value")
                 res = server.write_note(pk, value)
@@ -166,6 +195,40 @@ def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MA
                   "reads": observed_reads},
     )
     return ok
+
+
+def _other_op(ctx: Context, server, op: str, pk: int, step: dict):
+    """Non-note operations used by the A2 / A7 cases."""
+    if op == "write_name":
+        res = server.write_last_name(pk, step.get("value"))
+        if res.ok:
+            ctx.events_min[pk] = ctx.events_min.get(pk, 0) + 1
+        return res
+    if op == "read_events":
+        res = server.read_events(pk)
+        want = ctx.events_min.get(pk, 0)
+        if res.ok and res.value < want:
+            res.ok, res.error = False, f"saw {res.value} events, expected at least {want}"
+        return res
+    if op in ("write_lang", "try_write_lang"):
+        return server.write_language(pk, step.get("value"))
+    return server.read_language(pk)   # read_lang
+
+
+def preservation_expr(ctx: Context, stage: str, label: str, expr: str) -> bool:
+    """Like `preservation`, for a value derived from several columns (manual scenario SQL)."""
+    actual = dict(db.query(ctx.dbname, f"SELECT id, {expr} FROM account_user"))
+    missing = [pk for pk in ctx.expected if pk not in actual]
+    mismatched = [pk for pk in ctx.expected if pk in actual and actual[pk] != ctx.expected[pk]]
+    examples = [{"id": pk, "expected": ctx.expected[pk], "actual": actual.get(pk)}
+                for pk in (missing + mismatched)[:5]]
+    return ctx.log.check(f"{stage}.preservation.{label}", not missing and not mismatched,
+                         rows=len(ctx.expected), missing=len(missing), mismatched=len(mismatched),
+                         examples=examples, app_version="database",
+                         expected={"value": label, "rows": len(ctx.expected), "missing": 0,
+                                   "mismatched": 0},
+                         observed={"value": label, "rows": len(actual), "missing": len(missing),
+                                   "mismatched": len(mismatched)})
 
 
 def preservation(ctx: Context, column: str, stage: str) -> bool:

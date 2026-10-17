@@ -57,6 +57,9 @@ class Scenario:
     # Phases after which `not_null` columns are checked (a column may legitimately hold NULLs
     # right after an expand stage, before its backfill).
     not_null_phases: tuple[str, ...] = ALL_PHASES
+    # Values derived from several columns that must equal the expected note per row:
+    # (label, SQL expression, columns it needs, phases after which it is checked).
+    preserve_exprs: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = ()
 
     def variant(self, migration: str) -> Variant:
         if migration not in self.variants:
@@ -64,6 +67,10 @@ class Scenario:
                            f"(has {sorted(self.variants)})")
         return self.variants[migration]
 
+
+# A6: how the new version presents a split note (must match its GraphQL resolver exactly).
+COMPOSED_NOTE_SQL = ("CASE WHEN note_title IS NULL THEN note_body "
+                     "ELSE note_title || ': ' || coalesce(note_body, '') END")
 
 RENAME_CASES = ("old_write_new_read", "new_write_old_read", "old_create_new_read",
                 "new_create_old_read", "alternating_same_user", "clear_from_old",
@@ -210,6 +217,40 @@ SCENARIOS: dict[str, Scenario] = {s.id: s for s in [
                                         "0107_rename_user_note_customer_note")},
         cases=RENAME_CASES, preserve=("note", "customer_note"), rename_hooks=True,
         tags=("A8",),
+    ),
+    # --- Tier 3 -------------------------------------------------------------------------------
+    Scenario(
+        id="rename-table", title="A2: rename a table (CustomerEvent -> account_customer_event)",
+        change=_change("Rename the table of model CustomerEvent from account_customerevent to "
+                       "account_customer_event (Meta.db_table).",
+                       old_table="account_customerevent", new_table="account_customer_event"),
+        variants={"apply": Variant("rename-table/apply", "0107_customerevent_table"),
+                  "state_only": Variant("rename-table/state-only", "0107_customerevent_table")},
+        cases=RENAME_CASES + ("old_name_write_new_events", "new_name_write_old_events"),
+        tags=("A2",),
+    ),
+    Scenario(
+        id="split-note", title="A6: split a column (note -> note_title + note_body)",
+        change=_change("Replace User.note with note_title and note_body (split on the first "
+                       "': '); GraphQL note becomes title + ': ' + body.",
+                       old_column="note", new_columns=["note_title", "note_body"]),
+        variants={"apply": Variant("split-note/apply", "0107_split_user_note"),
+                  "state_only": Variant("split-note/state-only", "0107_split_user_note")},
+        cases=RENAME_CASES,
+        preserve_exprs=(("composed_note", COMPOSED_NOTE_SQL, ("note_title", "note_body"),
+                         ("backfill", "deploy", "contract")),),
+        absent_after_contract=("note",), present_after_contract=("note_title", "note_body"),
+        tags=("A6",),
+    ),
+    Scenario(
+        id="new-language-value", title="A7: add a new allowed value (language code tlh)",
+        change=_change("Add the language code tlh (Klingon) to settings.LANGUAGES, so "
+                       "LanguageCodeEnum and User.language_code accept it.",
+                       column="language_code", new_value="tlh"),
+        variants={"apply": Variant("new-language-value/apply", "0107_user_language_code_tlh"),
+                  "apply-readers-first": Variant("new-language-value/readers-first",
+                                                 "0107_user_language_code_tlh")},
+        cases=RENAME_CASES + ("new_lang_write_old_read",), tags=("A7",),
     ),
 ]}
 
