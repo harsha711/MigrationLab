@@ -89,12 +89,26 @@ class Supervisor:
             self.log("WARN", f"could not copy {remote_name}: {r.stderr.strip()[:200]}")
         return r.returncode == 0
 
+    # Bracketed patterns so pgrep never matches the ssh shell that runs it.
     def server_alive(self) -> bool:
-        r = self.ssh("pgrep -f 'vllm serve' >/dev/null && echo up || echo down", timeout=60)
+        """vLLM itself is running (after install and download)."""
+        r = self.ssh("pgrep -f '[v]llm serve' >/dev/null && echo up || echo down", timeout=60)
         return r.stdout.strip() == "up"
 
+    def setup_alive(self) -> bool:
+        """serve_lightning.sh is still running: installing, downloading or serving."""
+        r = self.ssh("pgrep -f '[s]erve_lightning.sh' >/dev/null && echo up || echo down",
+                     timeout=60)
+        return r.stdout.strip() == "up"
+
+    def describe_instance(self):
+        r = self.ssh("nvidia-smi -L; df -h ~ | tail -1; nproc; free -g | sed -n 2p", timeout=60)
+        if r.returncode:
+            raise RuntimeError(f"cannot ssh to {self.a.instance}: {r.stderr.strip()[:300]}")
+        self.log("INFO", "instance: " + " | ".join(r.stdout.split("\n")).strip(" |"))
+
     def start_server(self):
-        if self.server_alive():
+        if self.setup_alive():
             self.log("INFO", "vLLM already running on the instance; reusing it")
             return
         r = subprocess.run(["scp", *SSH_OPTS, str(SERVE), f"{self.a.instance}:serve_lightning.sh"],
@@ -153,8 +167,9 @@ class Supervisor:
             if self.healthy():
                 self.log("INFO", f"endpoint ready (spend so far ~${self.spend()})")
                 return
-            if not self.a.local_url and not self.server_alive():
-                raise RuntimeError("vLLM exited on the instance:\n" + self.remote_tail())
+            if not self.a.local_url and not self.setup_alive():
+                raise RuntimeError("serve_lightning.sh exited on the instance:\n"
+                                   + self.remote_tail())
             if time.monotonic() - last_note > 300:
                 last_note = time.monotonic()
                 tail = self.remote_tail(3).strip().splitlines() if not self.a.local_url else []
@@ -262,6 +277,7 @@ class Supervisor:
                 if subprocess.run(["ss", "-ltn", f"sport = :{self.a.port}"], capture_output=True,
                                   text=True).stdout.count("LISTEN"):
                     raise RuntimeError(f"local port {self.a.port} is already in use")
+                self.describe_instance()
                 self.start_server()
                 self.start_tunnel()
             self.wait_ready()
