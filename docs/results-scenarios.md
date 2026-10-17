@@ -49,7 +49,7 @@ The legacy data for B3 (orphan `referrer_id` values) is created by the scenario'
 
 ## Same matrix on the default synthetic seed (Harsha's dataset)
 I also ran everything on the runner's default seed: `migproto baseline --rebuild-seed`, which is `populatedb` plus 200 synthetic customers.
-- **Seed:** 245 users, 191 with a note, one deliberate 2,000-character note.
+- **Seed:** 245 users, 191 with a note, one note over 255 characters (the deliberate 2,000-character note), one duplicate last-name row.
 - **Snapshot:** every run started from `seed:61e4e7a7f3caa544`, **the same snapshot ID as Harsha's own runs** in `docs/team/handoff-01.md`. The rebuilt dataset is identical, so these numbers compare directly.
 - **Runs:** 2026-10-17, 19:04 to 19:21.
 
@@ -61,7 +61,7 @@ I also ran everything on the runner's default seed: `migproto baseline --rebuild
 | Rename plan v2 | PASS 34/34 | PASS 34/34 |
 | B1 unsafe: notes silently truncated | **1** (the 2,000-character note) | **6** (real reviews over 255 characters) |
 | B4 unsafe: notes emptied by the irreversible migration | **182** | **4,364** |
-| B2: duplicates block the unique constraint | yes (demo users and empty last names collide; the synthetic `Customer0000`… names themselves are unique) | yes (duplicate cities) |
+| B2: duplicates block the unique constraint | yes: **one** duplicate last-name row in the seed is enough (the synthetic `Customer0000`… names are unique); new customers with an empty last name also collide | yes (duplicate cities) |
 
 **Verdicts are the same on both datasets.** Only the *amount* of damage differs, and it grows with real data. B1 is the clearest case: the synthetic seed has one artificial long note, while real data has six genuine customer reviews that would be cut.
 
