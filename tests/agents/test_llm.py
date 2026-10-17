@@ -84,3 +84,45 @@ def test_request_failure_is_recorded(monkeypatch):
         llm.chat_json("system", "user", transcript)
     assert len(transcript) == 3
     assert all(entry["usage"] is None for entry in transcript)
+
+
+def test_request_failure_retries_the_same_messages(monkeypatch):
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise requests.Timeout("late")
+        return Response('{"ok": true}', usage={"total_tokens": 1})
+
+    monkeypatch.setattr(requests, "post", post)
+    llm = LLM(model="nemotron-test", budget=ReviewBudget(max_model_calls=3))
+    assert llm.chat_json("system", "user", []) == {"ok": True}
+    assert calls[1]["json"]["messages"] == calls[0]["json"]["messages"]
+
+
+def test_request_timeout_is_capped_by_remaining_wall_budget(monkeypatch):
+    timeouts = []
+
+    def post(*args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        return Response('{"ok": true}', usage={"total_tokens": 1})
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setenv("MIGPROTO_LLM_TIMEOUT", "120")
+    llm = LLM(model="nemotron-test", budget=ReviewBudget(max_wall_seconds=30))
+    llm.chat_json("system", "user", [])
+    assert llm.timeout == 120
+    assert 1.0 <= timeouts[0] <= 30
+
+
+def test_ollama_reasoning_field_is_recorded(monkeypatch):
+    response = Response('{"ok": true}', usage={"total_tokens": 1})
+    message = response._body["choices"][0]["message"]
+    del message["reasoning_content"]
+    message["reasoning"] = "thinking"
+    monkeypatch.setattr(requests, "post", lambda *a, **k: response)
+    llm = LLM(model="nemotron-test", budget=ReviewBudget())
+    transcript = []
+    llm.chat_json("system", "user", transcript)
+    assert transcript[0]["reasoning_content"] == "thinking"

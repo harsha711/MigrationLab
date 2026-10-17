@@ -49,6 +49,9 @@ class ReviewBudget:
         self.exhausted_reason = reason
         raise BudgetExceeded(reason)
 
+    def remaining_wall(self) -> float:
+        return max(0.0, self.max_wall_seconds - self.elapsed)
+
     def check_wall(self) -> None:
         if self.elapsed >= self.max_wall_seconds:
             self._exhaust(f"wall-time budget exhausted ({self.max_wall_seconds}s)")

@@ -17,7 +17,7 @@ class LLMError(RuntimeError):
 
 class LLM:
     def __init__(self, base_url: str | None = None, model: str | None = None,
-                 api_key: str | None = None, timeout: int = 600,
+                 api_key: str | None = None, timeout: int | None = None,
                  budget: ReviewBudget | None = None):
         self.base_url = (base_url or os.environ.get("MIGPROTO_LLM_BASE_URL")
                          or "http://localhost:8000/v1").rstrip("/")
@@ -25,7 +25,7 @@ class LLM:
         if not self.model:
             raise LLMError("MIGPROTO_LLM_MODEL is required for live model reviews")
         self.api_key = api_key or os.environ.get("MIGPROTO_LLM_API_KEY") or "unused"
-        self.timeout = timeout
+        self.timeout = timeout or int(os.environ.get("MIGPROTO_LLM_TIMEOUT", "600"))
         self.budget = budget or ReviewBudget()
         self.temperature = float(os.environ.get("MIGPROTO_LLM_TEMPERATURE", "1.0"))
         self.top_p = float(os.environ.get("MIGPROTO_LLM_TOP_P", "0.95"))
@@ -36,6 +36,7 @@ class LLM:
         env = os.environ
         return {
             "revision": env.get("MIGPROTO_LLM_REVISION"),
+            "request_timeout_s": self.timeout,
             "serving_backend": env.get("MIGPROTO_SERVING_BACKEND", "vllm"),
             "serving_version": env.get("MIGPROTO_SERVING_VERSION"),
             "serving_flags": env.get("MIGPROTO_SERVING_FLAGS"),
@@ -85,7 +86,7 @@ class LLM:
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json=payload,
-                    timeout=self.timeout,
+                    timeout=max(1.0, min(self.timeout, self.budget.remaining_wall())),
                 )
                 elapsed = round(time.monotonic() - t0, 3)
                 if resp.status_code != 200:
@@ -96,7 +97,8 @@ class LLM:
                 body = resp.json()
                 message = body["choices"][0]["message"]
                 content = message.get("content") or ""
-                reasoning = message.get("reasoning_content")
+                # vLLM's reasoning parser returns reasoning_content; Ollama returns reasoning.
+                reasoning = message.get("reasoning_content") or message.get("reasoning")
                 usage = body.get("usage")
                 obj = parse_json(content)
                 if validator:
@@ -112,6 +114,8 @@ class LLM:
                 last_err = f"request failed: {exc}"
                 _record(transcript, attempt, messages, None, None, elapsed, last_err, False)
                 self.budget.finish_call(None, elapsed)
+                # No reply to correct: retry the same request without an extra turn.
+                continue
             except (KeyError, TypeError, ValueError) as exc:
                 elapsed = round(time.monotonic() - t0, 3)
                 last_err = str(exc)
