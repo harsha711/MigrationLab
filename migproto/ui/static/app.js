@@ -558,6 +558,9 @@ async function route() {
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
+    document.querySelectorAll("[data-nav]").forEach((link) => link.classList.remove("active"));
+    const navKey = parts[0] === "workspace" ? "workspace" : parts[0] === "compare" ? "compare" : parts[0] === "demo" ? "demo" : "runs";
+    document.querySelector(`[data-nav="${navKey}"]`)?.classList.add("active");
     window.scrollTo(0, 0);
     if (parts[0] === "workspace" && !localStorage.getItem("migrationlab-tour-seen")) requestAnimationFrame(openTour);
   } catch (err) {

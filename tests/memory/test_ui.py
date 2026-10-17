@@ -98,3 +98,5 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "trapFocus" in js
     assert "scope=\"col\"" in js and "scope=\"row\"" in js
     assert "progressive-card" in css
+    assert "data-nav" in js and "navKey" in js
+    assert "Seamless dashboard theme" in css
