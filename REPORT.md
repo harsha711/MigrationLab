@@ -151,3 +151,24 @@ Three practical findings affected the runner:
 8. Model output is parsed only as JSON and its SQL runs only on local `migproto_run_*` databases behind a denylist. This is a prototype guard, not a sandbox, and it would need a stricter allowlist before running against anything non-disposable.
 
 Prior art: upstream already runs `.github/workflows/test-migrations-compatibility.yml`, which applies a PR's migrations and then runs the base branch's tests. That would plausibly catch the unsafe rename in section 4.2, but it does not exercise interleaved old and new writers or retirement ordering.
+
+## 10. Scenario catalogue (branch `scenarios/catalogue`, not merged)
+
+The runner now reviews more than the rename. A scenario registry (`migproto/scenarios.py`) plus Saleor patch series for five more changes:
+- D1: add an optional column
+- D3: rename in code only with `db_column`
+- A4: add a required column
+- A3: drop a column
+- B1: shorten `note` to `varchar(255)`
+
+Plans can now apply the new version's own migration, so the tool can recommend **accept as-is**.
+
+**Results:** on the Olist 10k seed (real public review text, not production data), 9 of 9 scripted plans matched their expected verdicts, and the rename results were unchanged. The full table is in [`docs/results-scenarios.md`](docs/results-scenarios.md).
+
+**The key finding is B1.** Django's naive `AlterField` exits successfully but silently truncates the 6 Olist reviews longer than 255 characters. Only the runner's preservation check catches it.
+
+**Limits:**
+- Agents have not been run on the new scenarios.
+- Interleaving is sequential.
+- No timing, lock or concurrency claims.
+- The other catalogue rows (A2, A5 to A8, B2 to B4, C, D2/D4/D5) were not attempted.

@@ -57,7 +57,8 @@ def cmd_staged(args) -> int:
         plan = plans.load(args.plan)
         tests = plans.load(args.tests) if args.tests else None
         report = runner_api.execute_plan(
-            plan, run_context=runner_api.RunContext(log, provenance=args.provenance),
+            plan, run_context=runner_api.RunContext(log, provenance=args.provenance,
+                                                    keep_db=getattr(args, "keep_db", False)),
             extra_tests=tests, scenario=getattr(args, "scenario", None))
         result = report.as_dict()
         result["runner_verdict"] = result.pop("verdict")
@@ -106,6 +107,9 @@ def main(argv=None) -> int:
     s.add_argument("--provenance", default="scripted")
     s.add_argument("--scenario", default="rename-note",
                    help="schema change under review (see migproto/scenarios.py)")
+    s.add_argument("--keep-db", action="store_true",
+                   help="keep the migproto_run_* database after the run, for inspection "
+                        "(drop it by hand afterwards)")
     a = sub.add_parser("agent-loop", help="investigator -> planner -> tester with one revision")
     a.add_argument("--proposals", choices=["scripted", "llm"], default="scripted")
     al = sub.add_parser("all", help="setup, baseline, unsafe, scripted agent loop")
