@@ -31,12 +31,16 @@ class LLM:
         self.top_p = float(os.environ.get("MIGPROTO_LLM_TOP_P", "0.95"))
         self.reasoning_enabled = _env_bool("MIGPROTO_LLM_REASONING", True)
         self.force_nonempty_content = _env_bool("MIGPROTO_LLM_FORCE_NONEMPTY", True)
+        # vLLM's per-request cap on reasoning tokens; unset sends nothing (uncapped).
+        budget_env = os.environ.get("MIGPROTO_LLM_THINKING_BUDGET")
+        self.thinking_budget = int(budget_env) if budget_env else None
 
     def serving_metadata(self) -> dict:
         env = os.environ
         return {
             "revision": env.get("MIGPROTO_LLM_REVISION"),
             "request_timeout_s": self.timeout,
+            "thinking_token_budget": self.thinking_budget,
             "serving_backend": env.get("MIGPROTO_SERVING_BACKEND", "vllm"),
             "serving_version": env.get("MIGPROTO_SERVING_VERSION"),
             "serving_flags": env.get("MIGPROTO_SERVING_FLAGS"),
@@ -82,6 +86,8 @@ class LLM:
                         if response_schema else {"type": "json_object"}
                     ),
                 }
+                if self.reasoning_enabled and self.thinking_budget is not None:
+                    payload["thinking_token_budget"] = self.thinking_budget
                 resp = requests.post(
                     f"{self.base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}"},

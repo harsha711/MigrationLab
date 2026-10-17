@@ -126,3 +126,25 @@ def test_ollama_reasoning_field_is_recorded(monkeypatch):
     transcript = []
     llm.chat_json("system", "user", transcript)
     assert transcript[0]["reasoning_content"] == "thinking"
+
+
+def test_thinking_budget_is_sent_and_recorded(monkeypatch):
+    payloads = []
+
+    def post(*args, **kwargs):
+        payloads.append(kwargs["json"])
+        return Response('{"ok": true}', usage={"total_tokens": 1})
+
+    monkeypatch.setattr(requests, "post", post)
+    monkeypatch.setenv("MIGPROTO_LLM_THINKING_BUDGET", "4096")
+    llm = LLM(model="nemotron-test", budget=ReviewBudget())
+    llm.chat_json("system", "user", [])
+    assert payloads[0]["thinking_token_budget"] == 4096
+    assert llm.serving_metadata()["thinking_token_budget"] == 4096
+
+    monkeypatch.delenv("MIGPROTO_LLM_THINKING_BUDGET")
+    payloads.clear()
+    llm = LLM(model="nemotron-test", budget=ReviewBudget())
+    llm.chat_json("system", "user", [])
+    assert "thinking_token_budget" not in payloads[0]
+    assert llm.serving_metadata()["thinking_token_budget"] is None
