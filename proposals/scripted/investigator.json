@@ -1,0 +1,14 @@
+{
+  "provenance": "scripted (copied from the manual ground truth; exists only to exercise the loop plumbing)",
+  "findings": [
+    {"ref": "saleor/account/models.py:182", "kind": "definition", "needs_change": true, "reason": "model field definition"},
+    {"ref": "saleor/core/utils/anonymization.py:81", "kind": "write", "needs_change": true, "reason": "User kwargs use attribute name"},
+    {"ref": "saleor/graphql/account/mutations/base.py:182", "kind": "write", "needs_change": true, "reason": "input key maps to model field via construct_instance"},
+    {"ref": "saleor/graphql/account/mutations/staff/utils.py:6", "kind": "read", "needs_change": true, "reason": "InstanceTracker field name"},
+    {"ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:592", "kind": "write", "needs_change": true, "reason": "bulk_update fields list"},
+    {"ref": "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:714", "kind": "read", "needs_change": true, "reason": "attribute comparison"},
+    {"ref": "saleor/graphql/account/types.py:800", "kind": "read", "needs_change": true, "reason": "resolver reads attribute"},
+    {"ref": "saleor/graphql/account/tests/queries/test_me.py:97", "kind": "test", "needs_change": true, "reason": "test reads attribute"}
+  ],
+  "implicit_paths": ["ModelMutation.construct_instance maps input keys to model field names (base.py clean_input, customer_bulk_update.py construct_instance)"]
+}

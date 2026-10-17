@@ -1,0 +1,26 @@
+{
+  "provenance": "scripted",
+  "rationale": "Beyond the mandatory catalogue, exercise a customer created by one version and then updated alternately by both, and a clear followed by a write from the other side.",
+  "checks": ["old_write_new_read", "alternating_same_user"],
+  "custom_cases": [
+    {
+      "id": "create_old_then_cross_updates",
+      "steps": [
+        {"app": "old", "op": "create", "user": "C", "value": "c0 by old"},
+        {"app": "new", "op": "write", "user": "C", "value": "c1 by new"},
+        {"app": "old", "op": "read", "user": "C"},
+        {"app": "old", "op": "write", "user": "C", "value": "c2 by old"},
+        {"app": "new", "op": "read", "user": "C"}
+      ]
+    },
+    {
+      "id": "clear_new_then_write_old",
+      "steps": [
+        {"app": "new", "op": "clear", "user": "D"},
+        {"app": "old", "op": "read", "user": "D"},
+        {"app": "old", "op": "write", "user": "D", "value": "d after clear"},
+        {"app": "new", "op": "read", "user": "D"}
+      ]
+    }
+  ]
+}

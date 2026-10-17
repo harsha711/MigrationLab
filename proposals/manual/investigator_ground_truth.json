@@ -1,0 +1,18 @@
+{
+  "provenance": "manual (curated while writing patches/new-unsafe/0001-*.patch)",
+  "description": "Search hits in the OLD worktree that must change when the Django model attribute User.note is renamed to customer_note while the GraphQL field stays `note`.",
+  "needs_change": [
+    "saleor/account/models.py:182",
+    "saleor/core/utils/anonymization.py:81",
+    "saleor/graphql/account/mutations/base.py:182",
+    "saleor/graphql/account/mutations/staff/utils.py:6",
+    "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:592",
+    "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:714",
+    "saleor/graphql/account/types.py:800",
+    "saleor/graphql/account/tests/queries/test_me.py:97"
+  ],
+  "not_a_search_hit_but_changed": [
+    "saleor/graphql/account/mutations/base.py:301 clean_input (map input key note -> customer_note; ModelMutation.construct_instance matches input keys to model field names and would silently drop `note`)",
+    "saleor/graphql/account/bulk_mutations/customer_bulk_update.py:437 construct_instance (same mapping for bulk update)"
+  ]
+}

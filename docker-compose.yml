@@ -1,0 +1,22 @@
+name: migproto
+
+services:
+  db:
+    image: docker.io/library/postgres:15-alpine
+    ports:
+      - "127.0.0.1:55432:5432"
+    environment:
+      - POSTGRES_USER=saleor
+      - POSTGRES_PASSWORD=saleor
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "saleor"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  cache:
+    image: docker.io/valkey/valkey:8.1-alpine
+    ports:
+      - "127.0.0.1:56379:6379"

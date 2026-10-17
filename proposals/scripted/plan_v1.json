@@ -1,0 +1,42 @@
+{
+  "plan_id": "scripted-v1",
+  "provenance": "scripted (manually authored, deliberately flawed to exercise the revision loop)",
+  "summary": "Expand/backfill/contract where only the NEW application keeps both columns in sync (dual-write on new writes).",
+  "write_consistency": "New app writes are mirrored to the old column (emulated by a trigger that only reacts when customer_note changes). Old app writes are assumed to be covered by the backfill.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable customer_note and mirror new-app writes into note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text NULL",
+        "CREATE OR REPLACE FUNCTION migproto_note_sync() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.customer_note IS NOT NULL THEN NEW.note := NEW.customer_note; END IF;\n  ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND $$",
+        "CREATE TRIGGER migproto_note_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION migproto_note_sync()"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note into customer_note in batches of 100.",
+      "repeat_until_zero_rows": true,
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE id IN (SELECT id FROM account_user WHERE customer_note IS DISTINCT FROM note ORDER BY id LIMIT 100)"
+      ]
+    },
+    {"id": "deploy_new", "kind": "deploy_new", "description": "Roll out the new app next to the old one."},
+    {"id": "retire_old", "kind": "retire_old", "description": "Stop all old app processes."},
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove sync machinery and the old column.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS migproto_note_sync ON account_user",
+        "DROP FUNCTION IF EXISTS migproto_note_sync()",
+        "ALTER TABLE account_user DROP COLUMN note"
+      ]
+    }
+  ]
+}

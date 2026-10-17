@@ -1,0 +1,38 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Virtual environments
+.venv/
+venv/
+
+# Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Vendor checkouts: Saleor clone, its worktrees and its venv (recreated by `migproto setup`).
+# vendor/saleor is an independent git repository; never add it as a submodule or track it.
+vendor/
+
+# Database files and volumes (Postgres runs on tmpfs inside Docker)
+pgdata/
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+
+# Raw execution runs (sanitized fixtures live in examples/)
+runs/
+
+# Large generated artifacts
+*.log
+*.tar
+*.tar.gz
+*.zip
