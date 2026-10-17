@@ -155,7 +155,7 @@ Everything needed to serve Lightning and run reviews is in `scripts/brev/`; the 
        --started-at <creation time, ISO> --runs 1 --max-tokens 120000
    ```
    It keeps the machine awake, starts `serve_lightning.sh` on the instance (about 3 min from a fresh instance: install, 18 GB download, JIT kernels), holds the tunnel, runs `check_endpoint.sh`, alternates `roles` and `single` reviews, and stops starting runs at `--stop-usd` (default $18, estimated from `--started-at`). Output: `runs/brev-batch-<ts>/` (`supervisor.log`, `runs.jsonl`, serving record). `touch runs/brev-batch-<ts>/STOP` stops after the current run. `--delete-when-done` deletes the instance afterwards. `scripts/brev/summarize.py <batch dir>` prints `docs/results.md` rows.
-3. Detach it (`setsid nohup ... &`; tmux is not installed) and watch `supervisor.log`.
+3. Run it inside tmux (`tmux new -s brev '<command>'`, detach with `Ctrl-b d`, reattach with `tmux attach -t brev`) and watch `supervisor.log`. Add `--workers 4` to run four reviews at once (each worker gets its own app ports 8001+10w, lock and Redis DB); a second supervisor beside a running one needs `--first-worker` past the other's workers and its own `--port`.
 
 Known problems already handled in `serve_lightning.sh` (do not rediscover them):
 - **Driver too old:** the Scaleway image has driver 570 (CUDA 12.8); the PyPI vLLM 0.27.1 wheel uses CUDA 13 PyTorch. `CUDA_COMPAT=13-0` installs `cuda-compat-13-0`.
