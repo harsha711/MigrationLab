@@ -1,5 +1,6 @@
 """Deterministic compatibility checks. Expectations are computed here, never by a model."""
 
+import re
 import uuid
 from dataclasses import dataclass, field
 
@@ -50,6 +51,29 @@ CATALOGUE: dict[str, list[dict]] = {
 }
 MANDATORY_AFTER_DEPLOY = list(CATALOGUE)
 
+# Cases used by non-rename scenarios (migproto/scenarios.py). "create_plain" creates a customer
+# without sending the note input field (for a new app whose GraphQL input has no `note`); it is
+# a runner-internal op, not available to tester proposals (plans.OPS).
+CATALOGUE.update({
+    "old_write_old_read": [
+        {"app": "old", "op": "write", "user": "A", "value": "old wrote this"},
+        {"app": "old", "op": "read", "user": "A"},
+    ],
+    "old_create_old_read": [
+        {"app": "old", "op": "create", "user": "N", "value": "created by old"},
+        {"app": "old", "op": "read", "user": "N"},
+    ],
+    "new_create_plain_old_read": [
+        {"app": "new", "op": "create_plain", "user": "N"},
+        {"app": "old", "op": "read", "user": "N"},
+    ],
+    "old_write_long_note": [
+        {"app": "old", "op": "write", "user": "A", "value": "long note " + "x" * 290},
+        {"app": "old", "op": "read", "user": "A"},
+    ],
+})
+NOTE_OPS = {"read", "write", "clear"}
+
 
 @dataclass
 class Context:
@@ -58,12 +82,14 @@ class Context:
     servers: dict[str, AppServer]
     expected: dict[int, str | None]
     _free_seed: list[int] = field(default_factory=list)
+    new_app_note_ops: bool = True   # False when the new app has no `note` field (scenario A3)
 
     @classmethod
-    def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer]) -> "Context":
+    def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer],
+               new_app_note_ops: bool = True) -> "Context":
         expected = seed.all_rows(dbname, "note")
         free = [pk for pk, v in seed.seed_rows(dbname, "note").items() if v]
-        return cls(log, dbname, servers, expected, free[len(free) // 2:])
+        return cls(log, dbname, servers, expected, free[len(free) // 2:], new_app_note_ops)
 
     def fresh_seed_user(self) -> int:
         return self._free_seed.pop()
@@ -78,6 +104,12 @@ def case_app_version(steps: list[dict]) -> str | None:
 
 
 def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MANUAL) -> bool:
+    if not ctx.new_app_note_ops and any(s.get("app") == "new" and s.get("op") in NOTE_OPS
+                                        for s in steps):
+        # Not applicable, not passed: the new app version has no `note` field to read or write.
+        ctx.log.skip(f"case.{case_id}", "new app version has no note field", provenance=provenance,
+                     steps=steps, app_version=case_app_version(steps))
+        return True
     labels: dict[str, int] = {}
     trace = []
     ok = True
@@ -93,12 +125,14 @@ def run_case(ctx: Context, case_id: str, steps: list[dict], provenance: str = MA
             trace.append(entry)
             ok, infra_error, failed_step = False, True, i
             break
-        if op == "create":
+        if op in ("create", "create_plain"):
             email = f"{case_id}-{label}-{uuid.uuid4().hex[:6]}@case.migproto.test".lower()
-            res = server.create_customer(email, step.get("value"))
+            plain = op == "create_plain"
+            res = server.create_customer(email, None if plain else step.get("value"),
+                                         include_note=not plain)
             if res.ok:
                 labels[label] = res.value
-                ctx.expected[res.value] = step.get("value")
+                ctx.expected[res.value] = None if plain else step.get("value")
         else:
             if label not in labels:
                 labels[label] = ctx.fresh_seed_user()
@@ -149,24 +183,62 @@ def preservation(ctx: Context, column: str, stage: str) -> bool:
                                    "missing": len(missing), "mismatched": len(mismatched)})
 
 
-def columns_agree(ctx: Context, stage: str) -> bool:
-    n, examples = _disagreements(ctx.dbname)
+def columns_agree(ctx: Context, stage: str, pair: tuple[str, str] = ("note", "customer_note")) -> bool:
+    n, examples = _disagreements(ctx.dbname, pair)
     return ctx.log.check(f"{stage}.columns_agree", n == 0, disagreeing_rows=n, examples=examples,
                          app_version="database", expected={"disagreeing_rows": 0},
                          observed={"disagreeing_rows": n})
 
 
-def _disagreements(dbname: str) -> tuple[int, list]:
-    n = db.query(dbname, "SELECT count(*) FROM account_user "
-                         "WHERE note IS DISTINCT FROM customer_note")[0][0]
-    rows = db.query(dbname, "SELECT id, note, customer_note FROM account_user "
-                            "WHERE note IS DISTINCT FROM customer_note ORDER BY id LIMIT 5")
-    return n, [{"id": r[0], "note": r[1], "customer_note": r[2]} for r in rows]
+def _ident(name: str) -> str:
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", name):
+        raise ValueError(f"bad column name {name!r}")
+    return name
+
+
+def disagreement_sql(pair: tuple[str, str]) -> tuple[str, str]:
+    a, b = map(_ident, pair)
+    return (f"SELECT count(*) FROM account_user WHERE {a} IS DISTINCT FROM {b}",
+            f"SELECT id, {a}, {b} FROM account_user WHERE {a} IS DISTINCT FROM {b} "
+            "ORDER BY id LIMIT 5")
+
+
+def _disagreements(dbname: str, pair: tuple[str, str] = ("note", "customer_note")) -> tuple[int, list]:
+    count_sql, rows_sql = disagreement_sql(pair)
+    n = db.query(dbname, count_sql)[0][0]
+    rows = db.query(dbname, rows_sql)
+    return n, [{"id": r[0], pair[0]: r[1], pair[1]: r[2]} for r in rows]
+
+
+def null_count_sql(column: str) -> str:
+    return f"SELECT count(*) FROM account_user WHERE {_ident(column)} IS NULL"
+
+
+def not_null(ctx: Context, stage: str, column: str) -> bool:
+    """A required column must hold a value in every row, including rows the old app inserted."""
+    n = db.query(ctx.dbname, null_count_sql(column))[0][0]
+    return ctx.log.check(f"{stage}.not_null.{column}", n == 0, null_rows=n, app_version="database",
+                         expected={"column": column, "null_rows": 0},
+                         observed={"column": column, "null_rows": n})
+
+
+def columns_after_contract(ctx: Context, stage: str, present: tuple[str, ...],
+                           absent: tuple[str, ...]) -> bool:
+    cols = set(db.columns(ctx.dbname, "account_user"))
+    missing = [c for c in present if c not in cols]
+    lingering = [c for c in absent if c in cols]
+    return ctx.log.check(f"{stage}.columns_after_contract", not missing and not lingering,
+                         app_version="database",
+                         expected={"present": list(present), "absent": list(absent)},
+                         observed={"missing": missing, "still_present": lingering})
 
 
 def app_smoke(ctx: Context, role: str, stage: str) -> bool:
-    steps = [
-        {"app": role, "op": "write", "user": "S", "value": f"smoke {role} @ {stage}"},
-        {"app": role, "op": "read", "user": "S"},
-    ]
+    if role == "new" and not ctx.new_app_note_ops:
+        steps = [{"app": "new", "op": "create_plain", "user": "S"}]
+    else:
+        steps = [
+            {"app": role, "op": "write", "user": "S", "value": f"smoke {role} @ {stage}"},
+            {"app": role, "op": "read", "user": "S"},
+        ]
     return run_case(ctx, f"{stage}.{role}_smoke", steps)

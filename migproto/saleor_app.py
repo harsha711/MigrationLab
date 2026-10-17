@@ -185,17 +185,22 @@ class AppServer:
             return OpResult(False, error=err, raw=body)
         return OpResult(True, value=body["data"]["customerUpdate"]["user"]["note"], raw=body)
 
-    def create_customer(self, email: str, note: str | None) -> OpResult:
-        body = self.gql(
-            "mutation($email:String!,$note:String){customerCreate(input:{email:$email,note:$note})"
-            "{user{id note} errors{field message code}}}",
-            {"email": email, "note": note},
-        )
+    def create_customer(self, email: str, note: str | None, include_note: bool = True) -> OpResult:
+        body = self.gql(*create_customer_request(email, note, include_note))
         err = _first_error(body, "customerCreate")
         if err:
             return OpResult(False, error=err, raw=body)
         return OpResult(True, value=pk_from_gid(body["data"]["customerCreate"]["user"]["id"]),
                         raw=body)
+
+
+def create_customer_request(email: str, note: str | None, include_note: bool = True):
+    """GraphQL customerCreate. Without the note field for app versions whose input lacks it."""
+    if include_note:
+        return ("mutation($email:String!,$note:String){customerCreate(input:{email:$email,note:$note})"
+                "{user{id note} errors{field message code}}}", {"email": email, "note": note})
+    return ("mutation($email:String!){customerCreate(input:{email:$email})"
+            "{user{id} errors{field message code}}}", {"email": email})
 
 
 def _first_error(body: dict, mutation: str | None = None) -> str | None:
