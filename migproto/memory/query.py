@@ -90,6 +90,20 @@ def list_runs(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _claims(conn, where: str, args: tuple) -> list[dict]:
+    """Claims with their cited evidence (observation status / outcome when resolved)."""
+    out = []
+    for c in conn.execute("SELECT claim_id, role, kind, text, provenance, structured FROM claims "
+                          f"WHERE {where} ORDER BY claim_id", args):
+        c = dict(c)
+        c["evidence"] = [dict(e) for e in conn.execute(
+            "SELECT ce.observation_id, ce.resolved, o.check_name, o.status, o.outcome "
+            "FROM claim_evidence ce LEFT JOIN observations o USING (observation_id) "
+            "WHERE ce.claim_id = ? ORDER BY o.seq", (c["claim_id"],))]
+        out.append(c)
+    return out
+
+
 def outcome_counts(conn, attempt_id) -> dict | None:
     """v1 outcome counts for one attempt; None when no observation recorded an outcome (v0)."""
     rows = conn.execute("SELECT outcome, COUNT(*) AS n FROM observations "
@@ -109,7 +123,8 @@ def run_detail(conn, run_id) -> dict | None:
         a["failed"] = _obj(a.pop("failed_json"))
         aid = a["attempt_id"]
         a["plans"] = [{"plan_id": p["plan_id"], "file": p["file"], "body": _obj(p["body_json"]),
-                       "sql": p["sql"]}
+                       "sql": p["sql"], "parent_plan_id": p["parent_plan_id"],
+                       "solution_origin": p["solution_origin"]}
                       for p in conn.execute("SELECT * FROM plans WHERE attempt_id = ?", (aid,))]
         a["stages"] = [dict(s) for s in conn.execute(
             "SELECT stage_id, stage_kind, phase, description FROM stages "
@@ -119,16 +134,15 @@ def run_detail(conn, run_id) -> dict | None:
             "WHERE attempt_id = ?", (aid,)).fetchone()
         a["checks_total"], a["checks_failed"] = counts["total"], counts["failed"] or 0
         a["outcome_counts"] = outcome_counts(conn, aid)
-        a["claims"] = [dict(c) for c in conn.execute(
-            "SELECT claim_id, role, kind, text, provenance, structured FROM claims "
-            "WHERE attempt_id = ? ORDER BY claim_id", (aid,))]
+        a["claims"] = _claims(conn, "attempt_id = ?", (aid,))
         attempts.append(a)
-    unattached_claims = [dict(c) for c in conn.execute(
-        "SELECT claim_id, role, kind, text, provenance, structured FROM claims "
-        "WHERE run_id = ? AND attempt_id IS NULL ORDER BY claim_id", (run_id,))]
+    unattached_claims = _claims(conn, "run_id = ? AND attempt_id IS NULL", (run_id,))
     notes = [_obj(e["raw_json"]) for e in conn.execute(
         "SELECT raw_json FROM events WHERE run_id = ? AND kind IN ('observation', 'scenario') "
         "ORDER BY seq", (run_id,))]
+    retrievals = [_obj(e["raw_json"]) for e in conn.execute(
+        "SELECT raw_json FROM events WHERE run_id = ? AND kind = 'retrieval' ORDER BY seq",
+        (run_id,))]
     return {
         "run_id": run_id,
         "source_kind": run["source_kind"],
@@ -138,6 +152,7 @@ def run_detail(conn, run_id) -> dict | None:
         "attempts": attempts,
         "claims_without_attempt": unattached_claims,
         "runner_notes": notes,
+        "retrievals": retrievals,
         "results": results_panel(conn, run_id),
     }
 
@@ -192,6 +207,8 @@ def results_panel(conn, run_id) -> dict:
         a["outcome_counts"] = outcome_counts(conn, a["attempt_id"])
     usage = [c.get("usage") or {} for c in calls]
     total = lambda key: sum(u.get(key) or 0 for u in usage) if calls else None
+    totals = meta.get("agent_totals") or {}  # Owner 2 controller summary, preferred when present
+    pick = lambda key, fallback: totals[key] if totals.get(key) is not None else fallback
     return {
         "verdict": meta.get("verdict"),
         "elapsed_s": meta.get("elapsed_s"),
@@ -205,11 +222,20 @@ def results_panel(conn, run_id) -> dict:
         "model_calls": [{"role": c.get("role"), "seconds": c.get("seconds"),
                          "total_tokens": (c.get("usage") or {}).get("total_tokens"),
                          "error": c.get("error")} for c in calls],
-        "model_call_count": len(calls) if calls else None,
-        "model_seconds": round(sum(c.get("seconds") or 0 for c in calls), 1) if calls else None,
-        "prompt_tokens": total("prompt_tokens"),
-        "completion_tokens": total("completion_tokens"),
-        "total_tokens": total("total_tokens"),
+        "model_call_count": pick("model_calls", len(calls) if calls else None),
+        "model_seconds": pick("model_seconds", round(sum(c.get("seconds") or 0 for c in calls), 1)
+                              if calls else None),
+        "prompt_tokens": pick("prompt_tokens", total("prompt_tokens")),
+        "completion_tokens": pick("completion_tokens", total("completion_tokens")),
+        "total_tokens": pick("total_tokens", total("total_tokens")),
+        "valid_proposal_rate": totals.get("valid_proposal_rate"),
+        "budget": meta.get("budget"),
+        "budget_remaining": totals.get("remaining"),
+        "topology": meta.get("topology"),
+        "reason": meta.get("reason"),
+        "sampling": {k: meta.get(k) for k in ("temperature", "top_p", "reasoning_enabled")},
+        "serving": {k: meta.get(k) for k in ("serving_version", "driver", "cuda",
+                                             "brev_instance", "prefix_caching")},
         "contract_version": meta.get("contract_version"),
         "recorded_run_id": meta.get("recorded_run_id"),
         "database_snapshot_ids": sorted({s.get("database_snapshot_id") for s in

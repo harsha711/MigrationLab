@@ -25,7 +25,7 @@ function verdictBadge(v) {
   if (!v) return `<span class="badge">${unknown()}</span>`;
   const u = String(v).toUpperCase();
   const cls = ["PASS", "REPRODUCED"].includes(u) ? "pass"
-    : ["FAIL", "ERROR", "REFUSED"].includes(u) ? "fail" : "";
+    : ["FAIL", "ERROR", "REFUSED"].includes(u) ? "fail" : u === "INCOMPLETE" ? "warn" : "";
   return `<span class="badge ${cls}">${esc(v)}</span>`;
 }
 
@@ -144,7 +144,9 @@ async function pagePlan(id, s) {
   if (!plan) body = `<p>${unknown("no plan recorded for this attempt")}</p>`;
   else {
     const b = plan.body || {};
-    body = `<p><code>${esc(plan.plan_id)}</code></p>
+    body = `<p><code>${esc(plan.plan_id)}</code>${plan.parent_plan_id
+        ? ` <span class="muted">revises <code>${esc(plan.parent_plan_id)}</code></span>` : ""}${
+        plan.solution_origin ? ` <span class="badge">${esc(plan.solution_origin)}</span>` : ""}</p>
       ${b.summary ? `<p>${esc(b.summary)}</p>` : ""}
       ${b.revision_notes ? `<div class="card"><strong>Revision notes</strong><p>${esc(b.revision_notes)}</p></div>` : ""}
       <h2>Stages</h2>
@@ -197,13 +199,24 @@ async function pageMatrix(id, s) {
 async function pageAgents(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], ["Agents"]]);
-  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}</li>`;
+  const link = (e) => e.resolved
+    ? `<a class="chip ${esc(kindOf(e))}" href="#/obs/${enc(e.observation_id)}">${MARKS[kindOf(e)] || ""} ${esc(e.check_name)}</a>`
+    : `<span class="chip SKIP" title="${esc(e.observation_id)}">not found: ${esc(e.observation_id.split("/").pop())}</span>`;
+  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}
+    ${c.structured
+      ? `<div class="chips" style="margin:4px 0 6px">${c.evidence.length ? c.evidence.map(link).join("") : `<span class="muted">no evidence cited</span>`}</div>`
+      : ""}</li>`;
   const perAttempt = run.attempts.filter((a) => a.claims.length).map((a) =>
     `<h2>${esc(short(a.attempt_id))}</h2><ul>${a.claims.map(claim).join("")}</ul>`).join("");
   const inv = run.claims_without_attempt;
-  const any = perAttempt || inv.length;
+  const allClaims = [...run.attempts.flatMap((a) => a.claims), ...inv];
+  const hasV0 = allClaims.some((c) => !c.structured);
+  const retrieved = (run.retrievals || []).flatMap((r) => r.observation_ids || []);
   return `${runHeader(run, "agents")}
-    ${any ? `<p class="muted">Unstructured v0 claims: free text from agent outputs, no cited evidence IDs.</p>` : `<p class="muted">No agent output in this run.</p>`}
+    ${!allClaims.length ? `<p class="muted">No agent output in this run.</p>`
+      : hasV0 ? `<p class="muted">Claims without evidence chips are unstructured v0 text from agent outputs.</p>` : ""}
+    ${retrieved.length ? `<div class="card"><strong>Prior evidence given to the planner</strong>
+      <div class="chips" style="margin-top:6px">${retrieved.map((id) => `<a class="chip SKIP" href="#/obs/${enc(id)}">${esc(id)}</a>`).join("")}</div></div>` : ""}
     ${perAttempt}
     ${inv.length ? `<details><summary>Investigator findings (${inv.length}, before any attempt)</summary><ul>${inv.map(claim).join("")}</ul></details>` : ""}`;
 }
@@ -214,13 +227,22 @@ async function pageMetrics(id) {
   const r = run.results || {};
   const calls = (r.model_calls || []).map((c) =>
     `<tr><td>${val(c.role)}</td><td>${nr(c.seconds)}</td><td>${nr(c.total_tokens)}</td></tr>`).join("");
+  const b = r.budget || {};
+  const used = (value, limit) => value == null ? nr(null) : limit == null ? esc(value) : `${esc(value)} / ${esc(limit)}`;
+  const sampling = Object.entries(r.sampling || {}).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join(", ");
+  const serving = Object.entries(r.serving || {}).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join(", ");
   return `${runHeader(run, "metrics")}
     <div class="card">${kv([
       ["model", nr(r.model)], ["endpoint", nr(r.base_url)], ["checkpoint", nr(r.checkpoint_revision)],
-      ["serving backend", nr(r.serving_backend)], ["hardware", nr(r.hardware)],
-      ["wall time (s)", nr(r.elapsed_s)], ["model calls", nr(r.model_call_count)],
+      ["serving backend (as recorded)", nr(r.serving_backend)], ["serving details", nr(serving)],
+      ["hardware", nr(r.hardware)], ["topology", nr(r.topology)], ["sampling", nr(sampling)],
+      ["wall time (s)", nr(r.elapsed_s)],
+      ["model calls (used / limit)", used(r.model_call_count, b.max_model_calls)],
       ["model time (s)", nr(r.model_seconds)],
       ["tokens (in / out / total)", r.total_tokens == null ? nr(null) : `${r.prompt_tokens} / ${r.completion_tokens} / ${r.total_tokens}`],
+      ["token budget (used / limit)", used(r.total_tokens, b.max_total_tokens)],
+      ["valid proposal rate", nr(r.valid_proposal_rate)],
+      ["stopped because", nr(r.reason)],
       ["contract", val(run.meta?.contract_version)],
       ["recorded run id", nr(r.recorded_run_id)],
       ["database snapshot", r.database_snapshot_ids ? r.database_snapshot_ids.map((s) => `<code>${esc(s)}</code>`).join(", ") : nr(null)],

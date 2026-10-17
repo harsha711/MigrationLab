@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS runs (
   command TEXT, verdict TEXT, elapsed_s REAL,
   checks_total INTEGER, provenance TEXT, model TEXT,
   meta_json TEXT, summary_json TEXT, manifest_json TEXT, model_calls_json TEXT,
+  request_json TEXT, topology TEXT,      -- Owner 2 review request / agent topology
   ingested_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS attempts (
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE TABLE IF NOT EXISTS plans (
   run_id TEXT REFERENCES runs, file TEXT, plan_id TEXT, attempt_id TEXT,
   body_json TEXT, sql TEXT,
+  parent_plan_id TEXT, solution_origin TEXT,   -- from planner `proposal` events
   PRIMARY KEY (run_id, file)
 );
 CREATE TABLE IF NOT EXISTS stages (
@@ -66,6 +68,7 @@ CREATE TABLE IF NOT EXISTS claims (
 );
 CREATE TABLE IF NOT EXISTS claim_evidence (
   claim_id TEXT REFERENCES claims, observation_id TEXT,
+  resolved INTEGER,                      -- 1 if the ID matches an observation of the run
   PRIMARY KEY (claim_id, observation_id)
 );
 CREATE TABLE IF NOT EXISTS events (
@@ -81,17 +84,21 @@ CREATE INDEX IF NOT EXISTS steps_app ON observation_steps (app_version);
 # Columns added after the first schema. Older stores get them via ALTER TABLE (additive,
 # existing rows kept, new columns NULL = unknown for runs ingested before the upgrade).
 ADDED_COLUMNS = {
-    "observations": ["check_type", "app_scope", "app_commit_json", "database_snapshot_id",
-                     "expected_json", "observed_json"],
+    "observations": {"check_type": "TEXT", "app_scope": "TEXT", "app_commit_json": "TEXT",
+                     "database_snapshot_id": "TEXT", "expected_json": "TEXT",
+                     "observed_json": "TEXT"},
+    "runs": {"request_json": "TEXT", "topology": "TEXT"},
+    "plans": {"parent_plan_id": "TEXT", "solution_origin": "TEXT"},
+    "claim_evidence": {"resolved": "INTEGER"},
 }
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in ADDED_COLUMNS.items():
         have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
-        for col in columns:
+        for col, sql_type in columns.items():
             if col not in have:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {sql_type}")
     conn.commit()
 
 
@@ -128,7 +135,8 @@ def ingest(conn: sqlite3.Connection, run_dir) -> str:
                      "elapsed_s": meta["elapsed_s"], "checks_total": meta["checks_total"],
                      "provenance": meta["provenance"], "model": meta["model"],
                      "meta_json": _j(meta), "summary_json": _j(r["summary"]),
-                     "manifest_json": _j(r["manifest"]), "model_calls_json": _j(r["model_calls"])})
+                     "manifest_json": _j(r["manifest"]), "model_calls_json": _j(r["model_calls"]),
+                     "request_json": _j(meta["request"]), "topology": meta["topology"]})
         for a in r["attempts"]:
             ok = a.get("ok")
             ins("attempts", {"attempt_id": _aid(rid, a["attempt"]), "run_id": rid,
@@ -138,7 +146,8 @@ def ingest(conn: sqlite3.Connection, run_dir) -> str:
         for p in r["plans"]:
             ins("plans", {"run_id": rid, "file": p["file"], "plan_id": p["plan_id"],
                           "attempt_id": _aid(rid, p["attempt"]), "body_json": _j(p["body"]),
-                          "sql": p["sql"]})
+                          "sql": p["sql"], "parent_plan_id": p.get("parent_plan_id"),
+                          "solution_origin": p.get("solution_origin")})
         for s in r["stages"]:
             ins("stages", {"run_id": rid, "seq": s["seq"], "attempt_id": _aid(rid, s["attempt"]),
                            "stage_id": s["stage_id"], "stage_kind": s["stage_kind"],
@@ -172,8 +181,8 @@ def ingest(conn: sqlite3.Connection, run_dir) -> str:
                            "attempt_id": _aid(rid, c["attempt"]), "role": c["role"],
                            "kind": c["kind"], "text": c["text"], "provenance": c["provenance"],
                            "structured": c["structured"]})
-            for oid in c["evidence"]:
-                ins("claim_evidence", {"claim_id": c["claim_id"], "observation_id": oid})
+            for link in c["evidence"]:
+                ins("claim_evidence", {"claim_id": c["claim_id"], **link})
         for e in r["events"]:
             ins("events", {"run_id": rid, "seq": e["seq"], "attempt_id": _aid(rid, e["attempt"]),
                            "stage_id": e["stage_id"], "kind": e["kind"], "t": e["t"],
@@ -182,10 +191,15 @@ def ingest(conn: sqlite3.Connection, run_dir) -> str:
 
 
 def run_dirs(sources=SOURCES):
-    """Every directory under examples/ and runs/ that has an events.jsonl."""
+    """Finished runs under examples/ and runs/: an events.jsonl and a summary.json.
+
+    A run without summary.json is still in progress (or crashed before writing it).
+    Ingesting it would freeze a partial run into the append-only store, so it is skipped.
+    """
     for base in sources:
         if Path(base).is_dir():
-            yield from sorted(p.parent for p in Path(base).glob("*/events.jsonl"))
+            yield from sorted(p.parent for p in Path(base).glob("*/events.jsonl")
+                              if (p.parent / "summary.json").is_file())
 
 
 def ingest_all(conn: sqlite3.Connection, sources=SOURCES) -> list[str]:

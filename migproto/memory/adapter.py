@@ -222,7 +222,12 @@ def plans_by_attempt(run: dict, attempts: list[dict]) -> list[dict]:
 
 
 def claims(run: dict) -> list[dict]:
-    """Free-text agent outputs as unstructured v0 claims (no evidence links, G7)."""
+    """Agent claims.
+
+    Structured: `agent_claim` events (Owner 2 controller, v1 claim shape) carry `evidence[]`
+    observation IDs. Unstructured (v0): free text from `agents/*.json`, no evidence links.
+    A structured tester claim replaces that attempt's free-text tester-report claims.
+    """
     run_id = run["run_id"]
     provenance = None
     for e in run["events"]:
@@ -230,10 +235,26 @@ def claims(run: dict) -> list[dict]:
             provenance = e.get("provenance")
             break
     out = []
+    structured_tester = set()
+    for e in run["events"]:
+        if e["kind"] != "agent_claim":
+            continue
+        m = re.search(r"/(a\d+)/", e.get("claim_id") or "")
+        attempt = m.group(1) if m else None
+        if e.get("role") == "tester":
+            structured_tester.add(attempt)
+        out.append({"claim_id": e.get("claim_id") or f"{run_id}/{attempt or '-'}/claim#{e['seq']}",
+                    "attempt": attempt, "role": e.get("role"),
+                    "kind": e.get("claim_kind"), "text": e.get("text"),
+                    "provenance": e.get("provenance"), "structured": 1,
+                    "evidence": list(e.get("evidence") or []),
+                    "model_call": e.get("model_call")})
     for stem, body in run["agent_files"].items():
         m = re.fullmatch(r"(planner|tester-report)-(\d+)", stem)
         if m:
             role, attempt = m.group(1), f"a{m.group(2)}"
+            if role == "tester-report" and attempt in structured_tester:
+                continue
             for k, field in enumerate(CLAIM_FIELDS[role]):
                 text = (body or {}).get(field)
                 if text:
@@ -252,25 +273,76 @@ def claims(run: dict) -> list[dict]:
     return out
 
 
-def run_meta(run: dict) -> dict:
-    """Model / backend / hardware from the agent_config event. Absent -> None."""
-    cfg = next((e for e in run["events"] if e["kind"] == "agent_config"), None)
+def resolve_evidence(run: dict, claim_list: list[dict], observation_ids: set[str]) -> None:
+    """Turn each claim's evidence IDs into `{observation_id, resolved}` links.
+
+    An exported fixture's directory name differs from the run_id recorded in the IDs; such
+    IDs are rewritten to the directory name when that makes them resolve. IDs that still do
+    not match an observation of this run are kept and marked unresolved.
+    """
+    recorded = run_meta_recorded_id(run)
+    for c in claim_list:
+        links = []
+        for oid in c["evidence"]:
+            if oid not in observation_ids and recorded and oid.startswith(recorded + "/"):
+                rewritten = run["run_id"] + oid[len(recorded):]
+                if rewritten in observation_ids:
+                    oid = rewritten
+            links.append({"observation_id": oid, "resolved": int(oid in observation_ids)})
+        c["evidence"] = links
+
+
+def run_meta_recorded_id(run: dict) -> str | None:
     summary = run["summary"] or {}
-    model = cfg.get("model") if cfg else None
+    return summary.get("run_id") or (run["manifest"] or {}).get("source_run_id")
+
+
+def plan_lineage(run: dict) -> dict:
+    """plan_id -> {parent_plan_id, solution_origin} from planner `proposal` events."""
+    out = {}
+    for e in run["events"]:
+        if e["kind"] == "proposal" and e.get("role") == "planner" and e.get("plan_id"):
+            out[e["plan_id"]] = {"parent_plan_id": e.get("parent_plan_id"),
+                                 "solution_origin": e.get("solution_origin")}
+    return out
+
+
+def run_meta(run: dict) -> dict:
+    """Model, serving, budget and request metadata as recorded. Absent -> None."""
+    cfg = next((e for e in run["events"] if e["kind"] == "agent_config"), None) or {}
+    summary = run["summary"] or {}
+    model = cfg.get("model")
+    request = run["agent_files"].get("review-request")
     scenario = next((e.get("msg") for e in run["events"] if e["kind"] == "scenario"), None)
+    if scenario is None and isinstance(request, dict):
+        scenario = (request.get("change") or {}).get("description")
     return {
         "command": summary.get("command"),
         "verdict": summary.get("verdict"),
         "elapsed_s": summary.get("elapsed_s"),
         "checks_total": summary.get("checks_total"),
         "checks_failed": summary.get("checks_failed"),
-        "provenance": summary.get("provenance") or (cfg or {}).get("provenance"),
-        "source": summary.get("source") or (cfg or {}).get("source"),
+        "provenance": summary.get("provenance") or cfg.get("provenance"),
+        "source": summary.get("source") or cfg.get("source"),
         "model": model,
-        "base_url": cfg.get("base_url") if cfg else None,
-        "checkpoint_revision": cfg.get("checkpoint_revision") if cfg else None,
-        "serving_backend": cfg.get("serving_backend") if cfg else None,
-        "hardware": cfg.get("hardware") if cfg else None,
+        "base_url": cfg.get("base_url"),
+        "checkpoint_revision": cfg.get("checkpoint_revision") or cfg.get("revision"),
+        "serving_backend": cfg.get("serving_backend"),
+        "serving_version": cfg.get("serving_version"),
+        "hardware": cfg.get("hardware"),
+        "driver": cfg.get("driver"),
+        "cuda": cfg.get("cuda"),
+        "brev_instance": cfg.get("brev_instance"),
+        "prefix_caching": cfg.get("prefix_caching"),
+        "temperature": cfg.get("temperature"),
+        "top_p": cfg.get("top_p"),
+        "reasoning_enabled": cfg.get("reasoning_enabled"),
+        "solution_origin": cfg.get("solution_origin"),
+        "topology": summary.get("topology") or cfg.get("topology"),
+        "budget": cfg.get("budget"),
+        "agent_totals": summary.get("agent_totals"),
+        "reason": summary.get("reason"),
+        "request": request if isinstance(request, dict) else None,
         "dev_only_model": model in DEV_ONLY_MODELS,
         "scenario": scenario,
         "contract_version": ((run["manifest"] or {}).get("contract_version")
@@ -278,7 +350,7 @@ def run_meta(run: dict) -> dict:
                              or next((e["contract_version"] for e in run["events"]
                                       if e.get("contract_version")), None)
                              or "migproto.events/v0"),
-        "recorded_run_id": summary.get("run_id") or (run["manifest"] or {}).get("source_run_id"),
+        "recorded_run_id": run_meta_recorded_id(run),
         "start_states": [{k: v for k, v in e.items() if k != "seq"}
                          for e in run["events"] if e["kind"] == "start_state"],
     }
@@ -288,6 +360,12 @@ def load(run_dir) -> dict:
     """Read and normalize one run directory into all record types."""
     run = read_run(run_dir)
     derived = derive(run)
+    claim_list = claims(run)
+    resolve_evidence(run, claim_list, {o["observation_id"] for o in derived["observations"]})
+    plans = plans_by_attempt(run, derived["attempts"])
+    lineage = plan_lineage(run)
+    for p in plans:
+        p.update(lineage.get(p["plan_id"]) or {"parent_plan_id": None, "solution_origin": None})
     return {
         "run_id": run["run_id"],
         "path": run["path"],
@@ -296,7 +374,7 @@ def load(run_dir) -> dict:
         "manifest": run["manifest"],
         "meta": run_meta(run),
         "model_calls": run["agent_files"].get("model_calls") or [],
-        "plans": plans_by_attempt(run, derived["attempts"]),
-        "claims": claims(run),
+        "plans": plans,
+        "claims": claim_list,
         **derived,
     }
