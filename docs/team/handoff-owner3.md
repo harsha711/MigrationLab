@@ -26,7 +26,7 @@
 
 ## Verification run
 ```bash
-uv run pytest -q tests/memory     # 28 passed (run here with Python 3.14 + pytest, since uv is not installed on this Windows machine)
+uv run pytest -q tests/memory     # 48 passed (run here with Python 3.14 + pytest, since uv is not installed on this Windows machine)
 uv run migproto ui                # http://127.0.0.1:8765/
 ```
 
@@ -58,6 +58,39 @@ The adapter reads the runner's implemented v1 shape from Harsha's `runner/verifi
 - **Tested against a synthetic fixture only:** `tests/memory/fixtures/v1-synthetic-staged/` is hand-written from the handoff-01 field list. No real v1 run is in git yet. **Harsha:** once `examples/v1/` exists, add one of those runs to the tests and delete the synthetic fixture.
 
 **Merge note for Harsha:** on `runner/verification-v1`, `cli.py` imports `migproto.lock` at module level, and `lock.py` imports `fcntl`, which doesn't exist on Windows. After both branches merge, `migproto ui` (a read-only command) would crash on Windows at import time. Suggested fix: import `lock` inside `_run` / `cmd_all`, or give `lock.py` a non-`fcntl` fallback.
+
+## Integration round (Owner 2 records, retrieval, Run Review)
+This was coded against `origin/feature/aavritti/small-models` (Owner 2) and `origin/runner/verification-v1` (Harsha) without merging either branch. Every cross-owner import is lazy, so this branch runs on its own, with those features reported as unavailable.
+
+**What this branch now does:**
+- **Ingests Owner 2's output:**
+  - `agent_claim` events become structured claims linked to their evidence. The recorded run-id prefix is rewritten to the directory name when that resolves the link. IDs that still don't match an observation are kept and marked `resolved=0`.
+  - Planner `proposal` events give plan lineage (`parent_plan_id`, `solution_origin`).
+  - `agents/review-request.json` gives the requested change.
+  - `agent_config` gives topology, budget, sampling and serving fields. `summary.agent_totals` and `reason` are read, and `INCOMPLETE` passes through.
+- **Skips unfinished runs:** run directories without `summary.json` are never ingested, so an in-progress run can't be frozen half-written into the append-only store.
+- **`memory.retrieval.prior_evidence(change)`** is ready for the controller.
+- **Run Review** (`migproto/ui/review.py`) is implemented. It has only been tested with a fake controller and a fake lock.
+
+**For Owner 2:**
+1. **Retrieval hook.** Suggested call in `run_review`, before `planner-1`:
+   ```python
+   from ..memory import retrieval
+   prior = retrieval.prior_evidence(review["change"], exclude_run_id=log.run_id)
+   log.write_json("agents/prior-evidence.json", prior)
+   log.event("retrieval", observation_ids=[o["observation_id"] for o in prior["observations"]])
+   # then pass prior["observations"] to roles.plan(...) through a new keyword argument
+   ```
+   - **Filters are hard-coded:** only finished local runs, only `agent:` provenance (so scripted `plan_v2` content never reaches a prompt), and only the same table, old column and new column. A run without a review request is excluded.
+   - **Prompt wording is yours.** The UI already shows `retrieval` events on the Agents page.
+2. **`serving_metadata()` defaults `serving_backend` to `"vllm"`** even when nothing was configured. Runs on Ollama or a cloud model would then *record* vLLM. Please default it to `None`, so "not recorded" stays honest. The UI labels the field "as recorded".
+3. **Evidence IDs match.** Your `<run_dir>/a<N>/<check>#<line>` matches the store's v0-derived IDs, and Harsha's v1 `observation_id` uses the same format.
+4. **Summary:** Run Review writes the run summary with the same verdict rule as `cli._run`. A shared helper in the controller would avoid keeping the two in sync.
+
+**For Harsha:**
+1. **Lock:** Run Review takes `migproto.lock` (`acquire("ui-review-<mode>")` plus `update_owner(run_id=...)`) in its worker thread and calls `run_review` in that same thread, relying on re-entrancy when `execute_plan` takes the lock again. If another execution holds it, the UI answers 409 with the owner details.
+2. **Windows:** the `fcntl` merge note above still applies. On Windows, Run Review reports "execution lock unavailable on this platform" instead of failing.
+3. **Unfinished runs:** the store skips runs without `summary.json`. If a crashed run never writes one, it stays out of the store until someone writes an `ERROR` summary.
 
 ## Decisions to review
 1. **Schema state:** applied to every check inside a SQL stage, from that stage's `schema` event (rule 4). It's `None` in `S0`, `deploy_new` and `retire_old`.
