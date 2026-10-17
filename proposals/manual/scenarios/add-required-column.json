@@ -1,0 +1,17 @@
+{
+  "scenario": "add-required-column",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "Django drops the database default after adding the column, so old-app inserts (which omit the column) violate NOT NULL."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "The database default keeps old-app inserts valid during the overlap."
+    }
+  }
+}

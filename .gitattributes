@@ -1,2 +1,4 @@
 # Olist-format test CSVs contain an embedded newline inside a quoted field; keep LF.
 tests/fixtures/olist-mini/*.csv eol=lf
+# Patch series are applied with `git am`; keep their bytes exact (no CRLF conversion).
+patches/**/*.patch -text
