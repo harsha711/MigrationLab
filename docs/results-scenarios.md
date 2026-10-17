@@ -47,6 +47,24 @@ Branch `scenarios/catalogue` (based on `seed/olist`, which is based on `runner/v
 
 The legacy data for B3 (orphan `referrer_id` values) is created by the scenario's `prepare_sql` in each run database only, never in the template.
 
+## Same matrix on the default synthetic seed (Harsha's dataset)
+I also ran everything on the runner's default seed: `migproto baseline --rebuild-seed`, which is `populatedb` plus 200 synthetic customers.
+- **Seed:** 245 users, 191 with a note, one deliberate 2,000-character note.
+- **Snapshot:** every run started from `seed:61e4e7a7f3caa544`, **the same snapshot ID as Harsha's own runs** in `docs/team/handoff-01.md`. The rebuilt dataset is identical, so these numbers compare directly.
+- **Runs:** 2026-10-17, 19:04 to 19:21.
+
+| Check | Synthetic seed | Olist 10k seed |
+|---|---|---|
+| Scenario plans matching their expected verdict and recommendation | **22 / 22** | 22 / 22 |
+| Rename `unsafe` | REPRODUCED 7/7 | REPRODUCED 7/7 |
+| Rename plan v1 | FAIL 21 / 8 / 1 (same 9 checks) | FAIL 21 / 8 / 1 |
+| Rename plan v2 | PASS 34/34 | PASS 34/34 |
+| B1 unsafe: notes silently truncated | **1** (the 2,000-character note) | **6** (real reviews over 255 characters) |
+| B4 unsafe: notes emptied by the irreversible migration | **182** | **4,364** |
+| B2: duplicates block the unique constraint | yes (demo users and empty last names collide; the synthetic `Customer0000`… names themselves are unique) | yes (duplicate cities) |
+
+**Verdicts are the same on both datasets.** Only the *amount* of damage differs, and it grows with real data. B1 is the clearest case: the synthetic seed has one artificial long note, while real data has six genuine customer reviews that would be cut.
+
 ## Incidents during the runs (reported, not hidden)
 1. **WSL2 clock jump → A5 safe infrastructure failure.** In run `20261017-180655-staged` the wall clock jumped **+1,573 s** between t=20.8 s and t=34.0 s. Saleor checks JWT expiry against the wall clock, so the old app's freshly issued token was rejected with `ExpiredSignatureError`, and every old-app call failed before reaching the database.
    - I checked all 24 runs; this was the only jump.
