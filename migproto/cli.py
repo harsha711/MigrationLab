@@ -18,7 +18,9 @@ def _run(command: str, fn) -> int:
         return 2
     verdict = result.pop("verdict", None) or ("PASS" if result.get("ok") else "FAIL")
     log.summary(verdict, **result)
-    return 0 if verdict in ("PASS", "REPRODUCED") else 1
+    if verdict in ("PASS", "REPRODUCED"):
+        return 0
+    return 2 if verdict == "ERROR" else 1
 
 
 def cmd_setup(args) -> int:
@@ -47,7 +49,10 @@ def cmd_staged(args) -> int:
 
 def cmd_agent_loop(args) -> int:
     from .agents import loop
-    return _run(f"agent-loop-{args.proposals}", lambda log: loop.run(log, args.proposals))
+    return _run(f"agent-loop-{args.proposals}", lambda log: loop.run(
+        log, args.proposals, request=getattr(args, "request", None),
+        topology=getattr(args, "topology", None)
+    ))
 
 
 def cmd_all(args) -> int:
@@ -77,6 +82,9 @@ def main(argv=None) -> int:
     s.add_argument("--provenance", default="scripted")
     a = sub.add_parser("agent-loop", help="investigator -> planner -> tester with one revision")
     a.add_argument("--proposals", choices=["scripted", "llm"], default="scripted")
+    a.add_argument("--request", help="path to a migproto.contracts/v1 review request JSON")
+    a.add_argument("--topology", choices=["roles", "single"],
+                   help="override the request's agent topology")
     al = sub.add_parser("all", help="setup, baseline, unsafe, scripted agent loop")
     al.add_argument("--rebuild-seed", action="store_true")
     al.add_argument("--skip-pytest", action="store_true")

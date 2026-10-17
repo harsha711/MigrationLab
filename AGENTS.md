@@ -16,7 +16,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Scripted one-way sync (plan v1, manually authored and deliberately flawed):** 9 of 29 checks failed (old writes never reached `customer_note`, 7 rows disagreed), and the runner refused the contract stage (`examples/scripted-sync-failure`).
 - **Scripted staged alternative (plan v2, manually authored):** 33 of 33 documented checks passed (`examples/scripted-staged-success`). The pass covers only those checks: sequential interleaving, 245 rows, one machine.
 - **Live run:** one `gpt-oss:120b-cloud` run (via Ollama, cloud-backed) generated its own SQL. Attempt 1 had 30 checks, of which 1 failed: `retirement_gate`, because the contract stage was placed before `retire_old`. After that feedback, attempt 2 reordered the stages and passed 41 of 41. The run made 8 model calls, used 30,036 total tokens, and took 88.2 s (`examples/live-ordering-revision`).
-- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. No Nemotron Lightning, vLLM or NeMo Gym integration exists yet.
+- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. The Nemotron/vLLM agent client and controller are implemented but have not been deployed or run; no NeMo Gym integration exists yet.
 - **Multi-agent claim:** no superiority over a single agent has been established. No single-agent baseline exists yet.
 - **Runner tests:** `uv run pytest` runs 34 tests covering the SQL guard, plan schema, and trigger semantics on a scratch table.
 
@@ -51,6 +51,28 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 
 Data flow: `migproto/agents/loop.py` asks roles for proposals. It passes plan and tests to `staged.run`, which starts `old` and `new-staged` servers on a fresh `migproto_run_*` clone of the `migproto_seed` template. The runner executes SQL stages through `db.run_guarded` and records every observation through `RunLog`.
 
+### Agent-layer execution model (Owner 2)
+
+Nemotron is the reasoning model, vLLM is the inference-serving layer, and `migproto/agents/loop.py` is the orchestrator. Do not describe Nemotron or vLLM as the orchestrator, and do not move runner authority into the agent layer.
+
+One review currently runs sequentially because every step consumes the previous step's artifact:
+
+```text
+review request
+  -> investigator findings
+  -> planner plan
+  -> tester proposals
+  -> deterministic runner observations
+  -> tester evidence summary
+  -> optional planner revision
+  -> tester proposals
+  -> deterministic runner verdict
+```
+
+Roles do not share chat history or communicate directly. The controller passes explicit JSON artifacts between isolated role calls. One shared vLLM endpoint serves the pinned Nemotron checkpoint for every role and, when implemented, the single-agent topology. Parallelism is limited to independent reviews or serving-level batching; do not claim parallel role execution for the current workflow.
+
+Owner 2 owns the agent-side integration points: review request to controller, controller to role prompts, OpenAI-compatible client to vLLM, structured model response to schema validation, runner evidence back to the revision loop, and agent telemetry to `RunLog`. Harsha owns plan execution and verdicts; Owner 3 owns persisted evidence queries and UI. Cross-owner interface changes require a handoff note and owner review.
+
 ## Commands
 
 Prerequisites: Linux with Docker (Docker Desktop is started automatically through `systemctl --user start docker-desktop` if it is down), `git`, and `uv` (it provides Python 3.12). `libmagic` is needed by Saleor. Ports used: 55432 (Postgres), 56379 (Valkey), 8001 (old app), 8002 (new app).
@@ -69,8 +91,8 @@ uv run pytest                                   # 34 runner tests, under 2 s, ne
 
 Live model configuration through environment variables (see `.env.example`; the code reads the process environment and does **not** auto-load `.env`):
 
-- `MIGPROTO_LLM_BASE_URL` (default `http://localhost:11434/v1`)
-- `MIGPROTO_LLM_MODEL` (default `gpt-oss:120b-cloud`)
+- `MIGPROTO_LLM_BASE_URL` (default `http://localhost:8000/v1`)
+- `MIGPROTO_LLM_MODEL` (required for live runs; no development-model fallback)
 - `MIGPROTO_LLM_API_KEY` (default `unused`)
 
 Do **not** export `UV_PROJECT_ENVIRONMENT` in your shell. `setup` sets it only for the Saleor sync. If it leaks into `uv run migproto`, uv syncs the runner's lockfile into Saleor's venv.
@@ -123,3 +145,5 @@ Exit codes: 0 on `PASS` or `REPRODUCED`, 1 on `FAIL`, 2 on `ERROR`. Every comman
 Overview and integration order: `docs/team/README.md`. Contracts: `docs/contracts.md` (changes coordinated by Harsha).
 
 If the user states their role, work only on that assignment and its necessary dependencies. If no role is given, read `docs/team/` and ask which role to take before modifying implementation. Do not silently take over another teammate's modules. Propose cross-module or contract changes in your handoff notes instead.
+
+For Owner 2 work, changes are limited to the owned agent paths and documentation listed in `docs/team/02-agents.md`. Shared CLI changes require Harsha's review. Do not modify runner verification, memory/UI, NeMo Gym, Saleor worktrees, or shared contracts as part of agent implementation; document the requested interface change for the appropriate owner instead.
