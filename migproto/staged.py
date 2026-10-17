@@ -292,10 +292,14 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                                     provenance=tester_prov)
                 cols = db.columns(dbname, "account_user")
                 if sc.rename_hooks:
+                    # Staged rename plans have both columns here; an immediate rename (apply
+                    # plan) has already dropped `note`, so only compare columns that exist.
                     if "customer_note" in cols:
-                        checks.columns_agree(ctx, sid)
+                        if "note" in cols:
+                            checks.columns_agree(ctx, sid)
                         checks.preservation(ctx, "customer_note", sid)
-                    checks.preservation(ctx, "note", sid)
+                    if "note" in cols:
+                        checks.preservation(ctx, "note", sid)
                 else:
                     _data_checks(ctx, sc, sid, cols, "deploy")
 
