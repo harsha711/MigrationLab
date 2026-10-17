@@ -37,6 +37,18 @@
     <button id="drawer-close" class="drawer-close" aria-label="Close evidence">&times;</button>
     <div id="drawer-content"></div>
   </aside>
+  <div id="welcome-tour" class="tour-overlay" hidden>
+    <section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+      <button class="tour-close" data-tour-close aria-label="Close tour">&times;</button>
+      <span class="tour-kicker">2 MINUTE INTERACTIVE TOUR</span>
+      <div class="tour-orb" aria-hidden="true"><span>M</span><i></i><i></i></div>
+      <h2 id="tour-title">See a risky migration become safe.</h2>
+      <p>Walk through the rollout, inspect old and new application evidence, then reveal how agent feedback revised the plan.</p>
+      <div class="tour-points"><span><b>1</b> Pick a stage</span><span><b>2</b> Open evidence</span><span><b>3</b> Compare revisions</span></div>
+      <div class="tour-actions"><button class="button ghost" data-tour-close>Explore myself</button><button class="primary" data-tour-start>Start the tour &#8594;</button></div>
+    </section>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
 </html>

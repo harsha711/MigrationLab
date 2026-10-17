@@ -40,6 +40,7 @@ def test_static_and_runs(base_url):
     status, body = get(base_url + "/")
     assert status == 200 and b"Replay Recorded Run" in body
     assert b"Guided demo" in body and b"evidence-drawer" in body
+    assert b"welcome-tour" in body and b'id="toast"' in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
@@ -88,3 +89,6 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "FAILED PLAN &#8594; REVISED PLAN" in js
     assert "workspace-layout" in css
     assert "data-workspace-row" in js
+    assert "migrationlab-tour-seen" in js
+    assert "data-reveal-revision" in js
+    assert "celebration-spark" in css
