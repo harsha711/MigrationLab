@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, lastFocus: null };
+const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, workspaceAttempt: null, tourStep: 0, lastFocus: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -100,34 +100,13 @@ async function pageRuns() {
       <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
       <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
   }).join("");
-  return `<section class="hero">
-      <div class="hero-copy"><span class="eyebrow">EVIDENCE-DRIVEN MIGRATION REVIEW</span>
-        <h1>Ship schema changes<br><span>without flying blind.</span></h1>
-        <p>Replay how agents investigate, propose, test, fail, and revise while a deterministic runner remains the source of truth.</p>
-        <div class="hero-actions">${demo ? `<a class="button primary" href="#/workspace/${enc(demo.run_id)}">&#9655; Open interactive workspace</a>` : ""}<button class="button ghost" data-scroll-runs>Explore evidence</button></div>
-      </div>
-      <div class="hero-visual" aria-label="Agent workflow"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <div class="flow-node investigator"><small>01</small><strong>Investigate</strong><span>Code impact</span></div>
-        <div class="flow-node planner"><small>02</small><strong>Plan</strong><span>Staged SQL</span></div>
-        <div class="flow-node runner"><small>03</small><strong>Verify</strong><span>Runner evidence</span></div>
-        <div class="flow-line line-a"></div><div class="flow-line line-b"></div></div>
-    </section>
-    <section class="stat-grid">
-      <div class="stat-card"><span>Recorded reviews</span><strong>${fmt(details.length)}</strong><small>Fixtures + local runs</small></div>
-      <div class="stat-card"><span>Checks executed</span><strong>${fmt(checks)}</strong><small>Runner observations</small></div>
-      <div class="stat-card"><span>Plan attempts</span><strong>${fmt(attempts)}</strong><small>Failed attempts preserved</small></div>
-      <div class="stat-card danger"><span>Failures surfaced</span><strong>${fmt(failures)}</strong><small>Evidence, not hidden</small></div>
-    </section>
-    <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
-      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button${controller_available ? " primary" : "-muted"}" href="#/review" title="${esc(controller_reason || "Start a live review through the controller")}">Run Review</a></div></section>
-    <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
-      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
-      <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
-    <div class="card table-wrap runs-card"><table>
-      <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
-      ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
-    </table></div>
-    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(controller_reason || "The controller is not connected.")} Replay stays read-only.</span></div>`}`;
+  const activity = details.slice(0, 4).map((d) => `<a href="#/run/${enc(d.run_id)}" class="activity-item"><span class="activity-icon ${d.meta?.verdict === "PASS" ? "ok" : "warn"}">${d.meta?.verdict === "PASS" ? "&#10003;" : "!"}</span><span><strong>${esc(d.run_id)}</strong><small>${d.attempts.length} attempt${d.attempts.length === 1 ? "" : "s"} · ${d.meta?.checks_total || 0} checks</small></span><time>${esc(d.meta?.verdict || "recorded")}</time></a>`).join("");
+  const demoStages = demo?.attempts.at(-1)?.stages || [];
+  return `<header class="dashboard-title"><div><span class="eyebrow">REVIEW COMMAND CENTER</span><h1>Migration safety, at a glance.</h1><p>Inspect plans, replay compatibility evidence, and understand revisions from one workspace.</p></div><div class="dashboard-actions"><button class="button ghost" data-command-open aria-label="Open quick navigation">&#8984; Quick find</button>${demo ? `<a class="button primary" href="#/workspace/${enc(demo.run_id)}">Open latest review &#8594;</a>` : ""}</div></header>
+    <section class="kpi-ribbon" aria-label="Review summary"><article><span>Reviews</span><strong>${fmt(details.length)}</strong><small>recorded runs</small></article><article><span>Runner checks</span><strong>${fmt(checks)}</strong><small>executed observations</small></article><article><span>Plan attempts</span><strong>${fmt(attempts)}</strong><small>history preserved</small></article><article><span>Issues caught</span><strong>${fmt(failures)}</strong><small>before deployment</small></article></section>
+    <section class="command-grid"><article class="featured-review"><header><div><span class="eyebrow">FEATURED REVIEW</span><h2>${esc(demo?.run_id || "No recorded review")}</h2></div>${demo ? `<span class="review-outcome">Revised plan passed</span>` : ""}</header><p>${esc(demo?.attempts.at(-1)?.plans?.[0]?.body?.summary || "Open a recorded migration review to inspect its evidence.")}</p><div class="mini-journey">${demoStages.map((s, i) => `<span title="${stageTitle(s)}"><i>${i + 1}</i><b>${stageTitle(s)}</b></span>`).join("")}</div><footer><div><strong>${demo?.attempts.length || 0}</strong><small>attempts</small></div><div><strong>${demo?.meta?.checks_total || 0}</strong><small>checks</small></div><div><strong>${demo?.results?.model_call_count ?? "—"}</strong><small>model calls</small></div>${demo ? `<a href="#/workspace/${enc(demo.run_id)}">Review evidence &#8594;</a>` : ""}</footer></article>
+      <aside class="activity-panel"><header><span class="eyebrow">RECENT ACTIVITY</span><a href="#runs-table" data-scroll-runs>View all</a></header>${activity || `<p class="muted">No activity recorded.</p>`}</aside></section>
+    <section id="runs-table" class="library-panel"><header><div><span class="eyebrow">REVIEW LIBRARY</span><h2>All recorded reviews</h2></div><div class="row"><button id="compare" disabled>Compare selected</button><a class="button${controller_available ? " primary" : "-muted"}" href="#/review" title="${esc(controller_reason || "Start a live review through the controller")}">New review</a></div></header><div class="library-tools"><label class="search-field"><span>&#8981;</span><input id="run-search" type="search" placeholder="Search run, model, or verdict" aria-label="Search runs"></label><select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select><select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div><div class="table-wrap"><table><thead><tr><th scope="col"></th><th scope="col">Review</th><th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Attempts</th><th scope="col">Checks</th><th scope="col">Issues</th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}</tbody></table></div>${controller_available ? "" : `<footer><span class="status-dot"></span><p><strong>Replay mode</strong> New reviews are unavailable here: ${esc(controller_reason || "the controller is not connected")}.</p></footer>`}</section>`;
 }
 
 function replaySteps(run) {
@@ -220,7 +199,8 @@ async function pageWorkspace(id) {
   const matrices = await Promise.all(run.attempts.map((a) => api(`/api/matrix?run=${enc(id)}&attempt=${enc(a.attempt_id)}`)));
   const first = run.attempts[0];
   const revised = run.attempts[1] || first;
-  const selectedAttempt = revised;
+  const selectedAttempt = run.attempts.find((a) => short(a.attempt_id) === state.workspaceAttempt) || revised;
+  state.workspaceAttempt = short(selectedAttempt?.attempt_id);
   const matrix = matrices[run.attempts.indexOf(selectedAttempt)] || {rows: [], db_checks: []};
   const stages = selectedAttempt?.stages || [];
   const selectedId = state.workspaceStage || stages[0]?.stage_id;
@@ -251,7 +231,7 @@ async function pageWorkspace(id) {
     <section class="workspace-layout">
       <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}
         <div class="execution-controls"><span class="eyebrow">REPLAY CONTROLS</span><button data-reset-workspace>Restart replay</button><button data-replay-selected>Replay selected step</button><button data-focus-checks>View recorded checks</button><small>Replay controls only. No database is changed.</small></div></aside>
-      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><span class="source-pill"><i></i> Live from recorder</span></div>
+      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><div class="attempt-switch" aria-label="Select plan attempt">${run.attempts.map((a) => `<button data-attempt-select="${esc(short(a.attempt_id))}" class="${a === selectedAttempt ? "active" : ""}" aria-pressed="${a === selectedAttempt}">${esc(short(a.attempt_id))}<span class="${a.ok === 1 ? "ok" : "bad"}">${a.ok === 1 ? "Passed" : "Blocked"}</span></button>`).join("")}</div></div>
         <div class="scope-filters"><select id="workspace-version" aria-label="Filter by application version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage" aria-label="Filter by migration stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status" aria-label="Filter by test status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select><p class="scope-unavailable">Additional scope not recorded in this v0 fixture: schema fingerprint and snapshot ID.</p></div>
         <div class="compat-table" id="recorded-checks" tabindex="-1"><table><caption>Old and new application compatibility by migration stage. Select a result to inspect its evidence.</caption><thead><tr><th scope="col">Migration stage</th><th scope="col">Old application</th><th scope="col">New application</th></tr></thead><tbody>${rows}</tbody></table></div>
         <div class="scope-callout"><b>Why scope matters</b><p>A pass for the new application does not prove the old application can read or write the same schema. Every cell is derived from observations scoped to an application path and migration stage.</p></div>
@@ -588,6 +568,24 @@ function closeTour() {
   state.lastFocus?.focus?.();
 }
 
+async function openCommand() {
+  state.lastFocus = document.activeElement;
+  const palette = $("#command-palette");
+  palette.hidden = false;
+  requestAnimationFrame(() => { palette.classList.add("open"); $("#command-search").value = ""; $("#command-search").focus(); });
+  try {
+    const {runs} = await api("/api/runs");
+    $("#command-results").innerHTML = `<a href="#/"><span>Dashboard</span><kbd>Home</kbd></a><a href="#/workspace/live-ordering-revision"><span>Interactive review workspace</span><kbd>Review</kbd></a><a href="#/demo/live-ordering-revision"><span>Guided replay</span><kbd>Demo</kbd></a>${runs.map((r) => `<a href="#/run/${enc(r.run_id)}"><span>${esc(r.run_id)}</span><kbd>${esc(r.verdict || "run")}</kbd></a>`).join("")}`;
+  } catch (_) { /* Static navigation remains available if the index cannot load. */ }
+}
+
+function closeCommand() {
+  const palette = $("#command-palette");
+  palette.classList.remove("open");
+  setTimeout(() => { palette.hidden = true; }, 160);
+  state.lastFocus?.focus?.();
+}
+
 function trapFocus(container, ev) {
   if (ev.key !== "Tab") return;
   const items = [...container.querySelectorAll('a[href],button:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')];
@@ -658,6 +656,10 @@ async function route() {
 }
 
 document.addEventListener("click", (ev) => {
+  if (ev.target.closest("[data-command-open]")) { openCommand(); return; }
+  if (ev.target.id === "command-palette" || ev.target.closest("#command-results a")) { closeCommand(); return; }
+  const attemptSelect = ev.target.closest("[data-attempt-select]");
+  if (attemptSelect) { state.workspaceAttempt = attemptSelect.dataset.attemptSelect; state.workspaceStage = null; route(); showToast(`Showing ${state.workspaceAttempt} evidence.`); return; }
   if (ev.target.closest("[data-open-tour]")) { openTour(); return; }
   if (ev.target.closest("[data-tour-close]")) { closeTour(); return; }
   if (ev.target.closest("[data-tour-start]")) {
@@ -705,6 +707,7 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("#theme-toggle")) {
     const root = document.documentElement;
     root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+    root.setAttribute("data-bs-theme", root.dataset.theme);
     localStorage.setItem("migrationlab-theme", root.dataset.theme); return;
   }
   if (ev.target.closest("a, input, button, summary")) return;
@@ -731,13 +734,29 @@ document.addEventListener("change", (ev) => {
   btn.disabled = picked.length !== 2;
   btn.onclick = () => { location.hash = `#/compare/${enc(picked[0])}/${enc(picked[1])}`; };
 });
-document.addEventListener("input", (ev) => { if (ev.target.id === "run-search") filterRuns(); });
+document.addEventListener("input", (ev) => {
+  if (ev.target.id === "run-search") filterRuns();
+  if (ev.target.id === "command-search") {
+    const q = ev.target.value.toLowerCase();
+    document.querySelectorAll("#command-results a").forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(q); });
+  }
+});
 document.addEventListener("keydown", (ev) => {
   const tour = $("#welcome-tour");
   const drawer = $("#evidence-drawer");
+  const command = $("#command-palette");
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") { ev.preventDefault(); command.hidden ? openCommand() : closeCommand(); return; }
+  if (!command.hidden && ["ArrowDown", "ArrowUp"].includes(ev.key)) {
+    ev.preventDefault();
+    const items = [...command.querySelectorAll("#command-results a:not([hidden])")];
+    const current = items.indexOf(document.activeElement);
+    const index = ev.key === "ArrowDown" ? Math.min(items.length - 1, current + 1) : Math.max(0, current < 0 ? items.length - 1 : current - 1);
+    items[index]?.focus(); return;
+  }
   if (!tour.hidden) trapFocus(tour, ev);
+  else if (!command.hidden) trapFocus(command, ev);
   else if (drawer.classList.contains("open")) trapFocus(drawer, ev);
-  if (ev.key === "Escape") { if (!tour.hidden) closeTour(); else if (drawer.classList.contains("open")) closeDrawer(); }
+  if (ev.key === "Escape") { if (!tour.hidden) closeTour(); else if (!command.hidden) closeCommand(); else if (drawer.classList.contains("open")) closeDrawer(); }
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowRight") rerenderReplay(1);
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowLeft") rerenderReplay(-1);
   if (location.hash.startsWith("#/workspace/") && ["ArrowRight", "ArrowLeft"].includes(ev.key) && !ev.target.matches("input,select,textarea")) {
@@ -750,4 +769,5 @@ document.addEventListener("keydown", (ev) => {
 });
 window.addEventListener("hashchange", route);
 document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "dark";
+document.documentElement.setAttribute("data-bs-theme", document.documentElement.dataset.theme);
 route();
