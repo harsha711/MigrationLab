@@ -1,0 +1,33 @@
+{
+  "plan_id": "a1-rename-note-001",
+  "summary": "Synthetic plan a1-rename-note-001.",
+  "write_consistency": "Two triggers mirror writes.",
+  "revision_notes": "",
+  "provenance": "agent:nemotron-3.5-lightning",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new"
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note"
+      ]
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}
