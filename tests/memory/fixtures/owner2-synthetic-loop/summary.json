@@ -1,0 +1,57 @@
+{
+  "note": "SYNTHETIC test fixture shaped after Owner 2's run_review output (feature/aavritti/small-models). Not runner output; no Lightning run happened.",
+  "command": "agent-loop-llm",
+  "verdict": "PASS",
+  "elapsed_s": 74.5,
+  "checks_total": 11,
+  "checks_failed": [
+    "retirement_gate"
+  ],
+  "ok": true,
+  "source": "llm",
+  "topology": "roles",
+  "model": "nemotron-3.5-lightning",
+  "provenance": "agent:nemotron-3.5-lightning",
+  "attempts": [
+    {
+      "attempt": 1,
+      "plan_id": "a1-rename-note-001",
+      "ok": false,
+      "halted": "contract stage contract refused: old app still running",
+      "failed_checks": [
+        "retirement_gate"
+      ]
+    },
+    {
+      "attempt": 2,
+      "plan_id": "a2-rename-note-002",
+      "ok": true,
+      "halted": null,
+      "failed_checks": []
+    }
+  ],
+  "revision_exercised": true,
+  "revision_fixed_failures": true,
+  "agent_totals": {
+    "max_revisions": 1,
+    "max_model_calls": 10,
+    "max_total_tokens": 40000,
+    "max_wall_seconds": 600,
+    "model_calls": 8,
+    "prompt_tokens": 9000,
+    "completion_tokens": 12000,
+    "total_tokens": 21000,
+    "model_seconds": 31.2,
+    "valid_proposals": 8,
+    "exhausted_reason": null,
+    "wall_seconds": 74.5,
+    "valid_proposal_rate": 1.0,
+    "remaining": {
+      "model_calls": 2,
+      "tokens": 19000,
+      "wall_seconds": 525.5
+    }
+  },
+  "reason": null,
+  "run_id": "20261017-160000-agent-loop-llm"
+}

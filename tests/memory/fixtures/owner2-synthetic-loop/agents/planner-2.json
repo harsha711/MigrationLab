@@ -1,0 +1,5 @@
+{
+  "plan_id": "a2-rename-note-002",
+  "write_consistency": "Two triggers mirror writes.",
+  "revision_notes": "Moved retire_old before contract."
+}

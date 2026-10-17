@@ -1,0 +1,27 @@
+{
+  "contract_version": "migproto.contracts/v1",
+  "request_id": "default-user-note-rename",
+  "target": {
+    "app": "saleor",
+    "commit": "0c0e2697cc72aa999f7786ae8aeda7665bd4285f"
+  },
+  "change": {
+    "description": "Rename Django field User.note (account_user.note, text NULL) to customer_note. Keep the public GraphQL field name note.",
+    "table": "account_user",
+    "old_column": "note",
+    "new_column": "customer_note",
+    "intentionally_introduced": true
+  },
+  "app_versions": {
+    "old": "old",
+    "new": "new-staged"
+  },
+  "mode": "llm",
+  "agent_topology": "roles",
+  "budget": {
+    "max_revisions": 1,
+    "max_model_calls": 10,
+    "max_total_tokens": 40000,
+    "max_wall_seconds": 600
+  }
+}
