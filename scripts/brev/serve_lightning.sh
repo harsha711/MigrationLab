@@ -27,6 +27,11 @@ if [ ! -x "$OUT/venv/bin/vllm" ]; then
   uv venv "$OUT/venv" --python 3.12
   uv pip install --python "$OUT/venv/bin/python" "vllm==$VLLM_VERSION"
 fi
+# The resolver pulls nvcc, crt and nvvm 13.4 while torch's CUDA runtime headers are 13.0, and
+# FlashInfer's JIT build refuses mismatched compiler and headers. Pin the compiler to the
+# runtime's release (13.0.88, the version cuda-toolkit 13.0.3 itself requires).
+uv pip install --python "$OUT/venv/bin/python" \
+  "nvidia-cuda-nvcc==13.0.88.*" "nvidia-cuda-crt==13.0.88.*" "nvidia-nvvm==13.0.88.*"
 
 # The PyPI vLLM wheel uses CUDA 13 PyTorch. On an instance whose driver is older (Brev's
 # Scaleway H100 image ships driver 570 / CUDA 12.8), CUDA_COMPAT=13-0 installs NVIDIA's
@@ -35,6 +40,24 @@ if [ -n "${CUDA_COMPAT:-}" ]; then
   dpkg -s "cuda-compat-$CUDA_COMPAT" >/dev/null 2>&1 \
     || sudo apt-get install -y "cuda-compat-$CUDA_COMPAT"
   export LD_LIBRARY_PATH="/usr/local/cuda-${CUDA_COMPAT/-/.}/compat${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+# Humming (the Hopper NVFP4 fallback) JIT-compiles kernels through a helper binary that loads
+# libnvrtc-builtins by name; the pip CUDA libraries are not on the default search path.
+CU_LIB=$("$OUT/venv/bin/python" -c "import nvidia, os; print(os.path.join(nvidia.__path__[0], 'cu13', 'lib'))" 2>/dev/null || true)
+[ -d "$CU_LIB" ] && export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$CU_LIB"
+# Humming also builds a C++ launcher with torch.utils.cpp_extension, which needs ninja (in the
+# venv) on PATH and a CUDA toolkit; use the pip one when the image has none.
+export PATH="$OUT/venv/bin:$PATH"
+if [ -z "${CUDA_HOME:-}" ] && [ -d "$CU_LIB" ]; then
+  export CUDA_HOME="${CU_LIB%/lib}"
+  # FlashInfer links its JIT ops with -L$CUDA_HOME/lib64{,/stubs} -lcudart -lcuda; the pip
+  # layout has lib/ and only versioned sonames, so add the links a full toolkit would have.
+  ln -sfn lib "$CUDA_HOME/lib64"
+  ln -sf libcudart.so.13 "$CU_LIB/libcudart.so"
+  mkdir -p "$CU_LIB/stubs"
+  LIBCUDA=/usr/lib/x86_64-linux-gnu/libcuda.so
+  [ -n "${CUDA_COMPAT:-}" ] && LIBCUDA="/usr/local/cuda-${CUDA_COMPAT/-/.}/compat/libcuda.so"
+  ln -sf "$LIBCUDA" "$CU_LIB/stubs/libcuda.so"
 fi
 
 # "1x H100 (max throughput)" recipe from the model card (docs/bounties.md, section 5).
@@ -59,7 +82,7 @@ DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1)
 CUDA=$(nvidia-smi | sed -n 's/.*CUDA Version: *\([0-9.]*\).*/\1/p' | head -1)
 VLLM_INSTALLED=$("$OUT/venv/bin/python" -c "import vllm; print(vllm.__version__)")
 COMMAND="VLLM_HUMMING_MOE_GEMM_TYPE=indexed vllm serve $MODEL ${FLAGS[*]}"
-[ -n "${CUDA_COMPAT:-}" ] && COMMAND="LD_LIBRARY_PATH=$LD_LIBRARY_PATH (cuda-compat-$CUDA_COMPAT) $COMMAND"
+COMMAND="LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-} CUDA_HOME=${CUDA_HOME:-} ${CUDA_COMPAT:+(cuda-compat-$CUDA_COMPAT) }$COMMAND"
 
 {
   echo "recorded_at: $(date -u +%FT%TZ)"
