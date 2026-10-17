@@ -10,14 +10,17 @@
   <div class="app-shell">
     <aside class="sidebar">
       <a href="#/" class="brand-lockup" aria-label="MigrationLab home">
-        <span class="brand-mark">M</span>
-        <span><strong>MigrationLab</strong><small>AI safety console</small></span>
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Migration<span>Lab</span></strong></span>
       </a>
       <nav class="side-nav" aria-label="Primary navigation">
-        <a href="#/" data-nav="runs"><span class="nav-icon">&#9638;</span> Reviews</a>
-        <a href="#/workspace/live-ordering-revision" data-nav="workspace"><span class="nav-icon">&#9672;</span> Review workspace</a>
-        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Compare</a>
-        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided demo</a>
+        <a href="#/run/live-ordering-revision" data-nav="overview"><span class="nav-icon">&#8962;</span> Overview</a>
+        <a href="#/" data-nav="runs" class="primary-nav"><span class="nav-icon">&#9638;</span> Migration evidence</a>
+        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Comparisons</a>
+        <a href="#/workspace/live-ordering-revision" data-nav="workspace"><span class="nav-icon">&#10003;</span> Data checks</a>
+        <a href="#/run/live-ordering-revision/plan/a2" data-nav="plan"><span class="nav-icon">&#8982;</span> Schema diff</a>
+        <a href="#/run/live-ordering-revision/metrics" data-nav="metrics"><span class="nav-icon">&#8767;</span> Performance</a>
+        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9881;</span> Settings<span class="sr-only">Guided demo</span></a>
       </nav>
       <div class="sidebar-foot"><span class="status-dot"></span><span><strong>Evidence store</strong><small>Read-only replay</small></span></div>
     </aside>
@@ -25,8 +28,9 @@
       <header class="topbar">
         <nav id="crumbs" class="crumbs"></nav>
         <div class="top-actions">
-          <span class="recorded-label"><span class="pulse-dot"></span> Recorded evidence</span>
-          <button id="theme-toggle" class="icon-button" aria-label="Toggle theme" title="Toggle theme">&#9788;</button>
+          <label class="global-search"><span>&#8981;</span><input type="search" placeholder="Search migrations..." aria-label="Search migrations"></label>
+          <button class="top-icon" aria-label="Notifications">&#9825;</button>
+          <button id="theme-toggle" class="avatar-button" aria-label="Toggle theme" title="Toggle theme">JD</button>
         </div>
       </header>
       <main id="view" class="view" aria-live="polite"></main>

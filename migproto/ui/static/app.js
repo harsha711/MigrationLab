@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0 };
+const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -80,6 +80,7 @@ function attemptPills(run, page, current) {
 }
 
 const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) === s);
+const humanize = (value) => String(value || "unknown").replace(/^case\./, "").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 // ---------- pages ----------
 
@@ -87,10 +88,12 @@ async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available } = await api("/api/runs");
   const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
-  const checks = details.reduce((n, d) => n + (d.meta?.checks_total || 0), 0);
-  const attempts = details.reduce((n, d) => n + d.attempts.length, 0);
-  const failures = details.reduce((n, d) => n + d.attempts.reduce((x, a) => x + a.checks_failed, 0), 0);
-  const demo = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
+  const defaultRun = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
+  const demo = details.find((d) => d.run_id === state.dashboardRunId) || defaultRun;
+  state.dashboardRunId = demo?.run_id || null;
+  const finalAttempt = demo?.attempts.at(-1);
+  const firstAttempt = demo?.attempts[0];
+  const matrix = finalAttempt ? await api(`/api/matrix?run=${enc(demo.run_id)}&attempt=${enc(finalAttempt.attempt_id)}`) : {rows: [], db_checks: []};
   const rows = details.map((d) => {
     const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
     const search = `${d.run_id} ${d.meta?.verdict || ""} ${d.source_kind} ${d.meta?.model || "scripted"}`.toLowerCase();
@@ -100,23 +103,52 @@ async function pageRuns() {
       <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
       <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
   }).join("");
-  return `<section class="hero">
-      <div class="hero-copy"><span class="eyebrow">EVIDENCE-DRIVEN MIGRATION REVIEW</span>
-        <h1>Ship schema changes<br><span>without flying blind.</span></h1>
-        <p>Replay how agents investigate, propose, test, fail, and revise while a deterministic runner remains the source of truth.</p>
-        <div class="hero-actions">${demo ? `<a class="button primary" href="#/workspace/${enc(demo.run_id)}">&#9655; Open interactive workspace</a>` : ""}<button class="button ghost" data-scroll-runs>Explore evidence</button></div>
-      </div>
-      <div class="hero-visual" aria-label="Agent workflow"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
-        <div class="flow-node investigator"><small>01</small><strong>Investigate</strong><span>Code impact</span></div>
-        <div class="flow-node planner"><small>02</small><strong>Plan</strong><span>Staged SQL</span></div>
-        <div class="flow-node runner"><small>03</small><strong>Verify</strong><span>Runner evidence</span></div>
-        <div class="flow-line line-a"></div><div class="flow-line line-b"></div></div>
-    </section>
-    <section class="stat-grid">
-      <div class="stat-card"><span>Recorded reviews</span><strong>${fmt(details.length)}</strong><small>Fixtures + local runs</small></div>
-      <div class="stat-card"><span>Checks executed</span><strong>${fmt(checks)}</strong><small>Runner observations</small></div>
-      <div class="stat-card"><span>Plan attempts</span><strong>${fmt(attempts)}</strong><small>Failed attempts preserved</small></div>
-      <div class="stat-card danger"><span>Failures surfaced</span><strong>${fmt(failures)}</strong><small>Evidence, not hidden</small></div>
+  const processStages = [
+    "Choose review mode",
+    "AI migration review",
+    "Mock execution",
+    "Revise and Recommend"
+  ];
+  const stages = processStages.map((title, index) => `<div class="editorial-stage done"><div><span>${index + 1}</span><strong>${esc(title)}</strong></div><i>${index < processStages.length - 1 ? "→" : ""}</i></div>`).join("");
+  const paths = (matrix.columns || []).map((column) => [column, column.replaceAll("new-staged", "new").replace(" -> ", " → ")]);
+  const checks = [...new Set(matrix.rows.map((item) => item.check_name))]
+    .map((name) => [name, new Set(matrix.rows.filter((item) => item.check_name === name).map((item) => item.column)).size])
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([name]) => name);
+  const matrixGrid = `<div class="matrix-corner"></div>${paths.map(([, label]) => `<b>${esc(label)}</b>`).join("")}` + checks.map((checkName) => {
+    const cells = paths.map(([column]) => {
+      const candidates = matrix.rows.filter((item) => item.column === column && item.check_name === checkName);
+      const item = candidates.find(isBad) || candidates[0];
+      if (!item) return `<span class="editorial-matrix-cell unknown" title="No recorded observation for this exact scope">—</span>`;
+      const status = isBad(item) ? "fail" : kindOf(item) === "PASS" ? "pass" : "unknown";
+      const mark = status === "pass" ? "✓" : status === "fail" ? "×" : "—";
+      return `<button class="editorial-matrix-cell ${status}" data-obs="${esc(item.observation_id)}" title="${esc(item.check_name)}"><b>${mark}</b></button>`;
+    }).join("");
+    return `<strong title="${esc(checkName)}">${humanize(checkName)}</strong>${cells}`;
+  }).join("");
+  const evidenceItems = (matrix.db_checks || []).filter((item) => item.stage_id && item.stage_id !== "S0");
+  const evidence = (finalAttempt?.stages || []).map((stage) => {
+    const item = evidenceItems.find((candidate) => candidate.stage_id === stage.stage_id);
+    const detail = item ? `${esc(item.check_name)} · recorded observation` : esc(stage.description || stage.phase || stage.stage_kind || "Recorded stage");
+    const content = `<i class="${item && isBad(item) ? "bad" : "ok"}">${item && isBad(item) ? "×" : "✓"}</i><span><strong>${stageTitle(stage)}</strong><small>${detail}</small></span><b>›</b>`;
+    return item ? `<a class="editorial-evidence-item" href="#/obs/${enc(item.observation_id)}">${content}</a>` : `<div class="editorial-evidence-item">${content}</div>`;
+  }).join("");
+  const attempts = (demo?.attempts || []).map((attempt) => {
+    const passed = attempt.ok === 1;
+    const label = attempt.status || (passed ? "PASS" : attempt.ok === 0 ? "FAIL" : "RECORDED");
+    const detail = attempt.halted || `${attempt.checks_total} recorded checks · ${attempt.checks_failed} failed`;
+    return `<article class="${passed ? "passed" : "blocked"}"><i>${passed ? "✓" : "×"}</i><div><small>${humanize(short(attempt.attempt_id))} · ${esc(label)}</small><strong>${esc(detail)}</strong></div><a href="#/run/${enc(demo.run_id)}/matrix/${esc(short(attempt.attempt_id))}">Recorded evidence</a></article>`;
+  }).join(`<span>→</span>`);
+  const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
+  const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
+  const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
+  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-control">⌘&nbsp;&nbsp; Scope: sequential interleaving <b>⌄</b></span></div></header>
+    <section class="editorial-layout">
+      <main class="editorial-main">
+        <section class="stage-panel"><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
+        <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
+        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span>View: recorded checks ⌄</span></header><div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">— means this exact check and application path was not recorded. Missing scope remains unknown.</p></section>
+      </main>
+      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div><button aria-label="More options">⋮</button></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><nav><b>Evidence</b><span>Checks</span><span>Diffs</span><span>Logs</span></nav><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
     </section>
     <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
       <div class="row"><button id="compare" disabled>Compare selected</button><button class="button-muted" disabled title="Controller integration is not available">Run Review <span class="soon">soon</span></button></div></section>
@@ -450,7 +482,7 @@ async function openEvidence(oid) {
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false;
   try {
     const o = await api(`/api/observation?id=${enc(oid)}`);
-    const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s, i) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${i + 1}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
+    const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${s.ok === 1 ? "✓" : s.ok === 0 ? "×" : "—"}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
     const expected = o.expectation ?? o.raw?.expected ?? o.raw?.msg;
     const observed = o.outcome ?? o.error ?? o.raw?.observed ?? (o.raw?.old_alive !== undefined ? `old_alive=${o.raw.old_alive}` : null);
     const versions = o.app_versions?.length ? o.app_versions.join(", ") : null;
@@ -596,6 +628,11 @@ document.addEventListener("click", (ev) => {
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (ev.target.id === "dashboard-run") {
+    state.dashboardRunId = ev.target.value;
+    route();
+    return;
+  }
   if (["workspace-version", "workspace-stage", "workspace-status"].includes(ev.target.id)) {
     const version = $("#workspace-version")?.value || "";
     const stage = $("#workspace-stage")?.value || "";
@@ -629,5 +666,5 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 window.addEventListener("hashchange", route);
-document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "dark";
+document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "light";
 route();
