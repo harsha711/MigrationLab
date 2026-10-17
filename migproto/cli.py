@@ -4,23 +4,33 @@ import argparse
 import sys
 import traceback
 
+from . import lock
 from .runlog import RunLog
 
 
 def _run(command: str, fn) -> int:
-    log = RunLog(command)
     try:
-        result = fn(log)
-    except Exception as exc:
-        log.write("error.txt", traceback.format_exc())
-        log.summary("ERROR", error=str(exc))
+        lock.acquire(command)
+    except lock.ExecutionBusy as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    verdict = result.pop("verdict", None) or ("PASS" if result.get("ok") else "FAIL")
-    log.summary(verdict, **result)
-    if verdict in ("PASS", "REPRODUCED"):
-        return 0
-    return 2 if verdict == "ERROR" else 1
+    try:
+        log = RunLog(command)
+        lock.update_owner(run_id=log.run_id)
+        try:
+            result = fn(log)
+        except Exception as exc:
+            log.write("error.txt", traceback.format_exc())
+            log.summary("ERROR", error=str(exc))
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        verdict = result.pop("verdict", None) or ("PASS" if result.get("ok") else "FAIL")
+        log.summary(verdict, **result)
+        if verdict in ("PASS", "REPRODUCED"):
+            return 0
+        return 2 if verdict == "ERROR" else 1
+    finally:
+        lock.release()
 
 
 def cmd_setup(args) -> int:
@@ -39,11 +49,16 @@ def cmd_unsafe(args) -> int:
 
 
 def cmd_staged(args) -> int:
-    from . import plans, staged
+    from . import plans, runner_api
     def go(log):
         plan = plans.load(args.plan)
         tests = plans.load(args.tests) if args.tests else None
-        return staged.run(log, plan, tests, provenance=args.provenance)
+        report = runner_api.execute_plan(
+            plan, run_context=runner_api.RunContext(log, provenance=args.provenance),
+            extra_tests=tests)
+        result = report.as_dict()
+        result["runner_verdict"] = result.pop("verdict")
+        return result
     return _run("staged", go)
 
 
@@ -57,11 +72,16 @@ def cmd_agent_loop(args) -> int:
 
 def cmd_all(args) -> int:
     codes = {}
-    codes["setup"] = cmd_setup(args)
-    codes["baseline"] = cmd_baseline(args)
-    codes["unsafe"] = cmd_unsafe(args)
-    args.proposals = "scripted"
-    codes["agent-loop-scripted"] = cmd_agent_loop(args)
+    try:
+        with lock.execution_lock("all"):
+            codes["setup"] = cmd_setup(args)
+            codes["baseline"] = cmd_baseline(args)
+            codes["unsafe"] = cmd_unsafe(args)
+            args.proposals = "scripted"
+            codes["agent-loop-scripted"] = cmd_agent_loop(args)
+    except lock.ExecutionBusy as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     print("exit codes:", codes)
     return 0 if all(c == 0 for c in codes.values()) else 1
 

@@ -4,7 +4,7 @@ import re
 import subprocess
 import time
 
-from . import db, seed
+from . import db, scope, seed
 from .config import PORTS, SEED_CUSTOMERS, SEED_DB, VENV_PY, WORKTREES
 from .runlog import MANUAL, RunLog
 from .saleor_app import AppServer, manage, saleor_env
@@ -28,6 +28,7 @@ def seed_ready() -> bool:
 
 
 def build_seed(log: RunLog) -> None:
+    log.set_step("seed")
     db.drop(SEED_DB)
     db.create(SEED_DB)
     steps = [
@@ -47,25 +48,40 @@ def build_seed(log: RunLog) -> None:
 
 
 def smoke_old(log: RunLog) -> bool:
+    log.set_step("smoke_old")
     run_db = db.new_run_db("baseline")
     server = AppServer("old", "old", PORTS["old"], run_db, log.dir / "server-old.log")
     ok = True
     try:
+        log.scope["app_commits"] = {"old": scope.worktree_head("old")}
+        state = scope.schema_state(run_db)
+        log.scope["schema_state"] = state
+        log.scope["database_snapshot_id"] = scope.snapshot_id(run_db, state)
         server.start()
         rows = seed.seed_rows(run_db, "note")
         pk = next(k for k, v in rows.items() if v)
         r = server.read_note(pk)
-        ok &= log.check("old.read_note", r.ok and r.value == rows[pk], user=pk, result=r.as_dict())
+        ok &= log.check("old.read_note", r.ok and r.value == rows[pk], user=pk, result=r.as_dict(),
+                        app_version="old", expected={"value": rows[pk]},
+                        observed={"ok": r.ok, "value": r.value, "error": r.error})
         w = server.write_note(pk, "baseline write")
         r2 = server.read_note(pk)
         ok &= log.check("old.write_then_read", w.ok and r2.value == "baseline write",
-                        write=w.as_dict(), read=r2.as_dict())
+                        write=w.as_dict(), read=r2.as_dict(), app_version="old",
+                        expected={"value": "baseline write"},
+                        observed={"ok": w.ok and r2.ok, "value": r2.value,
+                                  "error": w.error or r2.error})
         c = server.create_customer("baseline-new@example.test", "created in baseline")
         r3 = server.read_note(c.value) if c.ok else c
         ok &= log.check("old.create_then_read", c.ok and r3.value == "created in baseline",
-                        create=c.as_dict(), read=r3.as_dict())
+                        create=c.as_dict(), read=r3.as_dict(), app_version="old",
+                        expected={"value": "created in baseline"},
+                        observed={"ok": c.ok and r3.ok, "value": r3.value if c.ok else None,
+                                  "error": c.error or r3.error})
         db_note = db.query(run_db, "SELECT note FROM account_user WHERE id=%s", (pk,))[0][0]
-        ok &= log.check("db.note_column_written", db_note == "baseline write", value=db_note)
+        ok &= log.check("db.note_column_written", db_note == "baseline write", value=db_note,
+                        app_version="database", expected={"note": "baseline write"},
+                        observed={"note": db_note})
     finally:
         server.stop()
         db.drop(run_db)
@@ -83,9 +99,14 @@ def run_pytest(log: RunLog, version: str) -> bool:
     log.write(f"pytest-{version}.log", f"$ (cd {WORKTREES[version]} && {' '.join(cmd)})\n{out}")
     m = re.findall(r"(\d+) (passed|failed|error|errors|skipped)", out)
     counts = {k: int(v) for v, k in m}
+    log.set_step(f"pytest_{version}")
+    log.scope.update(schema_state=None, database_snapshot_id=None,
+                     app_commits={"old" if version == "old" else "new": scope.worktree_head(version)})
     return log.check(f"pytest.{version}", proc.returncode == 0, provenance=MANUAL,
                      tests=PYTEST_SUBSET, counts=counts, exit=proc.returncode,
-                     seconds=round(time.monotonic() - t0, 1))
+                     seconds=round(time.monotonic() - t0, 1),
+                     app_version="old" if version == "old" else "new",
+                     expected={"exit": 0}, observed={"exit": proc.returncode, "counts": counts})
 
 
 def run(log: RunLog, rebuild_seed: bool = False, skip_pytest: bool = False) -> dict:

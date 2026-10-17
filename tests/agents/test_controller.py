@@ -2,6 +2,7 @@ import json
 
 from migproto.agents.budget import ReviewBudget
 from migproto.agents.llm import LLM
+from migproto import staged
 from migproto.agents import loop, roles
 from migproto.runlog import RunLog
 
@@ -10,7 +11,7 @@ def test_scripted_revision_preserves_both_attempts(monkeypatch, tmp_path):
     monkeypatch.setattr(roles, "gather_hits", lambda: [])
     calls = []
 
-    def fake_staged(log, plan, tests, provenance):
+    def fake_staged(log, plan, tests, provenance, keep_db=False):
         calls.append(plan["plan_id"])
         ok = len(calls) == 2
         log.check("runner-check", ok, provenance="runner", msg="complete evidence")
@@ -22,7 +23,7 @@ def test_scripted_revision_preserves_both_attempts(monkeypatch, tmp_path):
             "failed_checks": [] if ok else [{"name": "runner-check"}],
         }
 
-    monkeypatch.setattr(loop.staged, "run", fake_staged)
+    monkeypatch.setattr(staged, "run", fake_staged)
     log = RunLog("test", root=tmp_path)
     result = loop.run_review(log, "scripted")
     assert result["verdict"] == "PASS"
@@ -36,7 +37,7 @@ def test_scripted_revision_preserves_both_attempts(monkeypatch, tmp_path):
 
 def test_budget_and_topology_are_shared_controller_inputs(monkeypatch, tmp_path):
     monkeypatch.setattr(roles, "gather_hits", lambda: [])
-    monkeypatch.setattr(loop.staged, "run", lambda log, plan, tests, provenance: {
+    monkeypatch.setattr(staged, "run", lambda log, plan, tests, provenance, keep_db=False: {
         "ok": True, "plan_id": plan["plan_id"], "halted": None,
         "stages": [], "failed_checks": [],
     })
@@ -76,7 +77,7 @@ def test_call_budget_exhaustion_returns_incomplete(monkeypatch, tmp_path):
 def test_invalid_plan_never_reaches_runner(monkeypatch, tmp_path):
     monkeypatch.setattr(roles, "gather_hits", lambda: [])
     executed = []
-    monkeypatch.setattr(loop.staged, "run", lambda *args, **kwargs: executed.append(True))
+    monkeypatch.setattr(staged, "run", lambda *args, **kwargs: executed.append(True))
 
     class FakeLLM:
         model = "nemotron-test"

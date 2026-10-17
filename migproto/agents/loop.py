@@ -3,7 +3,7 @@
 import json
 import re
 
-from .. import plans, staged
+from .. import plans, runner_api
 from ..config import PROPOSALS
 from ..runlog import SCRIPTED, RunLog, agent
 from . import roles, single
@@ -37,24 +37,6 @@ def _failure_records(log: RunLog, start: int) -> list[dict]:
     return [dict(check) for check in log.checks[start:] if check["status"] == "FAIL"]
 
 
-def _observation_ids(log: RunLog, attempt: int, names: set[str]) -> list[str]:
-    events_path = log.dir / "events.jsonl"
-    if not names or not events_path.exists():
-        return []
-    records = [json.loads(line) for line in events_path.read_text().splitlines()]
-    attempt_start = 0
-    for seq, record in enumerate(records):
-        if record.get("kind") == "attempt" and record.get("name") == f"attempt {attempt}":
-            attempt_start = seq
-    ids = []
-    for seq, record in enumerate(records[attempt_start:], start=attempt_start):
-        if record.get("kind") == "attempt" and record.get("name") != f"attempt {attempt}":
-            break
-        if record.get("kind") == "check" and record.get("name") in names:
-            ids.append(f"{log.dir.name}/a{attempt}/{record['name']}#{seq}")
-    return ids
-
-
 def _emit_claim(log: RunLog, prov: str, attempt: int, report: dict,
                 failed_checks: list[dict], model_call: dict | None) -> None:
     if not failed_checks:
@@ -62,7 +44,7 @@ def _emit_claim(log: RunLog, prov: str, attempt: int, report: dict,
     text = report.get("suspected_cause") or report.get("summary")
     if not text:
         return
-    evidence = _observation_ids(log, attempt, {c["name"] for c in failed_checks})
+    evidence = [c["observation_id"] for c in failed_checks if c.get("observation_id")]
     log.event(
         "agent_claim",
         provenance=prov,
@@ -168,7 +150,10 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
             log.event("attempt", provenance=prov, name=f"attempt {attempt}",
                       plan_id=plan_obj.get("plan_id"))
             check_start = len(log.checks)
-            result = staged.run(log, plan_obj, tests, provenance=prov)
+            result = runner_api.execute_plan(
+                plan_obj, run_context=runner_api.RunContext(log, provenance=prov,
+                                                            attempt=attempt),
+                extra_tests=tests).as_dict()
             last_result = result
             complete_failures = _failure_records(log, check_start)
             report = call(f"tester-report-{attempt}", roles.report_evidence,
