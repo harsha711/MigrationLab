@@ -107,7 +107,9 @@ Exit codes: 0 on `PASS` or `REPRODUCED`, 1 on `FAIL`, 2 on `ERROR`. Every comman
 - Parameter budget: the submitted system stays within **33B total parameters** (event rule, verified). Count inactive MoE experts and every draft, embedding, critic or judge model. Keep `docs/model-inventory.md` current with exact checkpoints and counts, and check the remaining budget before adding any model.
 - One shared Nemotron 3.5 Lightning vLLM deployment serves all agent roles. Draft models (DSpark, DFlash) stay excluded until organizers confirm accounting.
 - `gpt-oss:120b-cloud` is development-only and stays outside the submitted workflow.
-- Compute: serve models and make live model calls only on GPU instances paid for with the **event-provided NVIDIA Brev credits**. Never use a teammate's personal machine, personal cloud account or personal credits. Scripted mode needs no GPU.
+- Local development and evaluation with smaller models are allowed. Record the exact model (checkpoint or tag, quantization), endpoint, serving configuration and sampling parameters for every run.
+- Compute: the final Nemotron 3.5 Lightning vLLM deployment, and every measurement reported for it, runs only on GPU instances paid for with the **event-provided NVIDIA Brev credits**. Never use a teammate's personal cloud account or personal credits for it. Scripted mode needs no GPU.
+- Local development models stay outside the submitted workflow. Report their results separately from the Brev Lightning/vLLM results and never mix them in the same table or claim.
 - Priority: (1) small-model loop on vLLM, (2) integrated evidence and UI, (3) NeMo Gym adapter and evaluation, (4) optional serving experiments.
 
 ## Collaboration
