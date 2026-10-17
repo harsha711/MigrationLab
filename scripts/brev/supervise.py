@@ -205,7 +205,8 @@ class Supervisor:
         from migproto.agents.request import DEFAULT_REQUEST
         request = json.loads(json.dumps(DEFAULT_REQUEST))
         request["request_id"] = f"brev-batch-{self.dir.name[len('brev-batch-'):]}"
-        request["budget"] = {"max_revisions": 1, "max_model_calls": self.a.max_calls,
+        request["budget"] = {"max_revisions": self.a.max_revisions,
+                             "max_model_calls": self.a.max_calls,
                              "max_total_tokens": self.a.max_tokens,
                              "max_wall_seconds": self.a.max_wall}
         path = self.dir / "request.json"
@@ -330,6 +331,7 @@ def parse(argv=None):
     p.add_argument("--runs", type=int, default=1, help="runs per topology")
     p.add_argument("--topologies", default="roles,single")
     p.add_argument("--proposals", choices=["llm", "scripted"], default="llm")
+    p.add_argument("--max-revisions", type=int, default=1)
     p.add_argument("--max-calls", type=int, default=10)
     p.add_argument("--max-tokens", type=int, default=40000)
     p.add_argument("--max-wall", type=float, default=900)

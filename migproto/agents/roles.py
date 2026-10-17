@@ -194,8 +194,10 @@ Plan JSON schema (unknown keys are rejected):
 }
 Rules: exactly one deploy_new and one retire_old stage; at least one expand and one contract
 sql stage; stages run in the listed order; each sql string is executed as a single statement
-(PL/pgSQL function bodies with $$ quoting are fine); `repeat_until_zero_rows` re-runs a stage
-until every statement affects 0 rows (use it for batched backfills). Only plpgsql/sql
+(PL/pgSQL function bodies with $$ quoting are fine); each string is sent to PostgreSQL exactly
+as written, so write `$$` and quotes literally, never backslash-escaped; `repeat_until_zero_rows`
+re-runs a stage until every statement affects 0 rows, so each repeated statement must stop
+matching rows once its work is done (use it for batched backfills). Only plpgsql/sql
 languages; no DROP TABLE, TRUNCATE, COPY, roles, extensions or database-level statements.
 """
 
@@ -246,7 +248,7 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
     if feedback:
         user += (
             "Your previous plan was EXECUTED and FAILED these deterministic checks. Revise the "
-            "plan (one revision allowed). Explain the root cause in revision_notes.\n"
+            "plan. Explain the root cause in revision_notes.\n"
             f"Previous plan:\n{json.dumps(previous, indent=1)}\n\n"
             f"Execution feedback:\n{json.dumps(feedback, indent=1, ensure_ascii=False)[:8000]}\n"
         )
