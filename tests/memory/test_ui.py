@@ -86,9 +86,15 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "evidence-drawer" in css
     assert "prefers-reduced-motion" in css
     assert "INTERACTIVE COMPATIBILITY REVIEW" in js
-    assert "FAILED PLAN &#8594; REVISED PLAN" in js
+    assert "PLAN COMPARISON" in js and "Why did the first attempt fail?" in js
     assert "workspace-layout" in css
     assert "data-workspace-row" in js
     assert "migrationlab-tour-seen" in js
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
+    assert "Recorded migration review" in js
+    assert "Revised plan passed" in js
+    assert "Restart replay" in js
+    assert "trapFocus" in js
+    assert "scope=\"col\"" in js and "scope=\"row\"" in js
+    assert "progressive-card" in css

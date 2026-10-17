@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0 };
+const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, lastFocus: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -182,6 +182,11 @@ async function pageDemo(id) {
 
 const stageTitle = (stage) => {
   const id = (stage?.stage_id || stage?.id || "Recorded stage").replaceAll("-", " ");
+  if (/expand|add column|trigger/.test(id)) return "Add compatible field";
+  if (/backfill/.test(id)) return "Backfill existing data";
+  if (/deploy new/.test(id)) return "Deploy new application";
+  if (/retire old/.test(id)) return "Retire old application";
+  if (/contract|drop old|remove old/.test(id)) return "Remove legacy field";
   return id.replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
@@ -194,9 +199,10 @@ function matrixStatus(rows, stageId, side) {
     : {kind: "pass", label: "Pass", obs: scoped[0].observation_id};
 }
 
-function workspaceMark(result) {
+function workspaceMark(result, stage, side) {
   const icon = result.kind === "pass" ? "&#10003;" : result.kind === "fail" ? "&#10005;" : "&#183;";
-  const attrs = result.obs ? ` data-obs="${esc(result.obs)}" title="Open TestEvidence"` : " disabled title=\"No scoped observation recorded\"";
+  const spoken = `${side} application: ${result.label} at ${stageTitle(stage)}`;
+  const attrs = result.obs ? ` data-obs="${esc(result.obs)}" title="Open TestEvidence" aria-label="${esc(spoken)}. Open evidence."` : ` disabled title="No scoped observation recorded" aria-label="${esc(spoken)}"`;
   return `<button class="compat-result ${result.kind}"${attrs}><span>${icon}</span>${esc(result.label)}</button>`;
 }
 
@@ -228,11 +234,11 @@ async function pageWorkspace(id) {
   const planner = revised?.claims?.find((c) => c.role === "planner");
   const tester = first?.claims?.find((c) => c.role === "tester-report");
   const calls = run.results?.model_calls || [];
-  const timeline = stages.map((s, i) => `<button class="workspace-stage ${s.stage_id === selectedId ? "active" : ""}" data-stage-select="${esc(s.stage_id)}"><span>${i + 1}</span><div><strong>${stageTitle(s)}</strong><small>${esc(s.description || s.stage_kind || "")}</small></div><i>${s.phase ? esc(s.phase) : esc(s.stage_kind)}</i></button>`).join("");
+  const timeline = stages.map((s, i) => `<button class="workspace-stage ${s.stage_id === selectedId ? "active" : ""}" data-stage-select="${esc(s.stage_id)}"${s.stage_id === selectedId ? ' aria-current="step"' : ""}><span>${i + 1}</span><div><strong>${stageTitle(s)}</strong><small>${esc(s.description || s.stage_kind || "")}</small></div><i>${s.phase ? esc(s.phase) : esc(s.stage_kind)}</i></button>`).join("");
   const rows = stages.map((s) => {
     const old = matrixStatus(matrix.rows, s.stage_id, "old");
     const newer = matrixStatus(matrix.rows, s.stage_id, "new-staged");
-    return `<tr data-workspace-row data-stage="${esc(s.stage_id)}" data-status="${old.kind === "fail" || newer.kind === "fail" ? "FAIL" : old.kind === "pass" || newer.kind === "pass" ? "PASS" : "UNKNOWN"}" data-version="${esc((matrix.rows.filter((r) => r.stage_id === s.stage_id).flatMap((r) => r.path || [])).join(" "))}"><td><strong>${stageTitle(s)}</strong><small>${esc(s.phase || s.stage_kind)}</small></td><td>${workspaceMark(old)}</td><td>${workspaceMark(newer)}</td></tr>`;
+    return `<tr data-workspace-row data-stage="${esc(s.stage_id)}" data-status="${old.kind === "fail" || newer.kind === "fail" ? "FAIL" : old.kind === "pass" || newer.kind === "pass" ? "PASS" : "UNKNOWN"}" data-version="${esc((matrix.rows.filter((r) => r.stage_id === s.stage_id).flatMap((r) => r.path || [])).join(" "))}"><th scope="row"><strong>${stageTitle(s)}</strong><small><code>${esc(s.stage_id)}</code> · ${esc(s.phase || s.stage_kind)}</small></th><td>${workspaceMark(old, s, "Old")}</td><td>${workspaceMark(newer, s, "New")}</td></tr>`;
   }).join("");
   const trace = [
     ["01", "Investigator", investigator?.text || "No structured investigator conclusion recorded.", run.claims_without_attempt?.length || 0],
@@ -240,21 +246,21 @@ async function pageWorkspace(id) {
     ["03", "Tester", tester?.text || first?.halted || "No tester conclusion recorded.", calls.filter((c) => c.role?.startsWith("tester")).length],
     ["04", "Feedback", feedback?.text || "No revision feedback recorded.", run.attempts.length - 1]
   ].map(([n, role, text, count]) => `<article class="trace-step"><b>${n}</b><div><span>${role}</span><p>${esc(text)}</p><small>${role === "Feedback" ? `${count} revision round(s)` : `${count} recorded ${role === "Investigator" ? "finding(s)" : "model call(s)"}`}</small></div></article>`).join("");
-  return `<div class="workspace-head"><div><span class="eyebrow">INTERACTIVE COMPATIBILITY REVIEW</span><h1>${esc(id)}</h1><p>Explore recorded plan decisions and runner evidence. Selecting a result opens its scoped TestEvidence.</p></div><div class="workspace-actions"><button class="button ghost" data-open-tour>&#10024; Guide me</button><button class="button primary" data-reveal-revision>Reveal safe plan</button><div class="row">${verdictBadge(run.meta?.verdict)} ${typeBadges(run)}</div></div></div>
-    <section class="journey-strip"><div><span>Migration journey</span><strong>Step ${selectedIndex + 1} of ${stages.length}</strong></div><div class="journey-track"><i style="width:${stages.length ? ((selectedIndex + 1) / stages.length) * 100 : 0}%"></i>${stages.map((s, i) => `<button class="${i <= selectedIndex ? "visited" : ""}" data-stage-select="${esc(s.stage_id)}" title="${stageTitle(s)}"><span>${i + 1}</span></button>`).join("")}</div><div class="journey-now"><span class="stage-pulse"></span><p><small>YOU ARE HERE</small><strong>${stageTitle(selectedStage)}</strong></p><button data-next-stage>${selectedIndex === stages.length - 1 ? "Restart journey" : "Next stage"} &#8594;</button></div></section>
+  return `<div class="mode-banner"><span>&#9655;</span><div><strong>Recorded migration review</strong><small>You are replaying saved evidence. Nothing on this screen changes a database.</small></div></div><div class="workspace-head"><div><span class="eyebrow">INTERACTIVE COMPATIBILITY REVIEW</span><h1>${esc(id)}</h1><p>Follow one clear story: the first plan was blocked, agent feedback revised it, and the runner verified the safer ordering.</p></div><div class="workspace-actions"><button class="button ghost" data-open-tour>&#10024; Guide me</button><button class="button primary" data-reveal-revision>Compare plans</button><div class="final-outcome"><span>&#10003;</span><p><small>FINAL OUTCOME</small><strong>${run.attempts.length > 1 ? "Revised plan passed" : esc(run.meta?.verdict || "Unknown")}</strong><em>${run.attempts.length - 1} unsafe attempt preserved</em></p></div></div></div>
+    <section class="journey-strip"><div><span>Migration journey</span><strong>Step ${selectedIndex + 1} of ${stages.length}</strong></div><div class="journey-track"><i style="width:${stages.length ? ((selectedIndex + 1) / stages.length) * 100 : 0}%"></i>${stages.map((s, i) => `<button class="${i <= selectedIndex ? "visited" : ""}" data-stage-select="${esc(s.stage_id)}" title="${stageTitle(s)}" aria-label="Step ${i + 1}: ${stageTitle(s)}"${i === selectedIndex ? ' aria-current="step"' : ""}><span>${i + 1}</span></button>`).join("")}</div><div class="journey-now"><span class="stage-pulse"></span><p><small>YOU ARE HERE</small><strong>${stageTitle(selectedStage)}</strong></p><button data-next-stage>${selectedIndex === stages.length - 1 ? "Restart journey" : "Next stage"} &#8594;</button></div></section>
     <section class="workspace-layout">
       <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}
-        <div class="execution-controls"><span class="eyebrow">EXECUTION CONTROLS</span><button data-reset-workspace>Reset database</button><button disabled title="Read-only evidence replay">Execute selected migration step</button><button disabled title="Read-only evidence replay">Run compatibility checks</button><small>Recorded replay only. Live execution awaits the controller API.</small></div></aside>
+        <div class="execution-controls"><span class="eyebrow">REPLAY CONTROLS</span><button data-reset-workspace>Restart replay</button><button data-replay-selected>Replay selected step</button><button data-focus-checks>View recorded checks</button><small>Replay controls only. No database is changed.</small></div></aside>
       <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><span class="source-pill"><i></i> Live from recorder</span></div>
-        <div class="scope-filters"><select id="workspace-version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select><select disabled title="Schema fingerprints are not present in this v0 fixture"><option>Schema: not recorded</option></select><select disabled title="Snapshot IDs are not present in this v0 fixture"><option>Snapshot: not recorded</option></select></div>
-        <div class="compat-table"><table><thead><tr><th>Migration stage</th><th>Old application</th><th>New application</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div class="scope-filters"><select id="workspace-version" aria-label="Filter by application version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage" aria-label="Filter by migration stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status" aria-label="Filter by test status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select><p class="scope-unavailable">Additional scope not recorded in this v0 fixture: schema fingerprint and snapshot ID.</p></div>
+        <div class="compat-table" id="recorded-checks" tabindex="-1"><table><caption>Old and new application compatibility by migration stage. Select a result to inspect its evidence.</caption><thead><tr><th scope="col">Migration stage</th><th scope="col">Old application</th><th scope="col">New application</th></tr></thead><tbody>${rows}</tbody></table></div>
         <div class="scope-callout"><b>Why scope matters</b><p>A pass for the new application does not prove the old application can read or write the same schema. Every cell is derived from observations scoped to an application path and migration stage.</p></div>
       </main>
-      <aside class="workspace-panel insight-panel"><div class="panel-heading"><div><span class="eyebrow">AGENT TRACE</span><h2>Reasoning handoffs</h2></div><span class="counter">${run.attempts.length - 1} revision</span></div><div class="trace-list">${trace}</div>
-        <article class="recommendation"><span>FINAL RECOMMENDATION</span><h3>Do not deploy an immediate rename</h3><dl><dt>Reason</dt><dd>${esc(first?.halted || "The recorded first plan failed a mandatory runner check.")}</dd><dt>Evidence</dt><dd>${failed ? `<button data-obs="${esc(failed.observation_id)}">${esc(failed.observation_id)}</button>` : unknown("not recorded")}</dd><dt>Safe alternative</dt><dd>Additive field + dual-write + backfill + retire old app before contract.</dd></dl></article></aside>
+      <aside class="workspace-panel insight-panel"><div class="panel-heading"><div><span class="eyebrow">RECOMMENDATION</span><h2>What should I do?</h2></div><span class="counter fail">Action required</span></div><article class="recommendation"><span>FINAL RECOMMENDATION</span><h3>Do not deploy an immediate rename</h3><dl><dt>Reason</dt><dd>${esc(first?.halted || "The recorded first plan failed a mandatory runner check.")}</dd><dt>Evidence</dt><dd>${failed ? `<button data-obs="${esc(failed.observation_id)}">${esc(failed.observation_id)}</button>` : unknown("not recorded")}</dd><dt>Safe alternative</dt><dd>Additive field + dual-write + backfill + retire old app before contract.</dd></dl></article></aside>
     </section>
-    <section class="revision-section" id="revision-story"><div class="panel-heading"><div><span class="eyebrow">FAILED PLAN &#8594; REVISED PLAN</span><h2>The failure stays visible</h2></div><span class="source-pill">${run.attempts.length} attempts</span></div><div class="revision-grid">${planColumn(first, "Attempt 1 · unsafe ordering", "unsafe")}<div class="revision-evidence"><span>RUNNER FAILURE</span><strong>${esc(failed?.check_name || first?.failed?.[0] || "Recorded failure")}</strong><p>${esc(first?.halted || "The first plan did not complete.")}</p>${failed ? `<button class="button ghost" data-obs="${esc(failed.observation_id)}">Inspect evidence</button>` : ""}<hr><span>AGENT FEEDBACK</span><p>${esc(feedback?.text || "No revision note recorded.")}</p></div>${planColumn(revised, "Attempt 2 · revised ordering", "safe")}</div></section>
-    <section class="evaluation-strip"><div><span class="eyebrow">EVALUATION RESULTS</span><h2>Recorded measurements</h2></div><div><span>Plan attempts</span><strong>${run.attempts.length}</strong></div><div><span>Final test-pass rate</span><strong>${revised?.checks_total ? Math.round((revised.checks_total - revised.checks_failed) / revised.checks_total * 100) : 0}%</strong></div><div><span>Token usage</span><strong>${fmt(run.results?.total_tokens)}</strong></div><div><span>Model latency</span><strong>${nr(run.results?.model_seconds)}s</strong></div><p>Single-agent vs. multi-agent safe-plan rate is not shown because no equivalent baseline has been recorded.</p></section>`;
+    <details class="progressive-card revision-section" id="revision-story"><summary><span><small>PLAN COMPARISON</small><strong>Why did the first attempt fail?</strong></span><em>Compare failed and revised plans &#8594;</em></summary><div class="progressive-body"><div class="revision-grid">${planColumn(first, "Attempt 1 · blocked", "unsafe")}<div class="revision-evidence"><span>RUNNER FAILURE</span><strong>${esc(failed?.check_name || first?.failed?.[0] || "Recorded failure")}</strong><p>${esc(first?.halted || "The first plan did not complete.")}</p>${failed ? `<button class="button ghost" data-obs="${esc(failed.observation_id)}">Inspect evidence</button>` : ""}<hr><span>AGENT FEEDBACK</span><p>${esc(feedback?.text || "No revision note recorded.")}</p></div>${planColumn(revised, "Attempt 2 · passed", "safe")}</div></div></details>
+    <details class="progressive-card"><summary><span><small>AGENT TRACE</small><strong>How did the agents reach the revision?</strong></span><em>${run.attempts.length - 1} revision round &#8594;</em></summary><div class="progressive-body"><div class="trace-list">${trace}</div></div></details>
+    <details class="progressive-card"><summary><span><small>EVALUATION</small><strong>View recorded model and test measurements</strong></span><em>Open metrics &#8594;</em></summary><div class="progressive-body evaluation-strip"><div><span class="eyebrow">RECORDED RESULTS</span><h2>Measured, not inferred</h2></div><div><span>Plan attempts</span><strong>${run.attempts.length}</strong></div><div><span>Final test-pass rate</span><strong>${revised?.checks_total ? Math.round((revised.checks_total - revised.checks_failed) / revised.checks_total * 100) : 0}%</strong></div><div><span>Token usage</span><strong>${fmt(run.results?.total_tokens)}</strong></div><div><span>Model latency</span><strong>${nr(run.results?.model_seconds)}s</strong></div><p>Single-agent vs. multi-agent safe-plan rate is not shown because no equivalent baseline has been recorded.</p></div></details>`;
 }
 
 async function pageOverview(id) {
@@ -443,11 +449,13 @@ async function pageCompare(a, b) {
 }
 
 async function openEvidence(oid) {
+  state.lastFocus = document.activeElement;
   const drawer = $("#evidence-drawer");
   const backdrop = $("#drawer-backdrop");
   const content = $("#drawer-content");
   content.innerHTML = `<div class="drawer-loading">Loading recorded evidence...</div>`;
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false;
+  $("#drawer-close").focus();
   try {
     const o = await api(`/api/observation?id=${enc(oid)}`);
     const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s, i) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${i + 1}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
@@ -467,6 +475,7 @@ function closeDrawer() {
   $("#evidence-drawer").classList.remove("open");
   $("#evidence-drawer").setAttribute("aria-hidden", "true");
   $("#drawer-backdrop").hidden = true;
+  state.lastFocus?.focus?.();
 }
 
 function showToast(message, tone = "info") {
@@ -478,9 +487,10 @@ function showToast(message, tone = "info") {
 }
 
 function openTour() {
+  state.lastFocus = document.activeElement;
   const tour = $("#welcome-tour");
   tour.hidden = false;
-  requestAnimationFrame(() => tour.classList.add("open"));
+  requestAnimationFrame(() => { tour.classList.add("open"); tour.querySelector("[data-tour-start]")?.focus(); });
 }
 
 function closeTour() {
@@ -488,6 +498,16 @@ function closeTour() {
   tour.classList.remove("open");
   localStorage.setItem("migrationlab-tour-seen", "1");
   setTimeout(() => { tour.hidden = true; }, 220);
+  state.lastFocus?.focus?.();
+}
+
+function trapFocus(container, ev) {
+  if (ev.key !== "Tab") return;
+  const items = [...container.querySelectorAll('a[href],button:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')];
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+  else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
 }
 
 function celebrate(target) {
@@ -562,6 +582,7 @@ document.addEventListener("click", (ev) => {
   }
   if (ev.target.closest("[data-reveal-revision]")) {
     const target = $("#revision-story");
+    if (target) target.open = true;
     target?.scrollIntoView({behavior: "smooth", block: "center"});
     if (target) { target.classList.add("revealed"); celebrate(target); }
     showToast("The safe plan keeps the failed attempt visible.", "success");
@@ -570,6 +591,8 @@ document.addEventListener("click", (ev) => {
   const stageSelect = ev.target.closest("[data-stage-select]");
   if (stageSelect) { state.workspaceStage = stageSelect.dataset.stageSelect; route(); showToast(`Selected: ${stageSelect.title || "migration stage"}`); return; }
   if (ev.target.closest("[data-reset-workspace]")) { state.workspaceStage = null; route(); showToast("Replay state reset. No database was changed."); return; }
+  if (ev.target.closest("[data-replay-selected]")) { const row = document.querySelector(`[data-workspace-row][data-stage="${CSS.escape(state.workspaceStage || "")}"]`); row?.scrollIntoView({behavior: "smooth", block: "center"}); row?.classList.add("spotlight"); setTimeout(() => row?.classList.remove("spotlight"), 1200); showToast("Showing recorded results for the selected step."); return; }
+  if (ev.target.closest("[data-focus-checks]")) { $("#recorded-checks")?.focus(); $("#recorded-checks")?.scrollIntoView({behavior: "smooth", block: "center"}); showToast("Choose a scoped result to inspect its evidence."); return; }
   if (ev.target.closest("[data-scroll-runs]")) {
     document.querySelector("#runs-table")?.scrollIntoView({behavior: "smooth", block: "start"});
     return;
@@ -617,7 +640,11 @@ document.addEventListener("change", (ev) => {
 });
 document.addEventListener("input", (ev) => { if (ev.target.id === "run-search") filterRuns(); });
 document.addEventListener("keydown", (ev) => {
-  if (ev.key === "Escape") closeDrawer();
+  const tour = $("#welcome-tour");
+  const drawer = $("#evidence-drawer");
+  if (!tour.hidden) trapFocus(tour, ev);
+  else if (drawer.classList.contains("open")) trapFocus(drawer, ev);
+  if (ev.key === "Escape") { if (!tour.hidden) closeTour(); else if (drawer.classList.contains("open")) closeDrawer(); }
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowRight") rerenderReplay(1);
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowLeft") rerenderReplay(-1);
   if (location.hash.startsWith("#/workspace/") && ["ArrowRight", "ArrowLeft"].includes(ev.key) && !ev.target.matches("input,select,textarea")) {
