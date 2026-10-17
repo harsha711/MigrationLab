@@ -61,6 +61,12 @@ def cmd_all(args) -> int:
     return 0 if all(c == 0 for c in codes.values()) else 1
 
 
+def cmd_ui(args) -> int:
+    from .ui import server
+    server.serve(port=args.port, db=args.db)
+    return 0
+
+
 def main(argv=None) -> int:
     from .config import PROPOSALS
 
@@ -80,9 +86,13 @@ def main(argv=None) -> int:
     al = sub.add_parser("all", help="setup, baseline, unsafe, scripted agent loop")
     al.add_argument("--rebuild-seed", action="store_true")
     al.add_argument("--skip-pytest", action="store_true")
+    u = sub.add_parser("ui", help="read-only Replay Recorded Run screen over examples/ and runs/")
+    u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--db", default=None, help="evidence store path (default data/memory.sqlite)")
     args = p.parse_args(argv)
     handlers = {"setup": cmd_setup, "baseline": cmd_baseline, "unsafe": cmd_unsafe,
-                "staged": cmd_staged, "agent-loop": cmd_agent_loop, "all": cmd_all}
+                "staged": cmd_staged, "agent-loop": cmd_agent_loop, "all": cmd_all,
+                "ui": cmd_ui}
     return handlers[args.cmd](args)
 
 

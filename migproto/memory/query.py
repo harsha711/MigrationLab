@@ -130,7 +130,8 @@ def matrix(conn, run_id, attempt_id) -> dict:
     """Old/new compatibility matrix for one attempt of one run.
 
     Rows: app-level cases (checks with steps), in execution order, with their stage.
-    Columns: writer -> reader, from the first and last step's app version.
+    Columns: writer -> reader, from the first and last step's app version, or "mixed" when
+    a case starts and ends on one version but crosses to the other in between.
     Each case fills exactly one column; every other column reads "not tested".
     Database-level checks (no steps, no app version) are listed per stage separately.
     """
@@ -142,7 +143,10 @@ def matrix(conn, run_id, attempt_id) -> dict:
             db_checks.append({"observation_id": o["observation_id"], "stage_id": o["stage_id"],
                               "check_name": o["check_name"], "status": o["status"]})
             continue
-        col = f"{apps[0] or 'unknown'} -> {apps[-1] or 'unknown'}"
+        if apps[0] == apps[-1] and len(set(apps)) > 1:
+            col = "mixed"  # starts and ends on one version but crosses to another in between
+        else:
+            col = f"{apps[0] or 'unknown'} -> {apps[-1] or 'unknown'}"
         if col not in columns:
             columns.append(col)
         rows.append({"observation_id": o["observation_id"], "stage_id": o["stage_id"],
