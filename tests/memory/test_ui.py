@@ -84,3 +84,7 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "openEvidence" in js
     assert "evidence-drawer" in css
     assert "prefers-reduced-motion" in css
+    assert "INTERACTIVE COMPATIBILITY REVIEW" in js
+    assert "FAILED PLAN &#8594; REVISED PLAN" in js
+    assert "workspace-layout" in css
+    assert "data-workspace-row" in js
