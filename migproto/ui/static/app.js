@@ -9,6 +9,8 @@ const val = (v, label) => (v === null || v === undefined || v === "") ? unknown(
 const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
+const fmt = (n) => new Intl.NumberFormat().format(n || 0);
+const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400 };
 
 async function api(path) {
   const r = await fetch(path);
@@ -85,24 +87,97 @@ async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available } = await api("/api/runs");
   const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
+  const checks = details.reduce((n, d) => n + (d.meta?.checks_total || 0), 0);
+  const attempts = details.reduce((n, d) => n + d.attempts.length, 0);
+  const failures = details.reduce((n, d) => n + d.attempts.reduce((x, a) => x + a.checks_failed, 0), 0);
+  const demo = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
   const rows = details.map((d) => {
     const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
-    return `<tr class="link" data-href="#/run/${enc(d.run_id)}">
+    const search = `${d.run_id} ${d.meta?.verdict || ""} ${d.source_kind} ${d.meta?.model || "scripted"}`.toLowerCase();
+    return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.meta?.verdict || "")}" data-kind="${esc(d.source_kind)}">
       <td><input type="checkbox" class="pick" value="${esc(d.run_id)}" aria-label="select for compare"></td>
-      <td><a href="#/run/${enc(d.run_id)}">${esc(d.run_id)}</a></td>
+      <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempts.length} attempt${d.attempts.length === 1 ? "" : "s"}</small></td>
       <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
       <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
   }).join("");
-  return `<div class="row spread"><h1>Runs</h1>
-      <div class="row">
-        <button id="compare" disabled>Compare 2 selected</button>
-        <button disabled title="controller not available">Run Review</button>
-      </div></div>
-    <div class="card table-wrap"><table>
+  return `<section class="hero">
+      <div class="hero-copy"><span class="eyebrow">EVIDENCE-DRIVEN MIGRATION REVIEW</span>
+        <h1>Ship schema changes<br><span>without flying blind.</span></h1>
+        <p>Replay how agents investigate, propose, test, fail, and revise while a deterministic runner remains the source of truth.</p>
+        <div class="hero-actions">${demo ? `<a class="button primary" href="#/demo/${enc(demo.run_id)}">&#9655; Start guided demo</a>` : ""}<button class="button ghost" data-scroll-runs>Explore evidence</button></div>
+      </div>
+      <div class="hero-visual" aria-label="Agent workflow"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="flow-node investigator"><small>01</small><strong>Investigate</strong><span>Code impact</span></div>
+        <div class="flow-node planner"><small>02</small><strong>Plan</strong><span>Staged SQL</span></div>
+        <div class="flow-node runner"><small>03</small><strong>Verify</strong><span>Runner evidence</span></div>
+        <div class="flow-line line-a"></div><div class="flow-line line-b"></div></div>
+    </section>
+    <section class="stat-grid">
+      <div class="stat-card"><span>Recorded reviews</span><strong>${fmt(details.length)}</strong><small>Fixtures + local runs</small></div>
+      <div class="stat-card"><span>Checks executed</span><strong>${fmt(checks)}</strong><small>Runner observations</small></div>
+      <div class="stat-card"><span>Plan attempts</span><strong>${fmt(attempts)}</strong><small>Failed attempts preserved</small></div>
+      <div class="stat-card danger"><span>Failures surfaced</span><strong>${fmt(failures)}</strong><small>Evidence, not hidden</small></div>
+    </section>
+    <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
+      <div class="row"><button id="compare" disabled>Compare selected</button><button class="button-muted" disabled title="Controller integration is not available">Run Review <span class="soon">soon</span></button></div></section>
+    <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
+      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
+      <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
+    <div class="card table-wrap runs-card"><table>
       <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
       ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
     </table></div>
-    ${controller_available ? "" : `<p class="muted">Run Review is disabled until the controller exists.</p>`}`;
+    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review disabled?</strong><span>The replay UI is intentionally read-only until the stable controller API is connected.</span></div>`}`;
+}
+
+function replaySteps(run) {
+  const steps = [{kind: "request", actor: "investigator", title: "Review request received", detail: run.meta?.scenario || "Migration scenario loaded from recorded evidence."}];
+  const findings = run.claims_without_attempt || [];
+  steps.push({kind: "investigate", actor: "investigator", title: "Application impact mapped", detail: `${findings.length} recorded investigator finding${findings.length === 1 ? "" : "s"}.`});
+  for (const attempt of run.attempts) {
+    const label = short(attempt.attempt_id);
+    steps.push({kind: "plan", actor: "planner", title: `${label}: staged plan proposed`, detail: attempt.plans[0]?.body?.summary || "Plan artifact recorded.", attempt});
+    for (const stage of attempt.stages) steps.push({kind: "stage", actor: "runner", title: `${label}: ${stage.stage_id}`, detail: `${stage.stage_kind}${stage.phase ? ` / ${stage.phase}` : ""}`, stage, attempt});
+    if (attempt.ok === 0) steps.push({kind: "failure", actor: "tester", title: `${label}: evidence exposed a failure`, detail: attempt.halted || `${attempt.checks_failed} check(s) failed.`, attempt});
+    const cause = attempt.claims.find((c) => c.kind === "suspected_cause");
+    if (cause) steps.push({kind: "feedback", actor: "tester", title: "Tester returned scoped feedback", detail: cause.text, attempt});
+    if (attempt.ok === 1) steps.push({kind: "success", actor: "runner", title: `${label}: verification passed`, detail: `${attempt.checks_total} checks recorded with no final-attempt failures.`, attempt});
+  }
+  steps.push({kind: "verdict", actor: "runner", title: `Final tested outcome: ${run.meta?.verdict || "unknown"}`, detail: "The verdict is produced from runner observations, not an agent claim."});
+  return steps;
+}
+
+function replayMarkup(run, steps, index) {
+  const step = steps[index];
+  const pct = steps.length > 1 ? Math.round(index / (steps.length - 1) * 100) : 100;
+  const actorLabel = {investigator: "Investigator", planner: "Planner", tester: "Tester", runner: "Deterministic runner"}[step.actor];
+  const tracks = run.attempts.map((a) => `<div class="attempt-track ${a.ok === 1 ? "ok" : "bad"}"><span>${esc(short(a.attempt_id))}</span><div><i style="width:${a === step.attempt ? pct + "%" : a.ok === 1 ? "100%" : "72%"}"></i></div><small>${a.ok === 1 ? "passed" : a.ok === 0 ? "failed" : "recorded"}</small></div>`).join("");
+  return `<div class="demo-shell">
+    <section class="demo-head"><div><span class="eyebrow">GUIDED RECORDED REPLAY</span><h1>${esc(run.run_id)}</h1><div class="row">${verdictBadge(run.meta?.verdict)} ${typeBadges(run)}</div></div><a class="button ghost" href="#/run/${enc(run.run_id)}">Open evidence browser</a></section>
+    <div class="replay-progress"><i style="width:${pct}%"></i></div>
+    <section class="replay-grid"><div class="system-map">
+      <div class="map-title"><span>Agent workflow</span><small>Step ${index + 1} of ${steps.length}</small></div>
+      <div class="agent-lane">${["investigator", "planner", "tester"].map((a) => `<div class="agent-node ${step.actor === a ? "active" : ""}"><span>${a[0].toUpperCase()}</span><strong>${a[0].toUpperCase() + a.slice(1)}</strong><small>${a === "investigator" ? "code context" : a === "planner" ? "migration plan" : "test strategy"}</small></div>`).join('<span class="connector">&#8594;</span>')}</div>
+      <div class="runner-node ${step.actor === "runner" ? "active" : ""}"><span>R</span><div><strong>Deterministic runner</strong><small>Old Saleor + New Saleor + PostgreSQL</small></div><b>source of truth</b></div>
+      <div class="schema-strip"><span>old app</span><i></i><span>shared database</span><i></i><span>new app</span></div>
+    </div><div class="replay-focus ${esc(step.kind)}"><span class="actor-chip">${esc(actorLabel)}</span><h2>${esc(step.title)}</h2><p>${esc(step.detail)}</p>
+      ${step.kind === "failure" ? `<div class="failure-callout">Evidence stopped unsafe contract execution.</div>` : ""}${step.kind === "success" ? `<div class="success-callout">All recorded final-attempt checks passed.</div>` : ""}</div></section>
+    <section class="attempt-timeline"><div class="map-title"><span>Attempt history</span><small>Earlier failures remain visible</small></div>${tracks}</section>
+    <section class="replay-controls"><button id="replay-prev" ${index === 0 ? "disabled" : ""}>&#8592; Previous</button><button id="replay-play" class="primary">${state.replayTimer ? "Pause" : "Play replay"}</button><button id="replay-next" ${index === steps.length - 1 ? "disabled" : ""}>Next &#8594;</button>
+      <select id="replay-speed" aria-label="Replay speed"><option value="2200">0.5x</option><option value="1400" ${state.replaySpeed === 1400 ? "selected" : ""}>1x</option><option value="700">2x</option></select><span class="step-counter">${index + 1} / ${steps.length}</span></section>
+    <div class="step-dots">${steps.map((_, i) => `<button data-replay-step="${i}" class="${i === index ? "active" : ""}" aria-label="Go to step ${i + 1}"></button>`).join("")}</div></div>`;
+}
+
+async function pageDemo(id) {
+  const run = await getRun(id);
+  crumbs([["Runs", "#/"], ["Guided demo"]]);
+  const steps = replaySteps(run);
+  state.replayStep = Math.min(state.replayStep, steps.length - 1);
+  if (state.replayStep === steps.length - 1 && state.replayTimer) {
+    clearInterval(state.replayTimer);
+    state.replayTimer = null;
+  }
+  return replayMarkup(run, steps, state.replayStep);
 }
 
 async function pageOverview(id) {
@@ -290,6 +365,44 @@ async function pageCompare(a, b) {
     <div class="compare">${await col(a)}${await col(b)}</div>`;
 }
 
+async function openEvidence(oid) {
+  const drawer = $("#evidence-drawer");
+  const backdrop = $("#drawer-backdrop");
+  const content = $("#drawer-content");
+  content.innerHTML = `<div class="drawer-loading">Loading recorded evidence...</div>`;
+  drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false;
+  try {
+    const o = await api(`/api/observation?id=${enc(oid)}`);
+    const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s, i) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${i + 1}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
+    content.innerHTML = `<span class="eyebrow">RECORDED EVIDENCE</span><div class="row drawer-title"><h2>${esc(o.check_name)}</h2>${verdictBadge(o.status)}</div>
+      <div class="scope-grid"><div><span>Attempt</span><strong>${val(short(o.attempt_id))}</strong></div><div><span>Stage</span><strong>${val(o.stage_id)}</strong></div><div><span>Scope</span><strong>${val(o.scope_source)}</strong></div><div><span>Provenance</span><strong>${val(o.executed_by)}</strong></div></div>
+      <h3>Step trace</h3>${steps}${o.error ? `<h3>Error</h3><pre>${esc(o.error)}</pre>` : ""}
+      <details><summary>Raw observation</summary><pre>${esc(JSON.stringify(o.raw, null, 2))}</pre></details>
+      <a class="button ghost drawer-link" href="#/obs/${enc(o.observation_id)}">Open full evidence page</a>`;
+  } catch (err) { content.innerHTML = `<div class="notice">Failed to load evidence: ${esc(err.message)}</div>`; }
+}
+
+function closeDrawer() {
+  $("#evidence-drawer").classList.remove("open");
+  $("#evidence-drawer").setAttribute("aria-hidden", "true");
+  $("#drawer-backdrop").hidden = true;
+}
+
+function filterRuns() {
+  const q = ($("#run-search")?.value || "").toLowerCase();
+  const verdict = $("#verdict-filter")?.value || "";
+  const kind = $("#kind-filter")?.value || "";
+  document.querySelectorAll(".run-row").forEach((row) => {
+    row.hidden = !(row.dataset.search.includes(q) && (!verdict || row.dataset.verdict === verdict) && (!kind || row.dataset.kind === kind));
+  });
+}
+
+function rerenderReplay(delta = 0, exact = null) {
+  if (exact !== null) state.replayStep = exact;
+  else state.replayStep = Math.max(0, state.replayStep + delta);
+  route();
+}
+
 // ---------- router ----------
 
 async function route() {
@@ -298,6 +411,7 @@ async function route() {
   try {
     let html;
     if (!parts.length) html = await pageRuns();
+    else if (parts[0] === "demo" && parts.length === 2) html = await pageDemo(parts[1]);
     else if (parts[0] === "run" && parts.length === 2) html = await pageOverview(parts[1]);
     else if (parts[0] === "run" && parts[2] === "plan") html = await pagePlan(parts[1], parts[3] || "a1");
     else if (parts[0] === "run" && parts[2] === "matrix") html = await pageMatrix(parts[1], parts[3] || "a1");
@@ -314,18 +428,50 @@ async function route() {
 }
 
 document.addEventListener("click", (ev) => {
+  if (ev.target.closest("[data-scroll-runs]")) {
+    document.querySelector("#runs-table")?.scrollIntoView({behavior: "smooth", block: "start"});
+    return;
+  }
   const obs = ev.target.closest("[data-obs]");
-  if (obs) { location.hash = `#/obs/${enc(obs.dataset.obs)}`; return; }
+  if (obs) { openEvidence(obs.dataset.obs); return; }
+  if (ev.target.closest("#drawer-close") || ev.target.id === "drawer-backdrop") { closeDrawer(); return; }
+  const replayDot = ev.target.closest("[data-replay-step]");
+  if (replayDot) { rerenderReplay(0, Number(replayDot.dataset.replayStep)); return; }
+  if (ev.target.closest("#replay-prev")) { rerenderReplay(-1); return; }
+  if (ev.target.closest("#replay-next")) { rerenderReplay(1); return; }
+  if (ev.target.closest("#replay-play")) {
+    if (state.replayTimer) { clearInterval(state.replayTimer); state.replayTimer = null; route(); }
+    else { state.replayTimer = setInterval(() => { state.replayStep += 1; route(); }, state.replaySpeed); route(); }
+    return;
+  }
+  if (ev.target.closest("#theme-toggle")) {
+    const root = document.documentElement;
+    root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
+    localStorage.setItem("migrationlab-theme", root.dataset.theme); return;
+  }
   if (ev.target.closest("a, input, button, summary")) return;
   const row = ev.target.closest("[data-href]");
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (["verdict-filter", "kind-filter"].includes(ev.target.id)) { filterRuns(); return; }
+  if (ev.target.id === "replay-speed") {
+    state.replaySpeed = Number(ev.target.value);
+    if (state.replayTimer) { clearInterval(state.replayTimer); state.replayTimer = setInterval(() => { state.replayStep += 1; route(); }, state.replaySpeed); }
+    return;
+  }
   if (!ev.target.classList.contains("pick")) return;
   const picked = [...document.querySelectorAll(".pick:checked")].map((x) => x.value);
   const btn = $("#compare");
   btn.disabled = picked.length !== 2;
   btn.onclick = () => { location.hash = `#/compare/${enc(picked[0])}/${enc(picked[1])}`; };
 });
+document.addEventListener("input", (ev) => { if (ev.target.id === "run-search") filterRuns(); });
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeDrawer();
+  if (location.hash.startsWith("#/demo/") && ev.key === "ArrowRight") rerenderReplay(1);
+  if (location.hash.startsWith("#/demo/") && ev.key === "ArrowLeft") rerenderReplay(-1);
+});
 window.addEventListener("hashchange", route);
+document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "dark";
 route();
