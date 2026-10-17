@@ -124,7 +124,7 @@ def derive(run: dict) -> dict:
             schema = (schema_by_stage.get((attempt, stage))
                       if stage_kind == "sql" else None)
             obs = {
-                "observation_id": f"{run_id}/{attempt}/{e['name']}#{e['seq']}",
+                "observation_id": f"{run_id}/{attempt or '-'}/{e['name']}#{e['seq']}",
                 "run_id": run_id,
                 "attempt": attempt,
                 "plan_id": plan_id,
