@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,12 +24,15 @@ PG_HOST = "127.0.0.1"
 PG_PORT = 55432
 PG_USER = "saleor"
 PG_PASSWORD = "saleor"
-CACHE_URL = "redis://127.0.0.1:56379/0"
+# Overrides let parallel runners (scripts/brev/supervise.py --workers) use their own app ports
+# and Redis database on one machine; unset keeps the single-runner defaults.
+CACHE_URL = os.environ.get("MIGPROTO_CACHE_URL") or "redis://127.0.0.1:56379/0"
 
 SEED_DB = "migproto_seed"
 RUN_DB_PREFIX = "migproto_run_"
 
-PORTS = {"old": 8001, "new": 8002}
+PORTS = {"old": int(os.environ.get("MIGPROTO_PORT_OLD") or 8001),
+         "new": int(os.environ.get("MIGPROTO_PORT_NEW") or 8002)}
 ADMIN_EMAIL = "admin@example.com"
 ADMIN_PASSWORD = "admin"
 

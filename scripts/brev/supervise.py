@@ -214,18 +214,28 @@ class Supervisor:
         self.log("INFO", f"request {path.name}: budget {request['budget']}")
         return path
 
-    def run_one(self, n, topology, request) -> dict:
+    def worker_env(self, w: int) -> dict:
+        """Worker 0 uses the runner defaults; others get their own ports, lock and cache DB."""
+        env = dict(self.env)
+        if w:
+            env.update(MIGPROTO_PORT_OLD=str(8001 + 10 * w), MIGPROTO_PORT_NEW=str(8002 + 10 * w),
+                       MIGPROTO_LOCK_PATH=str(ROOT / "runs" / f".migproto-execution-w{w}.lock"),
+                       MIGPROTO_CACHE_URL=f"redis://127.0.0.1:56379/{w}")
+        return env
+
+    def run_one(self, n, topology, request, w=0) -> dict:
         out = self.dir / f"{n:02d}-{topology}.out"
         t0 = time.monotonic()
         cmd = ["uv", "run", "migproto", "agent-loop", "--proposals", self.a.proposals,
                "--topology", topology, "--request", str(request)]
         with out.open("w") as f:
-            code = subprocess.run(cmd, cwd=ROOT, env=self.env, stdout=f,
+            code = subprocess.run(cmd, cwd=ROOT, env=self.worker_env(w), stdout=f,
                                   stderr=subprocess.STDOUT).returncode
         text = out.read_text()
         m = re.findall(r"summary\s+(\S+)\s+-> (\S+)", text)
         verdict, run_dir = m[-1] if m else ("UNKNOWN", None)
-        rec = {"n": n, "topology": topology, "verdict": verdict, "exit": code,
+        rec = {"n": n, "worker": w, "workers": self.a.workers, "topology": topology,
+               "verdict": verdict, "exit": code,
                "run_id": Path(run_dir).name if run_dir else None,
                "seconds": round(time.monotonic() - t0, 1), "spend_usd": self.spend()}
         if run_dir and (Path(run_dir) / "summary.json").is_file():
@@ -236,40 +246,65 @@ class Supervisor:
             rec["checks_total"] = s.get("checks_total")
             rec["checks_failed"] = len(s.get("checks_failed") or [])
             rec["reason"] = s.get("reason")
-        with (self.dir / "runs.jsonl").open("a") as f:
+        with self.record_lock, (self.dir / "runs.jsonl").open("a") as f:
             f.write(json.dumps(rec) + "\n")
         return rec
 
+    def may_start(self) -> bool:
+        if (self.dir / "STOP").exists():
+            self.log("WARN", "STOP file found; not starting more runs")
+            return False
+        if self.spend() >= self.a.stop_usd:
+            self.log("ALERT", f"estimated spend ${self.spend()} reached --stop-usd "
+                     f"{self.a.stop_usd}; not starting more runs")
+            return False
+        if not self.a.local_url and not self.server_alive():
+            self.log("ALERT", "vLLM is not running on the instance:\n" + self.remote_tail())
+            return False
+        for _ in range(12):
+            if self.healthy():
+                return True
+            time.sleep(10)
+        self.log("ALERT", "endpoint unhealthy for 2 min; stopping the batch")
+        return False
+
     def batch(self):
         request = self.write_request()
-        order = [t for _ in range(self.a.runs) for t in self.a.topologies]
-        results = []
-        for n, topology in enumerate(order, 1):
-            if (self.dir / "STOP").exists():
-                self.log("WARN", "STOP file found; not starting more runs")
-                break
-            if self.spend() >= self.a.stop_usd:
-                self.log("ALERT", f"estimated spend ${self.spend()} reached --stop-usd "
-                         f"{self.a.stop_usd}; not starting more runs")
-                break
-            if not self.a.local_url and not self.server_alive():
-                self.log("ALERT", "vLLM is not running on the instance:\n" + self.remote_tail())
-                break
-            for _ in range(12):
-                if self.healthy():
-                    break
-                time.sleep(10)
-            else:
-                self.log("ALERT", "endpoint unhealthy for 2 min; stopping the batch")
-                break
-            self.log("RUN", f"{n}/{len(order)} {topology} starting (~${self.spend()})")
-            rec = self.run_one(n, topology, request)
-            results.append(rec)
-            self.log("RUN", f"{n}/{len(order)} {topology} {rec['verdict']} run={rec['run_id']} "
-                     f"{rec['seconds']} s, calls={rec.get('model_calls')} "
-                     f"tokens={rec.get('total_tokens')} "
-                     f"stopped={rec.get('exhausted_reason')} (~${rec['spend_usd']})")
-        return results
+        order = list(enumerate((t for _ in range(self.a.runs) for t in self.a.topologies), 1))
+        total, results = len(order), []
+        queue_lock, self.record_lock = threading.Lock(), threading.Lock()
+        state = {"stop": False, "last_launch": 0.0}
+
+        def worker(w):
+            while True:
+                with queue_lock:
+                    if state["stop"] or not order:
+                        return
+                    if not self.may_start():
+                        state["stop"] = True
+                        return
+                    # RunLog names run dirs by the second: space launches apart.
+                    time.sleep(max(0.0, state["last_launch"] + 3 - time.monotonic()))
+                    state["last_launch"] = time.monotonic()
+                    n, topology = order.pop(0)
+                    self.log("RUN", f"{n}/{total} {topology} starting on worker {w} "
+                             f"(~${self.spend()})")
+                rec = self.run_one(n, topology, request, w)
+                with queue_lock:
+                    results.append(rec)
+                self.log("RUN", f"{n}/{total} {topology} {rec['verdict']} run={rec['run_id']} "
+                         f"{rec['seconds']} s, calls={rec.get('model_calls')} "
+                         f"tokens={rec.get('total_tokens')} "
+                         f"stopped={rec.get('exhausted_reason')} (~${rec['spend_usd']})")
+
+        first = self.a.first_worker
+        threads = [threading.Thread(target=worker, args=(w,), daemon=True)
+                   for w in range(first, first + self.a.workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        return sorted(results, key=lambda r: r["n"])
 
     # ---- main ----
 
@@ -329,6 +364,10 @@ def parse(argv=None):
     p.add_argument("--stop-usd", type=float, default=18.0,
                    help="stop launching runs at this estimated spend (default leaves a reserve)")
     p.add_argument("--runs", type=int, default=1, help="runs per topology")
+    p.add_argument("--workers", type=int, default=1,
+                   help="reviews run in parallel (each with its own app ports, lock and cache DB)")
+    p.add_argument("--first-worker", type=int, default=0,
+                   help="index of the first worker (worker 0 = runner defaults)")
     p.add_argument("--topologies", default="roles,single")
     p.add_argument("--proposals", choices=["llm", "scripted"], default="llm")
     p.add_argument("--max-revisions", type=int, default=1)
