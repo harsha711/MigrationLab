@@ -16,7 +16,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Scripted one-way sync (plan v1, manually authored and deliberately flawed):** 9 of 29 checks failed (old writes never reached `customer_note`, 7 rows disagreed), and the runner refused the contract stage (`examples/scripted-sync-failure`).
 - **Scripted staged alternative (plan v2, manually authored):** 33 of 33 documented checks passed (`examples/scripted-staged-success`). The pass covers only those checks: sequential interleaving, 245 rows, one machine.
 - **Live run:** one `gpt-oss:120b-cloud` run (via Ollama, cloud-backed) generated its own SQL. Attempt 1 had 30 checks, of which 1 failed: `retirement_gate`, because the contract stage was placed before `retire_old`. After that feedback, attempt 2 reordered the stages and passed 41 of 41. The run made 8 model calls, used 30,036 total tokens, and took 88.2 s (`examples/live-ordering-revision`).
-- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation.
+- **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. No Nemotron Lightning, vLLM or NeMo Gym integration exists yet.
 - **Multi-agent claim:** no superiority over a single agent has been established. No single-agent baseline exists yet.
 - **Runner tests:** `uv run pytest` runs 34 tests covering the SQL guard, plan schema, and trigger semantics on a scratch table.
 
@@ -45,6 +45,9 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 | `scripts/export_example.py`, `examples/` | sanitized fixture export and frozen fixtures | Harsha |
 | `docs/contracts.md` | shared data contracts and gap register | Harsha (coordinator) |
 | `migproto/memory/`, `migproto/ui/` (planned, not created) | evidence adapter, SQLite store, review UI | Owner 3 |
+| `gym/` (planned, not created) | NeMo Gym resources server wrapping the runner, frozen tasks, results | Harsha |
+| `docs/serving.md`, `docs/results.md` (planned), `docs/model-inventory.md` | vLLM serving record, measured results, model and parameter inventory | Owner 2 |
+| `docs/bounties.md` | bounty requirements (verified versus unverified), owners, status, open questions | Harsha (coordinator) |
 
 Data flow: `migproto/agents/loop.py` asks roles for proposals. It passes plan and tests to `staged.run`, which starts `old` and `new-staged` servers on a fresh `migproto_run_*` clone of the `migproto_seed` template. The runner executes SQL stages through `db.run_guarded` and records every observation through `RunLog`.
 
@@ -97,6 +100,15 @@ Exit codes: 0 on `PASS` or `REPRODUCED`, 1 on `FAIL`, 2 on `ERROR`. Every comman
 - Record model identity, endpoint, parameters and budgets for every model run.
 - Do not claim zero downtime, concurrency safety, or general migration support beyond what was tested.
 - `PG_PASSWORD = "saleor"` and `admin@example.com` / `admin` are Saleor's local development defaults for disposable containers, not credentials. Never commit real keys. `.env` is git-ignored.
+
+## Bounties, models and compute
+
+- Bounties targeted: NVIDIA Nemotron 3.5 Lightning, Red Hat vLLM (Owner 2), and NVIDIA NeMo Gym (Owner 1). Owner 3 presents the evidence. See `docs/bounties.md`. Track-specific requirements are **not verified**, so never claim qualification. Keep unimplemented integrations marked planned.
+- Parameter budget: the submitted system stays within **33B total parameters** (event rule, verified). Count inactive MoE experts and every draft, embedding, critic or judge model. Keep `docs/model-inventory.md` current with exact checkpoints and counts, and check the remaining budget before adding any model.
+- One shared Nemotron 3.5 Lightning vLLM deployment serves all agent roles. Draft models (DSpark, DFlash) stay excluded until organizers confirm accounting.
+- `gpt-oss:120b-cloud` is development-only and stays outside the submitted workflow.
+- Compute: serve models and make live model calls only on GPU instances paid for with the **event-provided NVIDIA Brev credits**. Never use a teammate's personal machine, personal cloud account or personal credits. Scripted mode needs no GPU.
+- Priority: (1) small-model loop on vLLM, (2) integrated evidence and UI, (3) NeMo Gym adapter and evaluation, (4) optional serving experiments.
 
 ## Collaboration
 

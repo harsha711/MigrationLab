@@ -70,6 +70,10 @@ Start with [docs/team/README.md](docs/team/README.md), [AGENTS.md](AGENTS.md) (r
 5. UI → live review.
 6. Small-model single-agent versus multi-agent comparison.
 
+## Bounties and model budget
+
+We target the NVIDIA Nemotron 3.5 Lightning, Red Hat vLLM and NVIDIA NeMo Gym bounties at the NVIDIA x Red Hat Small Models Hack. All three integrations are **planned, not implemented**, and track-specific requirements are still unverified. See [docs/bounties.md](docs/bounties.md) for requirements, owners, status and open questions, and [docs/model-inventory.md](docs/model-inventory.md) for the ≤ 33B total-parameter budget. The submitted system will use one shared Lightning deployment on vLLM, served with event-provided NVIDIA Brev credits. The earlier `gpt-oss:120b-cloud` runs are development-only.
+
 ## Current limitations
 
 - One field, one rename pattern, one target commit. The scenario is intentionally introduced.

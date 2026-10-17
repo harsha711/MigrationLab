@@ -31,6 +31,16 @@ New: `migproto/memory/` (adapter, store, query), `migproto/ui/` (server and stat
 5. **Run Review.** Collect a review request and start it through the controller or runner interface only (`runner_api` / controller from Owners 1 and 2). While that interface does not exist, show the button disabled with "controller not available" and never shell out to SQL or servers from the UI. Show live progress by tailing `events.jsonl`, or via the progress callback once it exists.
 6. **UI stack.** Choose a lightweight stack compatible with the repo: Python 3.12 managed by uv. Prefer stdlib `http.server` (or one small dependency added to `pyproject.toml` and noted in your handoff) serving JSON plus static HTML/JS with no build step. Add a CLI entry such as `migproto ui` through a small reviewed change to `cli.py`.
 
+## Bounty work: evidence presentation (priority 2)
+
+Context: `docs/bounties.md`. No bounty qualification is verified yet.
+
+1. **Model and backend per run.** Show the actual model, checkpoint revision, serving backend and version, and hardware from each run's `agent_config` event. Show "not recorded" when a field is absent (v0 runs record only `model` and `base_url`). Label `gpt-oss:120b-cloud` runs "development run, outside submission budget".
+2. **Results panel.** Compact, built from saved measurements only: task success (final verdict), verification failures (failed or refused observations per attempt), latency (per call and per run), and inference usage (tokens per call, totals from `agents/model_calls.json` or v1 summary fields).
+3. **Gym results.** Show NeMo Gym evaluation scores from `gym/results/` once Owner 1 produces them. Until then, show the panel as "not connected".
+4. **Recorded versus live.** Mark every view as either "Recorded run (replay)" or "Live run". Fixtures also show "sample fixture" and their manifest.
+5. **No implied qualification.** Show no improvement that isn't computed from saved runs, and no sponsor logo or badge that implies qualification.
+
 ## Inputs and outputs
 
 - Inputs: `examples/*/`, `runs/*/` (v0 now, v1 later), controller interface (later).
@@ -82,6 +92,11 @@ preserving run/attempt/step/application/schema scope and provenance. Apply only 
 documented v0 derivation rules, mark derived values scope_source=derived_v0, and leave
 everything else null ("unknown"). Write tests that the four fixtures reproduce their
 summary.json facts exactly.
+
+Include the bounty evidence items from the assignment: show the actual model, revision,
+serving backend and hardware per run ("not recorded" when absent), a compact results panel
+from saved measurements only, and a clear Recorded-versus-Live label. Never imply bounty
+qualification.
 
 Then build the single "Replay Recorded Run" screen with a lightweight stack (stdlib
 http.server + static HTML/JS preferred). Run Review must call the controller/runner

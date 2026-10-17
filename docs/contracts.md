@@ -252,3 +252,5 @@ Missing for v1: `contract_version`, `run_id`, per-attempt check counts, `model` 
 | G9 | No single-agent topology to compare with the role loop | Owner 2 |
 | G10 | No storage or query layer for observations and claims | Owner 3 |
 | G11 | No controller API callable by a UI (only CLI) | Harsha (runner API), Owner 2 (controller) |
+| G12 | `agent_config` lacks checkpoint revision, serving backend and version, hardware, sampling settings | Owner 2 |
+| G13 | No NeMo Gym episode, trajectory or score record shape | Harsha |

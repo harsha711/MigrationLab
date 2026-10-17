@@ -34,6 +34,21 @@ Make the runner the single trusted source of executed evidence: stable execution
 7. **Evidence fixtures.** After tasks 3 and 4, regenerate `examples/` from fresh runs (`unsafe`, `staged` with v1 and v2, scripted loop) with v1 fields. Keep the live v0 fixture as is (do not rerun the 120B model for documentation).
 8. **Held-out variation (only after integration checklist step 3 works).** Add one scenario variation, for example a different noncritical text field or a rename combined with a NOT NULL default. Keep its patches and expected outcomes under `heldout/`, excluded from every agent prompt and tool. Expose it through a CLI flag that Owner 2 can select without reading its contents.
 
+## Bounty work: NeMo Gym environment (priority 3, after runner interfaces are stable)
+
+Requirements are in `docs/bounties.md`, section 3.3. The track requirements are **unverified**, so ask the organizers first whether the bounty requires training or accepts an environment plus system or prompt improvement (question 4) before expanding scope.
+
+1. **Prerequisites:** tasks 2-4 above (`runner_api.execute_plan`, v1 scope fields, start-state hashes), plus per-session resource allocation. Today `staged.py` uses fixed ports 8001 and 8002 and one database per call, so concurrent rollouts need allocated ports and `migproto_run_*` databases.
+2. **Resources server in `gym/`.** Implement it with NeMo Gym's `SimpleResourcesServer`. `seed_session` creates the episode: a migration request (Review request contract), repository context (old-worktree search hits), a starting database state (a clone of `migproto_seed` with a recorded hash), and an execution budget (plan submissions, test runs, wall time).
+3. **Tool endpoints** keyed by `session_id`, all calling existing code: `investigate` (wraps `agents/roles.gather_hits`), `submit_plan` (validates with `plans.py`), `run_tests` (calls `runner_api.execute_plan` and returns real observations with scope). There is no second execution implementation.
+4. **`verify()` reward.** Use `BaseMultiRewardVerifyResponse` with components `plan_completed`, `mandatory_checks_passed` (the full manual catalogue, preservation, column agreement, retirement gate) and `data_preserved`. The scalar `reward` is 1.0 only if all three hold. Setup failures (Docker, Saleor start, seed) are returned as an explicit `setup_error` field and excluded from scores, never as reward 0 or 1.
+5. **Anti-gaming.** No submitted plan, an invalid plan, a skipped contract, a disabled check, or a budget overrun scores 0. The agent cannot modify the catalogue, the gate, or verification code, and mandatory checks run regardless of what the agent asks. Add tests in `tests/gym/` for the do-nothing, skip-checks, and contract-before-retire episodes.
+6. **Frozen tasks.** `gym/tasks/*.jsonl` holds the main scenario plus the held-out variation (task 8). Evaluate baseline and final systems on the same frozen file.
+7. **Artifacts.** Save the config, trajectories, per-episode scores and `gym/README.md` reproduction instructions in `gym/results/<date>/`.
+8. **Claim limits.** Evaluation integration shows a measured system or prompt improvement only. Describe any improvement as such unless weights were actually trained.
+
+Additional owned paths: `gym/`, `tests/gym/`.
+
 ## Inputs and outputs
 
 - Inputs: candidate plan and tester proposal JSON (from Owner 2), Execution request contract.
@@ -89,4 +104,10 @@ mandatory check. Do not describe the SQL guard as a sandbox.
 After each change run: uv run pytest -q and uv run migproto agent-loop --proposals scripted.
 Report the run_ids, the counts of checks by outcome, and any contract change you made to
 docs/contracts.md.
+
+Later (priority 3, only after runner_api and v1 fields are stable): the NeMo Gym section of
+docs/team/01-runner.md. Wrap the existing runner as a resources server in gym/ without a second
+execution path, score completion plus mandatory checks, report setup errors separately, and
+make do-nothing or skipped-check episodes score 0. Confirm with organizers whether training is
+required before expanding scope.
 ```

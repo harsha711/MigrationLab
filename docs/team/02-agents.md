@@ -30,6 +30,27 @@ Turn the existing investigator, planner and tester loop into a budgeted, fully r
 8. **Scoped retrieval.** Read prior observations through Owner 3's query API once it exists. Until then, use an adapter over `examples/` with the same function signature.
 9. **Comparison harness (integration step 6).** Repeated runs per topology on the main scenario and Harsha's held-out variation. Report per-run outcomes, attempts, tokens and latency. State no conclusion beyond the measured runs.
 
+## Bounty work: Nemotron 3.5 Lightning + Red Hat vLLM
+
+Eligibility and requirements are in `docs/bounties.md`. Track requirements are **not yet verified**, so do not claim qualification. Model accounting is in `docs/model-inventory.md`. This is priority 1 for the team.
+
+Ordered bounty tasks. These replace task 3 above and feed tasks 4-9.
+
+1. **Remove the 120B default.** In `migproto/agents/llm.py`, require `MIGPROTO_LLM_MODEL` to be set explicitly for `--proposals llm`, or default it to the served Lightning name. `gpt-oss:120b-cloud` stays out of the submitted workflow. Its runs are labeled development-only.
+2. **Confirm compatibility before provisioning.** Lightning NVFP4 needs vLLM ≥ 0.27.1 and Hopper or Blackwell (or Ampere through W4A16). Weights are about 18 GB. Provision an H100-class instance with the **event-provided NVIDIA Brev credits** only, never personal machines, accounts or credits.
+3. **One shared vLLM deployment.** Serve `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4` at the pinned revision with the no-speculative-decoding H100 recipe in `docs/bounties.md`, section 5 (no draft model, which keeps the parameter budget clear). All roles and the single-agent mode call this one endpoint.
+4. **Record serving facts.** Write `docs/serving.md` with the exact command, `vllm --version` or image digest, checkpoint and revision, flags, GPU model, driver and CUDA version, Brev instance type, and startup log excerpt. Mirror the key fields into each run's `agent_config` event (`model`, `revision`, `serving_backend`, `serving_version`, `hardware`).
+5. **Separate role contexts.** Each role call starts from its own system prompt and only the inputs that role is given. No shared chat history between roles. The single agent gets one context with the same tools and evidence.
+6. **Structured outputs.** Use vLLM structured outputs (`response_format` with a JSON schema derived from `plans.py`) where the server supports it, and keep validating every response with `plans.validate_plan` / `validate_tests` in code. Handle the reasoning parser: confirm `message.content` is non-empty (the model card suggests `chat_template_kwargs.force_nonempty_content`), and record whether thinking is enabled and which temperature and top_p were used (the card recommends 1.0 / 0.95, while `llm.py` sends 0).
+7. **Measure.** Per run and per topology: valid-proposal rate (schema-valid responses / model calls), per-call latency, prompt and completion tokens, attempts used, final plan success. Write the measured table to `docs/results.md` from saved runs. Promote representative runs with `scripts/export_example.py`.
+8. **Compare topologies.** Single agent versus cooperating roles: same Lightning deployment, tools, evidence, revision limit and total budget, same frozen tasks, repeated runs. Report the numbers without a superiority claim beyond them.
+9. **Budget check.** Before enabling MTP, DSpark, DFlash, or any extra model, update `docs/model-inventory.md` and get the organizer accounting answer (`docs/bounties.md`, question 2).
+10. **Only after the core loop works:** prefix-caching and concurrency experiments (priority 4), recorded in `docs/serving.md`.
+
+Additional owned paths: `docs/serving.md`, `docs/results.md`, `docs/model-inventory.md` (Harsha reviews).
+
+Bounty acceptance: one Lightning-on-vLLM run of each topology completes through the existing loop with a recorded model, revision, serving version, hardware, budget, per-call usage, and runner verdict. The scripted fallback still works without a GPU.
+
 ## Inputs and outputs
 
 - Inputs: Review request, `runner_api.execute_plan` results (Harsha), memory query API (Owner 3), model endpoint.
@@ -74,9 +95,14 @@ migproto/agents/, proposals/scripted/, tests/agents/ and the agent-loop flags in
 migproto/cli.py. Do not modify staged.py, checks.py, db.py or plans.py; propose runner changes
 to Harsha in a handoff note.
 
-Start with tasks 2-4 of docs/team/02-agents.md: accept a review request JSON (defaulting to
-the current User.note scenario), record model identity and budgets in agent_config, and enforce
-a total budget that ends a review as INCOMPLETE instead of PASS/FAIL. Keep pass/fail decisions
+Priority 1 is the bounty section of docs/team/02-agents.md: remove the gpt-oss:120b-cloud
+default, then make the existing loop run against one shared vLLM deployment of
+nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 (served on event-provided NVIDIA Brev
+credits only, never personal machines or accounts), with structured outputs validated by
+plans.py and model/serving/hardware recorded in agent_config. Read docs/bounties.md and
+docs/model-inventory.md; do not add any model (including draft models) without updating the
+inventory. Do not claim bounty qualification. Then do tasks 2 and 4: review request JSON input
+and a total budget that ends a review as INCOMPLETE instead of PASS/FAIL. Keep pass/fail decisions
 in the runner. Never put proposals/scripted, proposals/manual, patches/ or examples/ outcomes
 into prompts.
 

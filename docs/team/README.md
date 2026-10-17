@@ -16,6 +16,10 @@ Three owners, one shared runner, one contract file. Read the root `README.md` an
 - Use `examples/` as the frozen integration fixtures. Do not commit `runs/`. Promote a new fixture with `uv run python scripts/export_example.py runs/<run_id> <name> --kind <kind>` (Harsha reviews).
 - Evaluated agents must never see `proposals/scripted/plan_v2.json`, `proposals/manual/`, `patches/`, held-out scenarios or `examples/` outcomes.
 
+## Bounties and priority
+
+Bounty owners: Nemotron 3.5 Lightning and Red Hat vLLM go to Owner 2, NeMo Gym goes to Harsha, and evidence presentation goes to Owner 3. Requirements, status and open eligibility questions are in [../bounties.md](../bounties.md), and the parameter budget (≤ 33B total) is tracked in [../model-inventory.md](../model-inventory.md). Priority: (1) small-model loop on vLLM, (2) integrated evidence and UI, (3) NeMo Gym adapter and evaluation, (4) optional serving experiments. GPU work uses the event-provided NVIDIA Brev credits only.
+
 ## Integration checklist
 
 1. **Freeze example events and contracts.** `examples/` plus `docs/contracts.md` v0 are frozen at `feasibility-v1`. v1 fields are additive. (Harsha)
