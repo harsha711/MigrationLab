@@ -39,6 +39,8 @@ def get_json(url):
 def test_static_and_runs(base_url):
     status, body = get(base_url + "/")
     assert status == 200 and b"Replay Recorded Run" in body
+    assert b"Guided demo" in body and b"evidence-drawer" in body
+    assert b"welcome-tour" in body and b'id="toast"' in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
@@ -123,3 +125,28 @@ def test_memory_and_ui_have_no_execution_paths():
     for path in list((ROOT / "migproto" / "memory").glob("*.py")) + \
             list((ROOT / "migproto" / "ui").glob("*.py")):
         assert not forbidden.search(path.read_text(encoding="utf-8")), path
+
+
+def test_hackathon_ui_assets_are_evidence_first():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "GUIDED RECORDED REPLAY" in js
+    assert "Final tested outcome" in js
+    assert "openEvidence" in js
+    assert "evidence-drawer" in css
+    assert "prefers-reduced-motion" in css
+    assert "INTERACTIVE COMPATIBILITY REVIEW" in js
+    assert "PLAN COMPARISON" in js and "Why did the first attempt fail?" in js
+    assert "workspace-layout" in css
+    assert "data-workspace-row" in js
+    assert "migrationlab-tour-seen" in js
+    assert "data-reveal-revision" in js
+    assert "celebration-spark" in css
+    assert "Recorded migration review" in js
+    assert "Revised plan passed" in js
+    assert "Restart replay" in js
+    assert "trapFocus" in js
+    assert "scope=\"col\"" in js and "scope=\"row\"" in js
+    assert "progressive-card" in css
+    assert "data-nav" in js and "navKey" in js
+    assert "Seamless dashboard theme" in css

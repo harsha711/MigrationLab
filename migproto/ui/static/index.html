@@ -3,15 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Migration Review Replay</title>
+  <title>MigrationLab | Replay Recorded Run</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <a href="#/" class="brand">Replay Recorded Run</a>
-    <nav id="crumbs" class="crumbs"></nav>
-  </header>
-  <main id="view" class="view"></main>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a href="#/" class="brand-lockup" aria-label="MigrationLab home">
+        <span class="brand-mark">M</span>
+        <span><strong>MigrationLab</strong><small>Migration intelligence</small></span>
+      </a>
+      <nav class="side-nav" aria-label="Primary navigation">
+        <a href="#/" data-nav="runs"><span class="nav-icon">&#9638;</span> Reviews</a>
+        <a href="#/workspace/live-ordering-revision" data-nav="workspace"><span class="nav-icon">&#9672;</span> Review workspace</a>
+        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Compare</a>
+        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided demo</a>
+      </nav>
+      <div class="sidebar-foot"><span class="status-dot"></span><span><strong>Evidence store</strong><small>Read-only replay</small></span></div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <nav id="crumbs" class="crumbs"></nav>
+        <div class="top-actions">
+          <span class="environment-chip">Saleor lab <b>v0</b></span>
+          <span class="recorded-label"><span class="pulse-dot"></span> Recorded evidence</span>
+          <button id="theme-toggle" class="icon-button" aria-label="Toggle theme" title="Toggle theme">&#9788;</button>
+        </div>
+      </header>
+      <main id="view" class="view" aria-live="polite"></main>
+    </div>
+  </div>
+  <div id="drawer-backdrop" class="drawer-backdrop" hidden></div>
+  <aside id="evidence-drawer" class="evidence-drawer" aria-label="Evidence details" aria-hidden="true">
+    <button id="drawer-close" class="drawer-close" aria-label="Close evidence">&times;</button>
+    <div id="drawer-content"></div>
+  </aside>
+  <div id="welcome-tour" class="tour-overlay" hidden>
+    <section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+      <button class="tour-close" data-tour-close aria-label="Close tour">&times;</button>
+      <span class="tour-kicker">2 MINUTE INTERACTIVE TOUR</span>
+      <div class="tour-orb" aria-hidden="true"><span>M</span><i></i><i></i></div>
+      <h2 id="tour-title">See a risky migration become safe.</h2>
+      <p>Walk through the rollout, inspect old and new application evidence, then reveal how agent feedback revised the plan.</p>
+      <div class="tour-points"><span><b>1</b> Pick a stage</span><span><b>2</b> Open evidence</span><span><b>3</b> Compare revisions</span></div>
+      <div class="tour-actions"><button class="button ghost" data-tour-close>Explore myself</button><button class="primary" data-tour-start>Start the tour &#8594;</button></div>
+    </section>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
 </body>
 </html>
