@@ -90,19 +90,33 @@ PLAN_SCHEMA = {
             "revision_notes": {"type": "string"},
             "stages": {
                 "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string"},
-                        "kind": {"enum": ["sql", "deploy_new", "retire_old"]},
-                        "phase": {"enum": ["expand", "backfill", "contract"]},
-                        "description": {"type": "string"},
-                        "sql": {"type": "array", "items": {"type": "string"}},
-                        "repeat_until_zero_rows": {"type": "boolean"},
+                # Two shapes so guided decoding cannot put a `sql` key (even an empty list)
+                # on deploy_new / retire_old, which plans.validate_plan rejects.
+                "items": {"anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "kind": {"const": "sql"},
+                            "phase": {"enum": ["expand", "backfill", "contract"]},
+                            "description": {"type": "string"},
+                            "sql": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                            "repeat_until_zero_rows": {"type": "boolean"},
+                        },
+                        "required": ["id", "kind", "phase", "sql"],
+                        "additionalProperties": False,
                     },
-                    "required": ["id", "kind"],
-                    "additionalProperties": False,
-                },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "kind": {"enum": ["deploy_new", "retire_old"]},
+                            "description": {"type": "string"},
+                        },
+                        "required": ["id", "kind"],
+                        "additionalProperties": False,
+                    },
+                ]},
             },
         },
         "required": ["plan_id", "stages"],
