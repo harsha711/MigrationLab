@@ -50,6 +50,14 @@
     </section>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="command-palette" class="command-overlay" hidden>
+    <section class="command-card" role="dialog" aria-modal="true" aria-labelledby="command-title">
+      <h2 id="command-title" class="sr-only">Quick navigation</h2>
+      <label><span>&#8981;</span><input id="command-search" type="search" placeholder="Jump to a review or page..." autocomplete="off"></label>
+      <div id="command-results"><a href="#/"><span>Dashboard</span><kbd>Home</kbd></a><a href="#/workspace/live-ordering-revision"><span>Interactive review workspace</span><kbd>Review</kbd></a><a href="#/demo/live-ordering-revision"><span>Guided replay</span><kbd>Demo</kbd></a><a href="#/compare/scripted-sync-failure/scripted-staged-success"><span>Compare reviews</span><kbd>Compare</kbd></a></div>
+      <footer><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate</span><span><kbd>esc</kbd> close</span></footer>
+    </section>
+  </div>
   <script src="app.js"></script>
 </body>
 </html>

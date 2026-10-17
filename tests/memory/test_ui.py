@@ -100,3 +100,8 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "progressive-card" in css
     assert "data-nav" in js and "navKey" in js
     assert "Seamless dashboard theme" in css
+    assert "REVIEW COMMAND CENTER" in js
+    assert "data-attempt-select" in js
+    assert "command-palette" in js
+    assert "workspaceAttempt" in js
+    assert "Rebuilt dashboard command center" in css
