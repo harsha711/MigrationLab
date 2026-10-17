@@ -1,5 +1,8 @@
 # Nemotron 3.5 Lightning Serving Record
 
+For the full input, dataset, output, setup, and validation procedure, see
+[`model-validation.md`](model-validation.md).
+
 Status: **planned, not yet deployed or measured**. Complete every placeholder from the actual
 Brev instance before treating a run as submission evidence.
 
