@@ -383,6 +383,22 @@ paragraph without changing it.
 **Status (2026-10-18 00:30):** running, batch `runs/brev-batch-20261018-000918` from worktree
 `../hackathon-final` (workers 4-8), code `19dd71f`. No results yet.
 
+### Configuration H2: longer wall-time cap (exploratory, pre-registered 01:25)
+
+Decided after seeing H's first 18 reviews, so it is **exploratory** and never changes H's
+verdict. Of those 18, two `parallel` reviews stopped on a budget while close (shorten-note on
+the 3,000 s cap at 1-2 failed checks; raw-sql-rename on the token cap at 1). H2 asks only
+whether more wall time changes the outcome on the rename-type scenarios.
+
+- **Same as H** in code (`19dd71f`), serving, sampling, prompts, pre-checks and every budget
+  except one: `max_wall_seconds` 4,500 instead of 3,000. Tokens stay 450,000, calls 40,
+  revisions 5.
+- **Scenarios (3):** rename-note, raw-sql-rename, shorten-note. **Runs:** 2 per scenario per
+  topology (12 reviews), `parallel` and `single`, interleaved. Starts on the laptop after its
+  part of H ends.
+- **Reported:** matches per topology (same scorer as H), and which budget stopped each review.
+  No significance test (too few reviews); no claim from H2 alone.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
