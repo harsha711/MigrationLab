@@ -154,7 +154,7 @@ def test_batch_endpoints_over_http():
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
     try:
-        assert get_json(base + "/api/batches")["batches"][0]["batch_id"] == batch
+        assert batch in [b["batch_id"] for b in get_json(base + "/api/batches")["batches"]]
         detail = get_json(base + f"/api/batch?id={batch}")
         assert detail["infrastructure_failures"][0]["run_id"] == "20260101-100300-agent-loop-llm"
         with pytest.raises(urllib.error.HTTPError) as e:

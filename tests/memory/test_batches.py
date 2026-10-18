@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,10 @@ from migproto.memory import query, store
 
 ROOT = Path(__file__).resolve().parents[2]
 BATCHES = Path(__file__).parent / "fixtures" / "batches"
+EXPECTED = Path(__file__).parent / "fixtures" / "expected"
 BATCH = "brev-batch-20260101-100000"
+LIVE = "brev-batch-20260101-235800"
+NOW = datetime(2026, 1, 2, 0, 10, 0)
 
 
 def by_n(detail):
@@ -19,12 +23,12 @@ def by_n(detail):
 
 def test_list_batches_newest_first_without_run_lists():
     batches = query.list_batches(BATCHES)
-    assert [b["batch_id"] for b in batches] == [BATCH, "brev-batch-20260101-090000"]
+    assert [b["batch_id"] for b in batches] == [LIVE, BATCH, "brev-batch-20260101-090000"]
     assert all("runs" not in b for b in batches)
-    empty = batches[1]
+    empty = batches[2]
     assert empty["has_runs_jsonl"] is False and empty["run_count"] == 0
     assert empty["config_note"] == "smoke test; supervisor stopped before any review"
-    assert batches[0]["config_note"].startswith("FIXTURE CONFIGURATION")
+    assert batches[1]["config_note"].startswith("FIXTURE CONFIGURATION")
 
 
 def test_counts_per_scenario_and_topology_exclude_infrastructure_failures():
@@ -111,10 +115,106 @@ def test_batches_are_read_only():
             for t in ("runs", "observations", "claims", "events")] == before_rows
 
 
-def test_batches_never_read_answer_labels_or_scripted_plans():
-    sources = [(ROOT / "migproto" / "memory" / "query.py").read_text(encoding="utf-8"),
-               (ROOT / "migproto" / "ui" / "server.py").read_text(encoding="utf-8"),
-               (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")]
-    for source in sources:
+def test_answer_labels_only_in_scoring_and_never_on_the_agent_path():
+    read = lambda *p: ROOT.joinpath("migproto", *p).read_text(encoding="utf-8")
+    query_src = read("memory", "query.py")
+    # query.py reads proposals/manual/scenarios through EXPECTED_VERDICTS and nothing else.
+    assert re.findall(r'"proposals"[^\n]*', query_src) == [
+        '"proposals" / "manual" / "scenarios"']
+    assert not re.search(r"""["'/]scripted\b""", query_src)
+    assert query.EXPECTED_VERDICTS == ROOT / "proposals" / "manual" / "scenarios"
+    for source in (read("ui", "server.py"), read("ui", "static", "app.js")):
         assert not re.search(r"""["'/]proposals\b""", source)
-        assert "score_scenarios" not in source and "expected_verdict" not in source
+    # Agent-facing code never reaches the scoring.
+    agent_side = [read("memory", "retrieval.py")] + [
+        p.read_text(encoding="utf-8") for p in (ROOT / "migproto" / "agents").glob("*.py")]
+    for source in agent_side:
+        assert "expected_target" not in source and "EXPECTED_VERDICTS" not in source
+        assert "list_batches" not in source and "batch_detail" not in source
+
+
+# ---- live progress from supervisor.log ----
+
+def test_running_batch_shows_started_runs_without_a_row_and_their_elapsed_time():
+    b = query.batch_detail(BATCHES, LIVE, now=NOW, expected_root=EXPECTED)
+    assert b["status"] == "running" and b["planned_runs"] == 4 and b["running_count"] == 1
+    # Run 3 started after midnight: the log date advanced to the next day.
+    assert b["in_progress"] == [{
+        "n": 3, "scenario": "drop-column", "topology": "roles", "worker": 1,
+        "started_at": "2026-01-02T00:02:01", "status": "running", "elapsed_seconds": 479}]
+    assert b["log_last_line_at"] == "2026-01-02T00:03:00"
+    assert [r["n"] for r in b["runs"]] == [1, 2]  # running runs are not result rows
+    assert sum(c[v] for c in b["counts"] for v in query.BATCH_VERDICTS) == 2
+
+
+def test_batch_is_finished_only_with_a_done_line(tmp_path):
+    b = query.batch_detail(BATCHES, BATCH, now=NOW)
+    assert b["status"] == "finished" and b["running_count"] == 0
+    # Run 6 started but its runs.jsonl line is unreadable: after DONE it is not "running".
+    assert [(r["n"], r["status"], r["elapsed_seconds"]) for r in b["in_progress"]] == [
+        (6, "no_result", None)]
+    batch = tmp_path / "brev-batch-20260101-120000"
+    batch.mkdir()
+    (batch / "runs.jsonl").write_text(json.dumps({"n": 1, "verdict": "PASS"}) + "\n")
+    assert query.batch_detail(tmp_path, batch.name)["status"] == "unknown"  # no supervisor.log
+    (batch / "supervisor.log").write_text(
+        "12:00:01 RUN   1/1 roles starting (~$1.00)\n"
+        "12:05:00 RUN   1/1 roles PASS run=x 299 s (~$1.10)\n"
+        "12:05:01 INFO  DONE is only a level, not text\n")
+    assert query.batch_detail(tmp_path, batch.name)["status"] == "running"
+    with (batch / "supervisor.log").open("a") as f:
+        f.write("12:05:02 DONE  1 runs\n")
+    assert query.batch_detail(tmp_path, batch.name)["status"] == "finished"
+
+
+def test_supervisor_progress_old_format_and_missing_date(tmp_path):
+    (tmp_path / "supervisor.log").write_text(
+        "18:21:22 RUN   1/2 roles starting (~$2.07)\n"
+        "18:21:37 RUN   1/2 roles ERROR run=20261017-182122-agent-loop-llm 15.1 s (~$2.09)\n"
+        "not a log line\n18:21:37 RUN   2/2 single starting (~$2.09)\n")
+    p = query.supervisor_progress(tmp_path, None)
+    assert p["finished"] is False and p["planned"] == 2 and p["last_line_at"] is None
+    assert [(s["scenario"], s["topology"], s["worker"], s["started_at"])
+            for s in p["started"].values()] == [(None, "roles", None, None),
+                                                (None, "single", None, None)]
+    assert query.supervisor_progress(tmp_path / "missing") is None
+
+
+# ---- scoring against the manual expected verdicts ----
+
+def test_expected_target_follows_score_scenarios_rule():
+    assert query.expected_target("add-table", EXPECTED) == {
+        "verdict": "PASS", "recommendations": ["accept_as_is"]}
+    assert query.expected_target("drop-column", EXPECTED) == {
+        "verdict": "PASS", "recommendations": ["staged_rollout"]}
+    assert query.expected_target("unique-last-name", EXPECTED) == {
+        "verdict": "FAIL", "recommendations": ["reject"]}
+    for bad in ("rename-note", "../expected/add-table", None, ""):
+        assert query.expected_target(bad, EXPECTED) is None
+
+
+def test_scenario_scores_exclude_infrastructure_and_unscored_runs():
+    live = query.batch_detail(BATCHES, LIVE, now=NOW, expected_root=EXPECTED)
+    assert [(r["n"], r["matches_expected"]) for r in live["runs"]] == [(1, True), (2, True)]
+    assert live["scenario_score"] == {"matched": 2, "scored": 2}
+    b = query.batch_detail(BATCHES, BATCH, now=NOW, expected_root=EXPECTED)
+    runs = by_n(b)
+    # drop-column: runner FAIL/reject, target PASS/staged_rollout.
+    assert runs[4]["matches_expected"] is False
+    assert runs[4]["expected"] == {"verdict": "PASS", "recommendations": ["staged_rollout"]}
+    # rename-note has no expected file; run 3 is an infrastructure failure.
+    assert all(runs[n]["matches_expected"] is None for n in (1, 2, 3, 5))
+    assert runs[3]["expected"] is None
+    assert b["scenario_score"] == {"matched": 0, "scored": 1}
+    cell = {(c["scenario"], c["topology"]): c for c in b["counts"]}[("drop-column", "roles")]
+    assert (cell["matched"], cell["scored"]) == (0, 1)
+
+
+def test_infrastructure_failures_are_never_scored(tmp_path):
+    (tmp_path / "rename-note.json").write_text(json.dumps(
+        {"plans": {"safe.json": {"verdict": "PASS", "recommendation": "staged_rollout"}}}))
+    runs = by_n(query.batch_detail(BATCHES, BATCH, now=NOW, expected_root=tmp_path))
+    assert runs[1]["matches_expected"] is True
+    assert runs[2]["matches_expected"] is False and runs[5]["matches_expected"] is False
+    assert runs[3]["infrastructure_failure"] and runs[3]["matches_expected"] is None
+    assert runs[3]["expected"] is None
