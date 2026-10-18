@@ -267,12 +267,21 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           msg="planner recommended reject and the runner rejected the plan")
                 break
             previous_id = plan_obj["plan_id"]
-            plan_obj = _tag(call(
-                f"planner-{attempt + 1}", roles.plan, investigation,
-                feedback=_feedback(result, report, complete_failures), previous=plan_obj,
-                **plan_kwargs,
-            ), attempt + 1)
-            _validate_plan(plan_obj, sfacts)
+            try:
+                plan_obj = _tag(call(
+                    f"planner-{attempt + 1}", roles.plan, investigation,
+                    feedback=_feedback(result, report, complete_failures), previous=plan_obj,
+                    **plan_kwargs,
+                ), attempt + 1)
+                _validate_plan(plan_obj, sfacts)
+            except (LLMError, plans.PlanError) as exc:
+                # The runner already failed every executed plan; an unusable revision does
+                # not make that an infrastructure error. BudgetExceeded still means INCOMPLETE.
+                log.event("revision_invalid", provenance=prov, attempt=attempt + 1,
+                          parent_plan_id=previous_id, error=str(exc)[:500])
+                return _finish(False, "FAIL", source, topology, model, score, attempts,
+                               budget, reason=f"revision invalid: {exc}",
+                               scenario=scenario_id)
             log.event("proposal", provenance=prov, role="planner", attempt=attempt + 1,
                       plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                       parent_plan_id=previous_id,

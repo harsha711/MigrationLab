@@ -85,6 +85,39 @@ def _chars(messages):
     return sum(len(m["content"]) for m in messages)
 
 
+# C1: an invalid planner revision ends the review as FAIL with the runner's earlier results.
+
+@pytest.mark.parametrize("error", [LLMError("no JSON object found"),
+                                   plans.PlanError("stage 'd': unknown kind")])
+@pytest.mark.parametrize("topology", ["roles", "single"])
+def test_invalid_revision_is_fail_with_runner_results(monkeypatch, tmp_path, error, topology):
+    llm = HistoryLLM(revisions=1, bad_revision=error)
+    log, result = _review(monkeypatch, tmp_path, llm, topology=topology)
+    assert result["verdict"] == "FAIL" and result["ok"] is False
+    assert result["reason"].startswith("revision invalid: ")
+    assert [a["failed_checks"] for a in result["attempts"]] == [["check-1"]]
+    events = [json.loads(line) for line in (log.dir / "events.jsonl").open()]
+    assert any(e["kind"] == "revision_invalid" and e["attempt"] == 2 for e in events)
+
+
+def test_budget_exhausted_during_revision_stays_incomplete(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=1, bad_revision=BudgetExceeded("token budget exhausted"))
+    _, result = _review(monkeypatch, tmp_path, llm)
+    assert result["verdict"] == "INCOMPLETE"
+
+
+def test_invalid_first_plan_stays_error(monkeypatch, tmp_path):
+    class BadFirst(HistoryLLM):
+        def chat_json(self, system, user, transcript, validator=None, response_schema=None,
+                      history=None):
+            if (response_schema or {}).get("name") == "migration_plan":
+                raise LLMError("no JSON object found")
+            return super().chat_json(system, user, transcript, validator, response_schema,
+                                     history)
+    _, result = _review(monkeypatch, tmp_path, BadFirst())
+    assert result["verdict"] == "ERROR" and result["attempts"] == []
+
+
 # C2: gather_hits searches the scenario's OLD app version, never a new build.
 
 def test_old_version_is_the_code_under_review():
