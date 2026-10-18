@@ -18,6 +18,23 @@ uv run migproto ui --port 8766 --db /tmp/scratch.sqlite
 
 No Docker, Postgres or model is needed to look at recorded runs.
 
+## Ask about runs
+
+Open **Ask about runs** at the lower-right of any UI page. It reads only the evidence store
+and batch records under the configured runs root. Questions may name a run, batch, scenario,
+check, observation, or topology; without an ID, retrieval uses the latest batch.
+
+When both `MIGPROTO_LLM_BASE_URL` and `MIGPROTO_LLM_MODEL` are set, one budgeted request
+(plus one retry) asks the shared model to phrase an answer from a compact facts block. With no
+endpoint, an unavailable endpoint, or any invalid model response, the panel returns a
+deterministic facts-only summary. Every response identifies its mode, exposes the facts used,
+and links cited run and observation IDs. The UI never holds the evidence-store lock during a
+model call and never writes the store or run directories.
+
+Chat answers are claims grounded in recorded facts, not evidence or new runner verdicts, and
+can still be wrong. Missing facts are reported as not recorded. A successful check covers only
+the recorded conditions; the chat cannot establish zero downtime or concurrency safety.
+
 ## Where the data comes from
 
 When the UI starts, it loads every finished run from `examples/` and `runs/` into the

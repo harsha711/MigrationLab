@@ -51,6 +51,19 @@
     </section>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <details class="chat-panel">
+    <summary>Ask about runs</summary>
+    <div class="chat-body">
+      <p class="muted">Answers use recorded evidence. Model phrasing is a claim and can be wrong.</p>
+      <form id="chat-form">
+        <label for="chat-question" class="sr-only">Question about recorded runs</label>
+        <textarea id="chat-question" maxlength="1000" rows="3" placeholder="Why did run 20261017-230415-agent-loop-llm fail?"></textarea>
+        <button class="primary" type="submit">Ask</button>
+      </form>
+      <div id="chat-result" aria-live="polite"></div>
+    </div>
+  </details>
   <script src="app.js"></script>
+  <script src="chat.js"></script>
 </body>
 </html>

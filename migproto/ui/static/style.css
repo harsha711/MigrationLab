@@ -750,3 +750,14 @@ th { font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
   .matrix-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .editorial-matrix { min-width: calc(126px + var(--matrix-columns, 4) * 95px); }
 }
+
+.chat-panel { position: fixed; right: 22px; bottom: 18px; z-index: 30; width: min(440px, calc(100vw - 28px)); border: 1px solid var(--border); border-radius: 14px; background: var(--panel); box-shadow: 0 14px 38px rgba(12, 30, 27, .18); }
+.chat-panel > summary { cursor: pointer; padding: 14px 18px; font-weight: 750; }
+.chat-body { padding: 0 18px 18px; border-top: 1px solid var(--border); }
+.chat-body form { display: grid; gap: 9px; margin-top: 12px; }
+.chat-body textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: 10px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; font: inherit; }
+.chat-body button { justify-self: end; }
+#chat-result { margin-top: 12px; max-height: 55vh; overflow: auto; }
+#chat-result p { line-height: 1.5; }
+#chat-result pre { max-height: 230px; overflow: auto; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel-2); border-radius: 8px; font-size: 10px; }
+.chat-citations { font-size: 11px; overflow-wrap: anywhere; }
