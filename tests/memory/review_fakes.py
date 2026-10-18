@@ -55,7 +55,7 @@ class FakeLock:
 def make_controller(gate: threading.Event | None = None, fail=False):
     calls = []
 
-    def run_review(log, source, request=None, topology=None, llm=None):
+    def run_review(log, source, request=None, topology=None, llm=None, scenario=None):
         calls.append((source, topology))
         log.event("agent_config", provenance="scripted", source=source, topology=topology)
         log.event("attempt", provenance="scripted", name="attempt 1", plan_id="a1-plan")

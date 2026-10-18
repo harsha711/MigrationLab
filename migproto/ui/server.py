@@ -8,18 +8,20 @@ executes SQL against Saleor databases or starts Saleor servers.
 """
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..memory import query, store
+from .. import scenarios
 from .review import Busy, ReviewManager, Unavailable
 
 STATIC = Path(__file__).resolve().parent / "static"
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
                  ".css": "text/css; charset=utf-8"}
-MAX_BODY = 4096
+MAX_BODY = 16384
 
 
 def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None, chat_answer=None):
@@ -29,16 +31,23 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
         from .chat import answer as chat_answer
 
     def availability():
-        return review.available() if review else {"ok": False, "reason": "controller not available"}
+        value = review.available() if review else {"ok": False, "reason": "controller not available"}
+        return {**value, "llm_available": bool(os.environ.get("MIGPROTO_LLM_MODEL"))}
 
     def api(path, params):
         p = lambda name: (params.get(name) or [None])[0]
         if path == "/api/review/status":
-            return review.status() if review else {**availability(), "current": None}
+            return {**(review.status() if review else {"current": None}), **availability()}
         if path == "/api/review/events":
             if not review:
                 return None
             return review.events(p("run"), int(p("after") or 0))
+        if path == "/api/jobs":
+            return {"jobs": review.jobs() if review else []}
+        if path == "/api/scenarios":
+            return {"scenarios": [{"id": sc.id, "title": sc.title,
+                                   "description": sc.change["description"]}
+                                  for sc in scenarios.SCENARIOS.values()]}
         with lock:
             if path == "/api/runs":
                 avail = availability()
@@ -122,11 +131,22 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
                     return self._json(400, {"error": str(exc)})
                 except RuntimeError as exc:
                     return self._json(500, {"error": str(exc)})
+            if path.startswith("/api/jobs/") and path.endswith("/decision") and review:
+                try:
+                    body = json.loads(raw or b"{}")
+                    run_id = path.removeprefix("/api/jobs/").removesuffix("/decision").rstrip("/")
+                    return self._json(200, review.decision(run_id, body.get("decision"),
+                                                            body.get("note", "")))
+                except (ValueError, AttributeError) as exc:
+                    return self._json(400, {"error": str(exc)})
             if path != "/api/review" or review is None:
                 return self._json(503, {"error": availability()["reason"]})
             try:
                 body = json.loads(raw or b"{}")
-                started = review.start(body.get("mode", "scripted"), body.get("topology", "roles"))
+                started = review.start(body.get("mode", "scripted"), body.get("topology", "roles"),
+                                       body.get("scenario", "rename-note"), body.get("budget"),
+                                       {key: body[key] for key in ("continue_from", "human_feedback")
+                                        if key in body})
             except Unavailable as exc:
                 return self._json(503, {"error": str(exc)})
             except Busy as exc:
@@ -149,7 +169,7 @@ def serve(host="127.0.0.1", port=8765, db=None, runs_root=None) -> None:
     conn = store.connect(db)
     lock = threading.Lock()
     ingested = store.ingest_all(conn, sources=(store.ROOT / "examples", runs_root))
-    review = ReviewManager(conn, lock)
+    review = ReviewManager(conn, lock, runs_root=runs_root)
     server = ThreadingHTTPServer((host, port), make_handler(conn, lock, review, runs_root))
     print(f"evidence store: {db or store.DEFAULT_DB} ({len(ingested)} runs ingested)")
     avail = review.available()

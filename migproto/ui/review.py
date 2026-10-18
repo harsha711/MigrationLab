@@ -16,14 +16,15 @@ import queue
 import re
 import threading
 import traceback
+from datetime import datetime, timezone
+from copy import deepcopy
 from pathlib import Path
 
 from ..memory import store
 
 MODES = ("scripted", "llm")
-TOPOLOGIES = ("roles", "single")
+TOPOLOGIES = ("roles", "single", "parallel")
 RUN_ID = re.compile(r"^\d{8}-\d{6}-[\w.-]+$")
-START_TIMEOUT_S = 15
 
 
 class Unavailable(RuntimeError):
@@ -50,6 +51,9 @@ class ReviewManager:
         self._runlog_factory = runlog_factory
         self._guard = threading.Lock()
         self.current: dict | None = None
+        self._jobs: dict[str, dict] = {}
+        self._queue: queue.Queue = queue.Queue()
+        self._worker: threading.Thread | None = None
 
     # ---- dependency discovery (lazy, cross-owner) ----
 
@@ -87,57 +91,80 @@ class ReviewManager:
     def status(self) -> dict:
         return {**self.available(), "current": self.current}
 
+    def jobs(self) -> list[dict]:
+        """Known UI jobs, oldest first. Run details remain in the evidence store."""
+        with self._guard:
+            return [deepcopy(job) for job in self._jobs.values()]
+
     # ---- starting a review ----
 
-    def start(self, mode: str, topology: str) -> dict:
+    def start(self, mode: str, topology: str, scenario: str = "rename-note",
+              budget: dict | None = None, request_extra: dict | None = None) -> dict:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}")
         if topology not in TOPOLOGIES:
             raise ValueError(f"topology must be one of {TOPOLOGIES}")
         controller, lock_module, factory = self._load()
+        try:
+            request_module = importlib.import_module("migproto.agents.request")
+            request = request_module.scenario_request(scenario)
+        except KeyError as exc:
+            raise ValueError(str(exc)) from exc
+        request.update(mode=mode, agent_topology=topology)
+        if budget is not None:
+            if not isinstance(budget, dict):
+                raise ValueError("budget must be an object")
+            request["budget"] = {**request.get("budget", {}), **budget}
+        if request_extra:
+            request.update(request_extra)
         with self._guard:
-            if self.current and self.current["state"] == "running":
-                raise Busy("a review started from this UI is still running",
-                           {"run_id": self.current["run_id"]})
-            ready: queue.Queue = queue.Queue()
-            threading.Thread(target=self._work, daemon=True, name="migproto-ui-review",
-                             args=(mode, topology, controller, lock_module, factory, ready)).start()
             try:
-                kind, value, owner = ready.get(timeout=START_TIMEOUT_S)
-            except queue.Empty:
-                raise RuntimeError("review did not start in time") from None
-        if kind == "busy":
-            raise Busy(value, owner)
-        if kind == "error":
-            raise RuntimeError(value)
-        return {"run_id": value}
+                log = factory(f"agent-loop-{mode}", root=self.runs_root)
+            except TypeError:  # injectable factories in older tests
+                log = factory(f"agent-loop-{mode}")
+            request["request_id"] = f"ui-{log.run_id}"
+            (log.dir / "request.json").write_text(json.dumps(request, indent=2) + "\n",
+                                                  encoding="utf-8")
+            job = {"run_id": log.run_id, "mode": mode, "topology": topology,
+                   "scenario": scenario, "request": request, "state": "queued",
+                   "verdict": None, "error": None, "submitted_at": _now()}
+            self._jobs[log.run_id] = job
+            self._queue.put((job, log, controller, lock_module))
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._drain, daemon=True,
+                                                name="migproto-ui-review-queue")
+                self._worker.start()
+            return {"run_id": log.run_id, "state": "queued"}
 
-    def _work(self, mode, topology, controller, lock_module, factory, ready):
+    def _drain(self):
+        while True:
+            try:
+                job, log, controller, lock_module = self._queue.get_nowait()
+            except queue.Empty:
+                return
+            self._work(job, log, controller, lock_module)
+
+    def _work(self, job, log, controller, lock_module):
         # The lock is per thread (re-entrant in the holder thread), so the worker takes it;
         # the controller's own execute_plan call re-enters it in this same thread.
         busy_error = getattr(lock_module, "ExecutionBusy", ())
         try:
-            lock_module.acquire(f"ui-review-{mode}")
+            lock_module.acquire(f"ui-review-{job['mode']}")
         except busy_error as exc:
-            ready.put(("busy", str(exc), getattr(exc, "owner", None)))
+            job.update(state="finished", verdict="ERROR", error=str(exc), finished_at=_now())
             return
         except Exception as exc:
-            ready.put(("error", f"could not take the execution lock: {exc}", None))
+            job.update(state="finished", verdict="ERROR", error=str(exc), finished_at=_now())
             return
         try:
-            try:
-                log = factory(f"agent-loop-{mode}")
-            except Exception as exc:
-                ready.put(("error", f"could not create the run log: {exc}", None))
-                return
             if hasattr(lock_module, "update_owner"):
                 lock_module.update_owner(run_id=log.run_id)
-            self.current = {"run_id": log.run_id, "mode": mode, "topology": topology,
-                            "state": "running", "verdict": None, "error": None}
-            ready.put(("ok", log.run_id, None))
+            job.update(state="running", started_at=_now())
+            self.current = job
             error = None
             try:
-                result = controller(log, mode, topology=topology)
+                result = controller(log, job["mode"], request=job["request"],
+                                    topology=job["topology"], scenario=job["scenario"])
                 # Same verdict rule as cli._run.
                 verdict = result.pop("verdict", None) or ("PASS" if result.get("ok") else "FAIL")
                 log.summary(verdict, **result)
@@ -151,7 +178,10 @@ class ReviewManager:
             except Exception as exc:  # the run's files stay the evidence; only the index failed
                 error = error or f"run recorded but not indexed: {exc}"
             # "done" only after indexing, so the UI never links to a run it cannot show.
-            self.current.update(state="done", verdict=verdict, error=error)
+            job.update(state="finished", verdict=verdict, error=error, finished_at=_now())
+            # Legacy status endpoint calls a completed review "done"; the queue itself uses
+            # the clearer finished state returned by /api/jobs.
+            self.current = {**job, "state": "done"}
         finally:
             lock_module.release()
 
@@ -175,3 +205,23 @@ class ReviewManager:
             nxt += 1
         return {"run_id": run_id, "events": out, "next": nxt,
                 "done": (run_dir / "summary.json").is_file()}
+
+    def decision(self, run_id: str, decision: str, note: str = "", author: str = "UI user") -> dict:
+        if not RUN_ID.match(run_id):
+            raise ValueError("invalid run id")
+        if decision not in {"approve", "reject"}:
+            raise ValueError("decision must be approve or reject")
+        if not isinstance(note, str) or len(note) > 4000:
+            raise ValueError("note must be a string of at most 4000 characters")
+        run_dir = (self.runs_root / run_id).resolve()
+        if run_dir.parent != self.runs_root.resolve() or not (run_dir / "summary.json").is_file():
+            raise ValueError("a finished recorded run is required")
+        record = {"decision": decision, "note": note.strip(), "provenance": "human",
+                  "author": author, "at": _now()}
+        (run_dir / "review-decision.json").write_text(json.dumps(record, indent=2) + "\n",
+                                                      encoding="utf-8")
+        return record
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()

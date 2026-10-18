@@ -61,6 +61,13 @@ def test_run_and_observation_endpoints(base_url):
     assert o["status"] == "FAIL" and o["schema_state"] is None
 
 
+def test_scenarios_endpoint_only_exposes_picker_fields(base_url):
+    scenarios = get_json(base_url + "/api/scenarios")["scenarios"]
+    assert scenarios and set(scenarios[0]) == {"id", "title", "description"}
+    rendered = json.dumps(scenarios).lower()
+    assert "expected" not in rendered and "proposal" not in rendered and "patch" not in rendered
+
+
 def test_no_traversal_and_no_run_review(base_url):
     for path in ("/../store.py", "/..%2Fserver.py", "/nope.html"):
         with pytest.raises(urllib.error.HTTPError) as e:
@@ -102,7 +109,9 @@ def test_review_endpoints_over_http(tmp_path):
         assert post({"mode": "shell"})[0] == 400
         status, started = post({"mode": "scripted", "topology": "roles"})
         assert status == 202
-        assert post({"mode": "scripted"})[0] == 409
+        assert post({"mode": "scripted"})[0] == 202
+        jobs = get_json(base + "/api/jobs")["jobs"]
+        assert len(jobs) == 2 and jobs[1]["state"] in {"queued", "running", "finished"}
         events = get_json(base + "/api/review/events?run=" + started["run_id"])
         assert events["events"] and events["done"] is False
         with pytest.raises(urllib.error.HTTPError) as e:
@@ -116,7 +125,7 @@ def test_review_endpoints_over_http(tmp_path):
 def test_review_module_loads_only_allowed_cross_owner_modules():
     source = (ROOT / "migproto" / "ui" / "review.py").read_text(encoding="utf-8")
     targets = set(re.findall(r"import_module\(\"([\w.]+)\"\)", source))
-    assert targets == {"migproto.agents.controller", "migproto.lock", "migproto.runlog"}
+    assert targets == {"migproto.agents.controller", "migproto.agents.request", "migproto.lock", "migproto.runlog"}
     # Lazy only: no module-level import of other owners' code.
     assert not re.search(r"^(import|from)\s+(migproto\.)?(agents|lock|runlog|\.\.(agents|lock|runlog))",
                          source, re.M)

@@ -12,7 +12,7 @@ import pytest
 
 from migproto.memory import query, store
 from migproto.ui import review as review_mod
-from migproto.ui.review import Busy, ReviewManager, Unavailable
+from migproto.ui.review import ReviewManager, Unavailable
 
 from review_fakes import FakeLock, FakeRunLog, make_controller
 
@@ -86,8 +86,9 @@ def test_review_runs_through_controller_and_is_ingested(env):
     run_id = started["run_id"]
     assert controller.calls == [("scripted", "single")]
     assert run_id.endswith("agent-loop-scripted")
-    assert m.current == {"run_id": run_id, "mode": "scripted", "topology": "single",
-                         "state": "done", "verdict": "PASS", "error": None}
+    assert {key: m.current[key] for key in ("run_id", "mode", "topology", "state", "verdict", "error")} == {
+        "run_id": run_id, "mode": "scripted", "topology": "single", "state": "done",
+        "verdict": "PASS", "error": None}
     conn, runs = env
     summary = json.loads((runs / run_id / "summary.json").read_text())
     assert summary["verdict"] == "PASS" and "verdict" not in {k for k in summary if k != "verdict"}
@@ -109,14 +110,18 @@ def test_one_review_at_a_time(env):
     lock = FakeLock()
     m = manager(env, make_controller(gate), lock)
     m.start("scripted", "roles")
-    with pytest.raises(Busy):
-        m.start("scripted", "roles")          # same UI: in-process guard
+    queued = m.start("scripted", "roles")     # same UI: FIFO queue
+    assert m.jobs()[-1]["state"] == "queued"
     other = manager(env, make_controller(), lock)
-    with pytest.raises(Busy) as exc:
-        other.start("llm", "roles")           # e.g. a CLI run holding the execution lock
-    assert exc.value.owner["command"] == "ui-review-scripted"
+    external = other.start("llm", "roles")    # lock holder is recorded on the job
     gate.set()
     wait_done(m)
+    for _ in range(100):
+        if m.jobs()[-1]["state"] == "finished" and other.jobs()[0]["state"] == "finished":
+            break
+        time.sleep(.02)
+    assert queued["run_id"] == m.jobs()[-1]["run_id"]
+    assert external["run_id"] == other.jobs()[0]["run_id"]
     assert lock.holder is None                # released after the review
 
 
