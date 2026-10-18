@@ -15,10 +15,14 @@ from .llm import LLM
 SEARCH_ROOTS = ["saleor/account", "saleor/graphql/account", "saleor/core/utils/anonymization.py"]
 SEARCH_RE = re.compile(r"\bnote\b")
 CONTEXT_LINES = 2
+# Prompt-size cap; rename-note has 35 hits, a common column such as last_name has ~140.
+MAX_HITS = 80
 
 
-def gather_hits(worktree: Path = WORKTREES["old"]) -> list[dict]:
-    """Deterministic search tool (runner side), no model involved."""
+def gather_hits(worktree: Path = WORKTREES["old"], pattern: re.Pattern = SEARCH_RE,
+                max_hits: int = MAX_HITS) -> list[dict]:
+    """Deterministic search tool (runner side), no model involved. Searches only the pinned
+    upstream code (never patched scenario builds, which are generated from patches/)."""
     hits = []
     for root in SEARCH_ROOTS:
         base = worktree / root
@@ -29,10 +33,12 @@ def gather_hits(worktree: Path = WORKTREES["old"]) -> list[dict]:
                 continue
             lines = path.read_text(errors="replace").splitlines()
             for i, line in enumerate(lines):
-                if SEARCH_RE.search(line):
+                if pattern.search(line):
                     lo, hi = max(0, i - CONTEXT_LINES), min(len(lines), i + CONTEXT_LINES + 1)
                     hits.append({"ref": f"{rel}:{i + 1}", "line": line.strip(),
                                  "context": "\n".join(lines[lo:hi])})
+                    if len(hits) >= max_hits:
+                        return hits
     return hits
 
 
@@ -81,51 +87,82 @@ You do not decide pass/fail; the runner does. Reply with one JSON object only.""
 # Safety cap on runner evidence in prompts; compact evidence normally fits well under it.
 EVIDENCE_CHARS = 24000
 
-PLAN_SCHEMA = {
-    "name": "migration_plan",
-    "strict": True,
-    "schema": {
+DEPLOY_MIGRATIONS = sorted(plans.DEPLOY_MIGRATIONS)
+
+
+def plan_schema(variants: tuple[str, ...] | None = None) -> dict:
+    """Guided-decoding schema for a plan: exactly the stage shapes plans.validate_plan accepts.
+
+    Three stage shapes so guided decoding cannot put `sql` (even an empty list) on a non-sql
+    stage, or `migration` / `variant` anywhere but deploy_new. With `variants` (a scenario's
+    deployable builds), `variant` is limited to them and `migration` becomes required when the
+    scenario has no state_only build (an omitted migration means state_only).
+    `recommendation` is an agent-side field; the controller removes it before the runner."""
+    deploy = {
         "type": "object",
         "properties": {
-            "plan_id": {"type": "string"},
-            "summary": {"type": "string"},
-            "write_consistency": {"type": "string"},
-            "revision_notes": {"type": "string"},
-            "stages": {
-                "type": "array",
-                # Two shapes so guided decoding cannot put a `sql` key (even an empty list)
-                # on deploy_new / retire_old, which plans.validate_plan rejects.
-                "items": {"anyOf": [
-                    {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "kind": {"const": "sql"},
-                            "phase": {"enum": ["expand", "backfill", "contract"]},
-                            "description": {"type": "string"},
-                            "sql": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                            "repeat_until_zero_rows": {"type": "boolean"},
-                        },
-                        "required": ["id", "kind", "phase", "sql"],
-                        "additionalProperties": False,
-                    },
-                    {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "kind": {"enum": ["deploy_new", "retire_old"]},
-                            "description": {"type": "string"},
-                        },
-                        "required": ["id", "kind"],
-                        "additionalProperties": False,
-                    },
-                ]},
-            },
+            "id": {"type": "string"},
+            "kind": {"const": "deploy_new"},
+            "description": {"type": "string"},
+            "migration": {"enum": DEPLOY_MIGRATIONS},
+            "variant": ({"enum": list(variants)} if variants
+                        else {"type": "string", "minLength": 1}),
         },
-        "required": ["plan_id", "stages"],
+        "required": ["id", "kind"],
         "additionalProperties": False,
-    },
-}
+    }
+    if variants is not None and "state_only" not in variants:
+        deploy["properties"]["migration"] = {"enum": ["apply"]}
+        deploy["required"] = ["id", "kind", "migration"]
+    return {
+        "name": "migration_plan",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "plan_id": {"type": "string"},
+                "recommendation": {"enum": ["accept_as_is", "staged_rollout", "reject"]},
+                "summary": {"type": "string"},
+                "write_consistency": {"type": "string"},
+                "revision_notes": {"type": "string"},
+                "stages": {
+                    "type": "array",
+                    "items": {"anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "kind": {"const": "sql"},
+                                "phase": {"enum": ["expand", "backfill", "contract"]},
+                                "description": {"type": "string"},
+                                "sql": {"type": "array", "items": {"type": "string"},
+                                        "minItems": 1},
+                                "repeat_until_zero_rows": {"type": "boolean"},
+                            },
+                            "required": ["id", "kind", "phase", "sql"],
+                            "additionalProperties": False,
+                        },
+                        deploy,
+                        {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "kind": {"enum": ["retire_old", "rollback_check"]},
+                                "description": {"type": "string"},
+                            },
+                            "required": ["id", "kind"],
+                            "additionalProperties": False,
+                        },
+                    ]},
+                },
+            },
+            "required": ["plan_id", "stages"],
+            "additionalProperties": False,
+        },
+    }
+
+
+PLAN_SCHEMA = plan_schema()
 
 TESTS_SCHEMA = {
     "name": "tester_proposal",
@@ -214,10 +251,19 @@ def _llm_call(llm: LLM, system: str, user: str, transcript: list,
 
 def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list,
                 scenario: str = SCENARIO, history: list | None = None,
-                system: str = INVESTIGATOR_SYSTEM) -> dict:
+                system: str = INVESTIGATOR_SYSTEM, task: str | None = None) -> dict:
     if source == "scripted":
         return json.loads((PROPOSALS / "scripted" / "investigator.json").read_text())
     body = "\n\n".join(f"### {h['ref']}\n{h['context']}" for h in hits)
+    if task is not None:
+        user = (
+            f"{scenario}\n{task}"
+            'Reply as {"findings": [{"ref": "path:line", "kind": "read|write|definition|test|'
+            'unrelated", "needs_change": true|false, "reason": "..."}], '
+            '"implicit_paths": ["..."]}\n\n'
+            f"Search hits ({len(hits)}):\n{body}"
+        )
+        return _llm_call(llm, system, user, transcript, history=history)
     user = (
         f"{scenario}\nThe runner searched the OLD code for the word `note` (excluding "
         f"migrations) under {SEARCH_ROOTS}. For EVERY hit decide whether it must change when "
@@ -238,13 +284,14 @@ def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list
 def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
          feedback: dict | None = None, previous: dict | None = None,
          scenario: str = SCENARIO, history: list | None = None,
-         system: str = PLANNER_SYSTEM) -> dict:
+         system: str = PLANNER_SYSTEM, contract: str = PLAN_CONTRACT,
+         validator=plans.validate_plan, schema: dict = PLAN_SCHEMA) -> dict:
     if source == "scripted":
         name = "plan_v2.json" if feedback else "plan_v1.json"
         return json.loads((PROPOSALS / "scripted" / name).read_text())
     affected = [f for f in investigation.get("findings", []) if f.get("needs_change")]
     user = (
-        f"{scenario}\n{PLAN_CONTRACT}\n"
+        f"{scenario}\n{contract}\n"
         f"Investigator findings (affected app code, already handled by the new app version):\n"
         f"{json.dumps(affected, indent=1)[:4000]}\n\n"
     )
@@ -257,18 +304,21 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
         )
     else:
         user += "Propose the plan."
-    return _llm_call(llm, system, user, transcript, validator=plans.validate_plan,
-                     schema=PLAN_SCHEMA, history=history)
+    return _llm_call(llm, system, user, transcript, validator=validator,
+                     schema=schema, history=history)
 
 
 def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list,
                   scenario: str = SCENARIO, history: list | None = None,
-                  system: str = TESTER_SYSTEM) -> dict:
+                  system: str = TESTER_SYSTEM, contract: str = PLAN_CONTRACT,
+                  cases: dict | None = None, notes: str = "") -> dict:
     if source == "scripted":
         return json.loads((PROPOSALS / "scripted" / "tester.json").read_text())
-    catalogue = {k: v for k, v in checks.CATALOGUE.items()}
+    # The cases the runner runs for this scenario (rename-note: the original 8).
+    catalogue = cases if cases is not None else {
+        k: checks.CATALOGUE[k] for k in checks.MANDATORY_AFTER_DEPLOY}
     user = (
-        f"{scenario}\n{PLAN_CONTRACT}\nPlan under test:\n{json.dumps(plan_obj, indent=1)}\n\n"
+        f"{scenario}\n{contract}\nPlan under test:\n{json.dumps(plan_obj, indent=1)}\n\n"
         "The runner ALWAYS runs this mandatory catalogue right after deploy_new (both versions "
         f"live):\n{json.dumps(catalogue, indent=1, ensure_ascii=False)}\n\n"
         "Propose additional interleaved cases that could expose a consistency bug in THIS plan. "
@@ -276,6 +326,7 @@ def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list
         "\"user\": \"label\", \"value\": \"string (write/create only)\"}. Labels map to fresh "
         "existing customers, or to the customer created by a `create` step with that label. "
         "Reads are compared by the runner against the last value written to that label.\n"
+        + (f"{notes}\n" if notes else "") +
         f"At most {plans.MAX_CASES} cases with at most {plans.MAX_STEPS} steps each.\n"
         'Reply as {"rationale": "...", "checks": ["catalogue ids to emphasize"], '
         '"custom_cases": [{"id": "snake_case", "description": "...", "steps": [...]}]}'
