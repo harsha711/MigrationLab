@@ -210,6 +210,35 @@ def test_scenario_scores_exclude_infrastructure_and_unscored_runs():
     assert (cell["matched"], cell["scored"]) == (0, 1)
 
 
+def test_shared_run_directory_is_flagged_and_not_scored(tmp_path):
+    # Two batches started a run in the same second; the later summary.json replaced the first.
+    run = "20260101-110000-agent-loop-llm"
+    (tmp_path / run / "agents").mkdir(parents=True)
+    (tmp_path / run / "summary.json").write_text(json.dumps(
+        {"verdict": "FAIL", "scenario": "rename-note", "topology": "roles",
+         "runner_recommendation": "reject", "outcome_counts": {f"{run}/a1": {"fail": 3}}}))
+    (tmp_path / run / "agents" / "trace.json").write_text(json.dumps({"url": "https://x/t"}))
+    rows = {"brev-batch-20260101-100000": {"scenario": "add-table", "verdict": "PASS"},
+            "brev-batch-20260101-100001": {"scenario": "rename-note", "verdict": "FAIL"}}
+    for batch, row in rows.items():
+        (tmp_path / batch).mkdir()
+        (tmp_path / batch / "runs.jsonl").write_text(json.dumps(
+            {"n": 1, "run_id": run, "topology": "roles", "total_tokens": 5, **row}) + "\n")
+    first = query.batch_detail(tmp_path, "brev-batch-20260101-100000", expected_root=EXPECTED)
+    r = first["runs"][0]
+    assert r["summary_conflict"] == ["scenario", "verdict"]
+    assert r["shared_with"] == [{"batch_id": "brev-batch-20260101-100001", "n": 1}]
+    # The other run's summary and trace are not shown; the supervisor's row is.
+    assert (r["verdict"], r["verdict_source"], r["total_tokens"]) == ("PASS", "runs.jsonl", 5)
+    assert r["attempts"] is None and r["trace_url"] is None and r["has_summary"] is False
+    assert r["expected"] is not None and r["matches_expected"] is None
+    assert first["scenario_score"] == {"matched": 0, "scored": 0}
+    second = query.batch_detail(tmp_path, "brev-batch-20260101-100001")["runs"][0]
+    assert second["summary_conflict"] == [] and second["has_summary"] is True
+    assert second["shared_with"] == [{"batch_id": "brev-batch-20260101-100000", "n": 1}]
+    assert second["matches_expected"] is None
+
+
 def test_infrastructure_failures_are_never_scored(tmp_path):
     (tmp_path / "rename-note.json").write_text(json.dumps(
         {"plans": {"safe.json": {"verdict": "PASS", "recommendation": "staged_rollout"}}}))

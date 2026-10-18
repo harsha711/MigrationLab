@@ -412,13 +412,20 @@ def _iso(at):
 
 
 def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str],
-               target_of) -> dict:
+               target_of, shared: list[dict]) -> dict:
     run_id = rec.get("run_id") if isinstance(rec.get("run_id"), str) else None
     run_dir = runs_root / run_id if run_id and _RUN_ID.fullmatch(run_id) else None
     summary = _read_json(run_dir / "summary.json") if run_dir else None
     s = summary if isinstance(summary, dict) else {}
+    # Two runs started in the same second share a run directory; the later summary.json
+    # replaces the earlier one. A summary that contradicts the supervisor's row is not this run's.
+    conflict = [k for k in ("scenario", "topology") if rec.get(k) and s.get(k) and rec[k] != s[k]]
+    if rec.get("verdict") in BATCH_VERDICTS and s.get("verdict") not in (None, rec["verdict"]):
+        conflict.append("verdict")
+    if conflict:
+        s = {}
     totals = s.get("agent_totals") or {}
-    trace = _read_json(run_dir / "agents" / "trace.json") if run_dir else None
+    trace = _read_json(run_dir / "agents" / "trace.json") if run_dir and not conflict else None
     url = trace.get("url") if isinstance(trace, dict) else None
     if not (isinstance(url, str) and url.startswith(("https://", "http://"))):
         url = None
@@ -447,8 +454,10 @@ def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str],
         "in_store": run_id in stored,
         "trace_url": url,
         "infrastructure_failure": infra,
+        "summary_conflict": conflict,
+        "shared_with": shared,
         "expected": target,
-        "matches_expected": _matches(target, s),
+        "matches_expected": None if conflict or shared else _matches(target, s),
     }
 
 
@@ -477,8 +486,18 @@ def _in_progress(progress: dict | None, runs: list[dict], now: datetime) -> list
     return out
 
 
+def _run_id_rows(runs_root: Path) -> dict[str, list[dict]]:
+    """Every runs.jsonl row naming each run ID, across all batches under runs_root."""
+    rows = {}
+    for p in _batch_dirs(runs_root):
+        for rec in _read_jsonl(p / "runs.jsonl")[0]:
+            if isinstance(rec.get("run_id"), str):
+                rows.setdefault(rec["run_id"], []).append({"batch_id": p.name, "n": rec.get("n")})
+    return rows
+
+
 def _batch(path: Path, runs_root: Path, stored: set[str], now: datetime,
-           expected_root) -> dict:
+           expected_root, run_rows: dict[str, list[dict]]) -> dict:
     batch_id = path.name
     infra_note = _read_text(path / "INFRA-NOTE")
     m = re.match(r"brev-batch-(\d{8})-", batch_id)
@@ -491,8 +510,14 @@ def _batch(path: Path, runs_root: Path, stored: set[str], now: datetime,
             targets[scenario] = expected_target(scenario, expected_root)
         return targets[scenario]
 
+    def shared(rec):
+        me = {"batch_id": batch_id, "n": rec.get("n")}
+        return [o for o in run_rows.get(rec.get("run_id"), []) if o != me]
+
     records, bad = _read_jsonl(path / "runs.jsonl")
-    runs = sorted((_batch_run(r, runs_root, stamps, stored, target_of) for r in records),
+    runs = sorted((_batch_run(r, runs_root, stamps, stored, target_of,
+                              shared(r) if isinstance(r.get("run_id"), str) else [])
+                   for r in records),
                   key=lambda r: (r["n"] if isinstance(r["n"], int) else 10 ** 6, r["run_id"] or ""))
     progress = supervisor_progress(path, date)
     in_progress = _in_progress(progress, runs, now)
@@ -551,7 +576,8 @@ def list_batches(runs_root, conn=None, *, now=None,
                  expected_root=EXPECTED_VERDICTS) -> list[dict]:
     """Every batch under runs_root, newest first, with counts but without the run list."""
     runs_root, stored, now = Path(runs_root), _stored_run_ids(conn), now or datetime.now()
-    return [{k: v for k, v in _batch(p, runs_root, stored, now, expected_root).items()
+    run_rows = _run_id_rows(runs_root)
+    return [{k: v for k, v in _batch(p, runs_root, stored, now, expected_root, run_rows).items()
              if k != "runs"}
             for p in _batch_dirs(runs_root)]
 
@@ -564,4 +590,4 @@ def batch_detail(runs_root, batch_id, conn=None, *, now=None,
     if not path.is_dir():
         return None
     return _batch(path, Path(runs_root), _stored_run_ids(conn), now or datetime.now(),
-                  expected_root)
+                  expected_root, _run_id_rows(Path(runs_root)))
