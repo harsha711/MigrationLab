@@ -43,3 +43,25 @@ def test_token_overrun_is_incomplete_condition():
     budget.begin_call()
     with pytest.raises(BudgetExceeded, match="token budget"):
         budget.finish_call({"total_tokens": 3}, 0.1)
+
+
+def test_scenario_request_uses_the_catalogue_change():
+    request = load_review_request(None, "llm", scenario="add-required-column")
+    assert request["scenario"] == "add-required-column"
+    assert request["change"]["new_column"] == "marketing_opt_in"
+    assert load_review_request(None, "llm")["scenario"] == "rename-note"
+
+
+def test_request_may_not_contradict_its_scenario():
+    raw = {"scenario": "drop-column", "change": {"description": "x", "old_column": "email"}}
+    with pytest.raises(ValueError, match="contradicts"):
+        load_review_request(raw, "llm")
+    with pytest.raises(ValueError, match="unknown scenario"):
+        load_review_request(None, "llm", scenario="no-such-scenario")
+
+
+def test_rename_scenario_text_is_unchanged():
+    from migproto.agents.request import scenario_text
+    text = scenario_text(load_review_request(None, "llm"))
+    assert "Table: account_user; old column: note; new column: customer_note.\n" in text
+    assert "Application versions: old=old, new=new-staged.\n" in text

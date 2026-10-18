@@ -6,6 +6,7 @@ import re
 from .. import plans, runner_api
 from ..config import PROPOSALS
 from ..runlog import SCRIPTED, RunLog, agent
+from . import facts as scenario_facts
 from . import roles, single
 from .budget import BudgetExceeded, ReviewBudget
 from .llm import LLM, LLMError
@@ -81,21 +82,28 @@ def _emit_claim(log: RunLog, prov: str, attempt: int, report: dict,
     )
 
 
-def run(log: RunLog, source: str, request=None, topology: str | None = None) -> dict:
+def run(log: RunLog, source: str, request=None, topology: str | None = None,
+        scenario: str | None = None) -> dict:
     """Backward-compatible entry point used by the CLI."""
-    return run_review(log, source, request=request, topology=topology)
+    return run_review(log, source, request=request, topology=topology, scenario=scenario)
 
 
 def run_review(log: RunLog, source: str, request=None, topology: str | None = None,
-               llm: LLM | None = None) -> dict:
+               llm: LLM | None = None, scenario: str | None = None) -> dict:
     """Run one review; safe for future CLI and UI callers to share."""
     budget = llm.budget if llm else ReviewBudget()
     if source not in {"scripted", "llm"}:
         return _finish(False, "ERROR", source, topology or "roles", None, None, [], budget,
                        reason="source must be 'scripted' or 'llm'")
     try:
-        review = load_review_request(request, source, topology)
+        review = load_review_request(request, source, topology, scenario)
         topology = review["agent_topology"]
+        scenario_id = review["scenario"]
+        sfacts = scenario_facts.for_scenario(scenario_id, roles.SEARCH_ROOTS)
+        if source == "scripted" and not sfacts.is_default:
+            raise ValueError(f"scenario {scenario_id}: scripted agent proposals exist only "
+                             "for rename-note; run a scenario's scripted plans with "
+                             "`migproto staged --scenario`")
         if llm is None:
             budget = ReviewBudget.from_dict(review.get("budget"))
     except ValueError as exc:
@@ -123,19 +131,35 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
             "force_nonempty_content": llm.force_nonempty_content if llm else None,
             "budget": budget.snapshot(),
             "solution_origin": solution_origin,
+            "scenario": scenario_id,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
         log.write_json("agents/review-request.json", review)
 
-        hits = roles.gather_hits()
+        if sfacts.is_default:
+            hits = roles.gather_hits()
+        else:
+            hits = roles.gather_hits(pattern=scenario_facts.search_regex(sfacts.search_terms))
         log.write_json("agents/search_hits.json", hits)
-        log.event("tool", name="gather_hits", hits=len(hits),
-                  msg="deterministic search for `note` in old worktree (runner tool)")
+        terms = ", ".join(f"`{t}`" for t in sfacts.search_terms)
+        log.event("tool", name="gather_hits", hits=len(hits), terms=list(sfacts.search_terms),
+                  msg=f"deterministic search for {terms} in old worktree (runner tool)")
+        # Every scenario: agent-side validator (tolerates `recommendation`) and a schema limited
+        # to the scenario's builds. Non-default scenarios also get their own facts; rename-note
+        # keeps its original prompt text.
+        plan_kwargs = {"validator": scenario_facts.plan_validator(sfacts),
+                       "schema": roles.plan_schema(sfacts.variants)}
+        test_kwargs = {}
+        if not sfacts.is_default:
+            plan_kwargs["contract"] = sfacts.contract
+            test_kwargs.update(contract=sfacts.contract, cases=sfacts.cases,
+                               notes=sfacts.tester_notes)
 
         transcripts: dict[str, list] = {}
         shared_history: list[dict] | None = [] if topology == "single" and llm else None
         scenario = scenario_text(review)
+        plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
         def call(role: str, fn, *args, **kwargs):
             transcript_role = "single" if shared_history is not None else role
@@ -149,22 +173,30 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
             log.write_json(f"agents/{role}.json", out)
             return out
 
-        investigation = call("investigator", roles.investigate, hits, scenario=scenario)
-        truth = json.loads((PROPOSALS / "manual" / "investigator_ground_truth.json").read_text())
-        score = roles.score_investigator(investigation, hits, truth)
-        log.event("investigator_score", provenance=prov, msg=(
-            f"precision={score['precision']} recall={score['recall']} vs manual ground truth"),
-            **score)
+        investigation = call("investigator", roles.investigate, hits, scenario=scenario,
+                             **({} if sfacts.is_default else
+                                {"task": sfacts.investigator_task}))
+        if sfacts.is_default:
+            # Ground truth exists for rename-note only (manual label, never shown to agents).
+            truth = json.loads(
+                (PROPOSALS / "manual" / "investigator_ground_truth.json").read_text())
+            score = roles.score_investigator(investigation, hits, truth)
+            log.event("investigator_score", provenance=prov, msg=(
+                f"precision={score['precision']} recall={score['recall']} vs manual ground "
+                "truth"), **score)
+        else:
+            log.event("investigator_score", provenance=prov, skipped=True,
+                      msg=f"no investigator ground truth for scenario {scenario_id}; not scored")
 
-        plan_obj = _tag(call("planner-1", roles.plan, investigation, scenario=scenario), 1)
-        plans.validate_plan(plan_obj)
+        plan_obj = _tag(call("planner-1", roles.plan, investigation, **plan_kwargs), 1)
+        _validate_plan(plan_obj, sfacts)
         log.event("proposal", provenance=prov, role="planner", attempt=1,
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
-                  parent_plan_id=None)
+                  parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
 
         for attempt in range(1, budget.max_revisions + 2):
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
-                         scenario=scenario)
+                         **test_kwargs)
             plans.validate_tests(tests)
             if isinstance(tests, dict):
                 tests["provenance"] = prov
@@ -174,9 +206,9 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
                       plan_id=plan_obj.get("plan_id"))
             check_start = len(log.checks)
             result = runner_api.execute_plan(
-                plan_obj, run_context=runner_api.RunContext(log, provenance=prov,
-                                                            attempt=attempt),
-                extra_tests=tests).as_dict()
+                scenario_facts.runner_plan(plan_obj),
+                run_context=runner_api.RunContext(log, provenance=prov, attempt=attempt),
+                extra_tests=tests, scenario=scenario_id).as_dict()
             last_result = result
             complete_failures = _failure_records(log, check_start)
             report = call(f"tester-report-{attempt}", roles.report_evidence,
@@ -191,43 +223,67 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
                 "halted": result.get("halted"),
                 "failed_checks": [c["name"] for c in complete_failures],
                 "tester_summary": report,
+                "planner_recommendation": plan_obj.get("recommendation"),
+                "runner_recommendation": result.get("recommendation"),
             })
             log.event("attempt_result", provenance="runner", name=f"attempt {attempt}",
                       status="PASS" if result["ok"] else "FAIL",
                       failed=attempts[-1]["failed_checks"])
             if result["ok"] or attempt > budget.max_revisions:
                 break
+            if (plan_obj.get("recommendation") == "reject"
+                    and result.get("recommendation") == "reject"):
+                # The planner concluded no safe plan exists and the runner rejected the plan
+                # it submitted as evidence: nothing for a revision to fix.
+                log.event("revision_skipped", provenance=prov, name=f"attempt {attempt}",
+                          msg="planner recommended reject and the runner rejected the plan")
+                break
             previous_id = plan_obj["plan_id"]
             plan_obj = _tag(call(
                 f"planner-{attempt + 1}", roles.plan, investigation,
                 feedback=_feedback(result, report, complete_failures), previous=plan_obj,
-                scenario=scenario,
+                **plan_kwargs,
             ), attempt + 1)
-            plans.validate_plan(plan_obj)
+            _validate_plan(plan_obj, sfacts)
             log.event("proposal", provenance=prov, role="planner", attempt=attempt + 1,
                       plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
-                      parent_plan_id=previous_id)
+                      parent_plan_id=previous_id,
+                      recommendation=plan_obj.get("recommendation"))
     except BudgetExceeded as exc:
         return _finish(False, "INCOMPLETE", source, topology, model, score, attempts, budget,
-                       reason=str(exc))
+                       reason=str(exc), scenario=scenario_id)
     except LLMError as exc:
         return _finish(False, "ERROR", source, topology, model, score, attempts, budget,
-                       reason=f"LLM call failed: {exc}")
+                       reason=f"LLM call failed: {exc}", scenario=scenario_id)
     except (ValueError, plans.PlanError) as exc:
         return _finish(False, "ERROR", source, topology, model, score, attempts, budget,
-                       reason=f"invalid controller input or proposal: {exc}")
+                       reason=f"invalid controller input or proposal: {exc}",
+                       scenario=scenario_id)
 
     final_ok = bool(last_result and last_result["ok"])
     return _finish(final_ok, "PASS" if final_ok else "FAIL", source, topology, model,
-                   score, attempts, budget)
+                   score, attempts, budget, scenario=scenario_id)
+
+
+def _validate_plan(plan_obj: dict, sfacts) -> None:
+    scenario_facts.plan_validator(sfacts)(plan_obj)
 
 
 def _finish(ok: bool, verdict: str, source: str, topology: str, model: str | None,
             score: dict | None, attempts: list[dict], budget: ReviewBudget,
-            reason: str | None = None) -> dict:
+            reason: str | None = None, scenario: str | None = None) -> dict:
+    last = attempts[-1] if attempts else {}
+    planner_rec = last.get("planner_recommendation")
+    runner_rec = last.get("runner_recommendation")
     return {
         "ok": ok,
         "verdict": verdict,
+        "scenario": scenario,
+        # Planner's conclusion (agent claim) next to the runner's reading of its result.
+        "recommendation": planner_rec,
+        "runner_recommendation": runner_rec,
+        "recommendation_agrees": (planner_rec == runner_rec
+                                  if planner_rec and runner_rec else None),
         "source": source,
         "topology": topology,
         "model": model,

@@ -72,7 +72,7 @@ def cmd_agent_loop(args) -> int:
     from .agents import loop
     return _run(f"agent-loop-{args.proposals}", lambda log: loop.run(
         log, args.proposals, request=getattr(args, "request", None),
-        topology=getattr(args, "topology", None)
+        topology=getattr(args, "topology", None), scenario=getattr(args, "scenario", None)
     ))
 
 
@@ -126,6 +126,8 @@ def main(argv=None) -> int:
     a.add_argument("--request", help="path to a migproto.contracts/v1 review request JSON")
     a.add_argument("--topology", choices=["roles", "single"],
                    help="override the request's agent topology")
+    a.add_argument("--scenario", help="scenario id from migproto/scenarios.py (default: the "
+                                      "request's scenario, else rename-note)")
     al = sub.add_parser("all", help="setup, baseline, unsafe, scripted agent loop")
     al.add_argument("--rebuild-seed", action="store_true")
     al.add_argument("--skip-pytest", action="store_true")
