@@ -638,8 +638,13 @@ async function pageCompare(a, b) {
     if (last > first) return `Failure count rose from ${first} to ${last} across recorded attempts.`;
     return `Failure count ended where it began (${last}).`;
   };
-  const col = async (id) => {
-    const run = await getRun(id);
+  const compactFailures = (names, limit = 3) => {
+    if (!names?.length) return `<span class="muted">No failed checks recorded.</span>`;
+    const shown = names.slice(0, limit);
+    return `${shown.map((name) => `<code class="chip">${esc(name)}</code>`).join("")}${names.length > limit ? `<small>+${names.length - limit} more</small>` : ""}`;
+  };
+  const col = (run) => {
+    const id = run.run_id;
     const best = closest(run.attempts);
     const finalVerdict = run.meta?.verdict || "not recorded";
     const final = run.attempts.at(-1);
@@ -653,23 +658,33 @@ async function pageCompare(a, b) {
       <section class="compare-takeaway">
         <span class="eyebrow">CLOSEST RECORDED ATTEMPT</span>
         ${best ? `<strong>${esc(short(best.attempt_id))} · ${best.checks_failed} failed check${best.checks_failed === 1 ? "" : "s"}</strong>
-          <p>${esc(trend(run.attempts))}</p>` : `<p class="muted">No attempts were recorded.</p>`}
+          <p>${esc(trend(run.attempts))} ${best.checks_total != null ? `This attempt ran ${best.checks_total} checks.` : ""}</p>` : `<p class="muted">No attempts were recorded.</p>`}
       </section>
       ${best?.failed?.length ? `<section class="compare-themes"><span>What still blocked that attempt</span>
         ${Object.entries(groups).map(([theme, names]) => `<div><strong>${esc(theme)}</strong><small>${names.length} failed check${names.length === 1 ? "" : "s"}</small></div>`).join("")}
+        <div class="chips compare-failure-names">${compactFailures(best.failed, 99)}</div>
       </section>` : ""}
       <p class="compare-outcome"><strong>Final recorded outcome:</strong> ${verdictBadge(finalVerdict)}${final?.halted ? ` <span class="muted">${esc(final.halted)}</span>` : ""}</p>
-      <details class="compare-evidence"><summary>View every attempt and named failed check</summary>
-        ${run.attempts.map((x) => `<section><div class="row"><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}
-          <span class="muted">${x.checks_total} checks · ${x.checks_failed} failed</span></div>
-          ${x.halted ? `<p class="muted">Stopped: ${esc(x.halted)}</p>` : ""}
-          ${(x.failed || []).length ? `<div class="chips">${x.failed.map((f) => `<code class="chip">${esc(f)}</code>`).join("")}</div>` : `<p class="muted">No failed checks recorded for this attempt.</p>`}</section>`).join("")}
+      <section class="compare-path"><span class="eyebrow">RECORDED ATTEMPT PATH</span>
+        ${run.attempts.map((x) => `<div><header><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}<span>${x.checks_failed} failed / ${x.checks_total} checks</span></header>
+          ${x.halted ? `<p class="muted">Stopped: ${esc(x.halted)}</p>` : ""}<div class="chips">${compactFailures(x.failed)}</div></div>`).join("")}
+      </section>
+      <details class="compare-evidence"><summary>Show every named failed check</summary>
+        ${run.attempts.map((x) => `<section><div class="row"><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}</div>
+          ${(x.failed || []).length ? `<div class="chips">${compactFailures(x.failed, 99)}</div>` : `<p class="muted">No failed checks recorded for this attempt.</p>`}</section>`).join("")}
       </details>
     </article>`;
   };
-  const [left, right] = await Promise.all([col(a), col(b)]);
-  return `<h1>Compare two reviews</h1><p class="muted">This is a side-by-side reading aid, not an approach ranking. Each card shows the closest recorded attempt, its blockers, and the final runner outcome.</p>
-    <div class="compare">${left}${right}</div>`;
+  const [left, right] = await Promise.all([getRun(a), getRun(b)]);
+  const leftBest = closest(left.attempts), rightBest = closest(right.attempts);
+  const shared = [...new Set((leftBest?.failed || []).filter((name) => (rightBest?.failed || []).includes(name)))];
+  const result = left.meta?.verdict === "PASS" || right.meta?.verdict === "PASS"
+    ? "At least one review passed its recorded checks; open the run evidence before making a human decision."
+    : "Neither review passed its recorded checks. This page cannot choose a better approach from these two runs.";
+  return `<h1>Compare two reviews</h1><p class="muted">Use this to compare two revision paths—not to rank models or topologies. Failed-check counts are only directly comparable when the attempt ran the same checks.</p>
+    <section class="compare-conclusion"><span class="eyebrow">WHAT THIS COMPARISON SAYS</span><strong>${esc(result)}</strong>
+      <div><section><span>Left closest attempt</span><b>${leftBest ? `${esc(short(leftBest.attempt_id))} · ${leftBest.checks_failed}/${leftBest.checks_total} failed` : "not recorded"}</b></section><section><span>Right closest attempt</span><b>${rightBest ? `${esc(short(rightBest.attempt_id))} · ${rightBest.checks_failed}/${rightBest.checks_total} failed` : "not recorded"}</b></section><section><span>Shared closest-attempt blockers</span><b>${shared.length ? `${shared.length} shared` : "none recorded"}</b>${shared.length ? `<small>${compactFailures(shared, 4)}</small>` : ""}</section></div>
+    </section><div class="compare">${col(left)}${col(right)}</div>`;
 }
 
 // ---------- Brev batches (supervisor records, read-only) ----------

@@ -87,6 +87,10 @@ tr.link:hover td { background: var(--code-bg); }
 
 .compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .compare-run { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+.compare-conclusion { margin: 16px 0; padding: 17px 19px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 12px; background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+.compare-conclusion > strong { display: block; max-width: 760px; margin-top: 5px; font-size: 15px; line-height: 1.45; }
+.compare-conclusion > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 14px -19px -17px; border-top: 1px solid var(--border); background: var(--border); }
+.compare-conclusion section { min-width: 0; padding: 12px 19px; background: var(--panel); }.compare-conclusion span, .compare-conclusion b, .compare-conclusion small { display: block; }.compare-conclusion section > span { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }.compare-conclusion b { margin-top: 4px; font-size: 13px; }.compare-conclusion small { margin-top: 7px; }
 .compare-run > header { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
 .compare-run > header > div { display: grid; gap: 3px; min-width: 0; }
 .compare-run > header a { overflow-wrap: anywhere; font-size: 14px; }
@@ -98,13 +102,15 @@ tr.link:hover td { background: var(--code-bg); }
 .compare-themes > span { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
 .compare-themes > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 9px; border-left: 3px solid var(--fail); background: var(--fail-bg); border-radius: 0 6px 6px 0; font-size: 12px; }
 .compare-themes small { color: var(--muted); white-space: nowrap; }
+.compare-failure-names { margin-top: 3px; }
+.compare-path { display: grid; gap: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }.compare-path > span { padding: 9px 10px; background: var(--panel-2); }.compare-path > div { padding: 10px; border-top: 1px solid var(--border); }.compare-path header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }.compare-path header > span { margin-left: auto; color: var(--muted); font-size: 11px; }.compare-path .chips { margin-top: 8px; }.compare-path small, .compare-evidence small { align-self: center; color: var(--muted); font-size: 10px; }
 .compare-evidence { border-top: 1px solid var(--border); padding-top: 10px; }
 .compare-evidence > summary { font-size: 12px; font-weight: 700; }
 .compare-evidence section { padding: 11px 0; border-bottom: 1px solid var(--border); }
 .compare-evidence section:last-child { padding-bottom: 0; border-bottom: 0; }
 .compare-evidence p { margin: 6px 0; font-size: 12px; }
 .compare-evidence .chips { margin-top: 8px; }
-@media (max-width: 760px) { .compare { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .compare, .compare-conclusion > div { grid-template-columns: minmax(0, 1fr); }.compare-conclusion section + section { border-top: 1px solid var(--border); }.compare-path header > span { width: 100%; margin-left: 0; } }
 button { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border);
   border-radius: 6px; padding: 5px 10px; cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .55; }
