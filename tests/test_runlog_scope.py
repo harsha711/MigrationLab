@@ -142,3 +142,19 @@ def test_agents_never_create_observations():
     for path in (Path(checks.__file__).parent / "agents").glob("*.py"):
         text = path.read_text()
         assert not re.search(r"\.check\(|\.skip\(", text), f"{path} records an observation"
+
+
+def test_runlogs_started_in_the_same_second_get_separate_directories(tmp_path, monkeypatch):
+    import migproto.runlog as runlog
+    from datetime import datetime as real
+
+    class Frozen(real):
+        @classmethod
+        def now(cls, tz=None):
+            return real(2026, 10, 17, 21, 4, 17, tzinfo=tz)
+
+    monkeypatch.setattr(runlog, "datetime", Frozen)
+    a, b = RunLog("agent-loop-llm", root=tmp_path), RunLog("agent-loop-llm", root=tmp_path)
+    assert a.run_id == "20261017-210417-agent-loop-llm"
+    assert b.run_id == "20261017-210417-agent-loop-llm-2"
+    assert a.dir != b.dir and a.dir.is_dir() and b.dir.is_dir()
