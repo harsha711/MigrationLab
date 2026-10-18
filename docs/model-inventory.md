@@ -53,7 +53,7 @@ Measured on 2026-10-17 with `scripts/count_params.py` (reproduce: `uv run python
 
 **31.58B versus 32.91B:**
 - Hugging Face's `safetensors.total` (31,577,937,344) is not computed by Hugging Face from the tensors. It is copied from `metadata.total_parameters` in the BF16 repo's `model.safetensors.index.json`, written at export.
-- That figure equals exactly the non-MTP BF16 tensors. It leaves out the 270 `mtp.*` tensors (1,335,325,952 parameters) and 23 non-MTP F32 tensors (2,944 elements: 23 MoE layers × 128, which matches one value per routed expert).
+- That figure equals exactly the non-MTP BF16 tensors. It leaves out the 270 `mtp.*` tensors (1,335,325,952 parameters) and 23 non-MTP F32 tensors (2,944 elements: `mixer.gate.e_score_correction_bias`, 128 values, one per routed expert, in each of 23 MoE layers).
 - The 32.91B figure is the Hugging Face API's per-dtype listing summed (BF16 32,913,263,168 + F32 3,072), which counts every tensor. The previous version of this file gave 32,913,263,168 as the per-dtype sum; that was the BF16 entry alone.
 - The NVFP4 repo's API figure (17.8B) counts packed bytes and scale tensors as elements, so it is not a parameter count.
 
