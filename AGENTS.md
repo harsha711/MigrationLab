@@ -76,6 +76,8 @@ review request
   -> deterministic runner verdict
 ```
 
+Design decisions that other agents must not silently revert (single-agent history compaction, invalid revisions as FAIL, scenario old-version search) are recorded in `docs/decisions/single-history.md`.
+
 Roles do not share chat history or communicate directly. The controller passes explicit JSON artifacts between isolated role calls. One shared vLLM endpoint serves the pinned Nemotron checkpoint for every role and, when implemented, the single-agent topology. Parallelism is limited to independent reviews or serving-level batching; do not claim parallel role execution for the current workflow.
 
 Owner 2 owns the agent-side integration points: review request to controller, controller to role prompts, OpenAI-compatible client to vLLM, structured model response to schema validation, runner evidence back to the revision loop, and agent telemetry to `RunLog`. Harsha owns plan execution and verdicts; Owner 3 owns persisted evidence queries and UI. Cross-owner interface changes require a handoff note and owner review.
