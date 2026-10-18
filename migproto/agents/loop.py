@@ -4,7 +4,7 @@ import json
 import re
 
 from .. import plans, runner_api
-from ..config import PROPOSALS
+from ..config import PROPOSALS, WORKTREES
 from ..runlog import SCRIPTED, RunLog, agent
 from . import facts as scenario_facts
 from . import roles, single, tracing
@@ -156,14 +156,20 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           request_id=review.get("request_id"))
         log.write_json("agents/review-request.json", review)
 
+        # The scenario's OLD app version is the code under review (deployed before the
+        # change); never a new-version or state-only build.
+        old_version = scenario_facts.old_version(scenario_id)
         if sfacts.is_default:
             hits = roles.gather_hits()
         else:
-            hits = roles.gather_hits(pattern=scenario_facts.search_regex(sfacts.search_terms))
+            hits = roles.gather_hits(WORKTREES[old_version],
+                                     pattern=scenario_facts.search_regex(sfacts.search_terms))
         log.write_json("agents/search_hits.json", hits)
         terms = ", ".join(f"`{t}`" for t in sfacts.search_terms)
         log.event("tool", name="gather_hits", hits=len(hits), terms=list(sfacts.search_terms),
-                  msg=f"deterministic search for {terms} in old worktree (runner tool)")
+                  app_version=old_version,
+                  msg=f"deterministic search for {terms} in old worktree {old_version!r} "
+                      "(runner tool)")
         # Every scenario: agent-side validator (tolerates `recommendation`) and a schema limited
         # to the scenario's builds. Non-default scenarios also get their own facts; rename-note
         # keeps its original prompt text.
