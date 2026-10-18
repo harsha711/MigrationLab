@@ -323,51 +323,60 @@ async function pageWorkspace(id) {
 }
 
 async function pageReview() {
-  crumbs([["Runs", "#/"], ["Run Review"]]);
+  crumbs([["New review"]]);
   const status = await api("/api/review/status");
-  const current = status.current;
-  const running = current && current.state === "running";
   const unavailable = status.ok ? "" : reviewUnavailableReason(status.reason);
-  return `<h1>Run Review</h1><p class="muted">Starts one review through the controller, which calls the runner. The UI never runs SQL or starts Saleor directly.</p>
-    ${current ? `<div class="card">Last review: <a href="#/review/${enc(current.run_id)}">${esc(current.run_id)}</a> ${running ? `<span class="badge">running</span>` : verdictBadge(current.verdict)} ${current.error ? `<span class="muted">${esc(current.error)}</span>` : ""}</div>` : ""}
-    <div class="card">${status.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(unavailable)}</p>`}<div class="row">
-      <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option><option value="llm">llm (configured endpoint)</option></select></label>
-      <label>Topology <select id="rv-topology"><option value="roles">roles</option><option value="single">single agent</option></select></label>
-      <button id="rv-start" ${status.ok && !running ? "" : "disabled"}>Start</button></div><p id="rv-msg" class="muted"></p></div>`;
+  const scenarios = (await api("/api/scenarios")).scenarios;
+  const options = scenarios.map((s) => `<option value="${esc(s.id)}" data-description="${esc(s.description)}">${esc(s.title)}</option>`).join("");
+  return `<header class="job-head"><span class="eyebrow">SUBMIT A REVIEW JOB</span><h1>New review</h1><p>Choose a defined migration activity. The controller asks agents for a plan; the deterministic runner records the outcome.</p></header>
+    <form id="review-form" class="job-form"><label>Migration activity<select id="rv-scenario">${options}</select><small id="scenario-description"></small></label><div class="job-form-grid"><label>Approach<select id="rv-topology"><option value="roles">Roles — investigator, planner, tester</option><option value="single">Single agent</option><option value="parallel">Parallel planners</option></select></label><label>Mode<select id="rv-mode"><option value="scripted">Scripted — no GPU required</option><option value="llm" ${status.llm_available ? "" : "disabled"}>LLM — configured model endpoint</option></select><small>${status.llm_available ? "Uses the configured MIGPROTO_LLM_* endpoint." : "LLM mode is unavailable: set MIGPROTO_LLM_MODEL before starting the UI."}</small></label></div><fieldset><legend>Review budget</legend><label>Max revisions<input id="rv-revisions" type="number" min="0" value="1"></label><label>Max model calls<input id="rv-calls" type="number" min="1" value="10"></label><label>Max tokens<input id="rv-tokens" type="number" min="1" value="40000"></label><label>Wall time (seconds)<input id="rv-wall" type="number" min="1" value="600"></label></fieldset>${status.ok ? "" : `<p class="notice">${esc(unavailable)}</p>`}<button id="rv-start" class="primary" ${status.ok ? "" : "disabled"}>Submit review job →</button><p id="rv-msg" class="muted"></p></form>`;
 }
 
 async function startReview() {
   const msg = $("#rv-msg");
-  msg.textContent = "Starting…";
-  const response = await fetch("/api/review", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: $("#rv-mode").value, topology: $("#rv-topology").value})});
+  msg.textContent = "Submitting…";
+  const n = (id) => Number($(id).value);
+  const response = await fetch("/api/review", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: $("#rv-mode").value, topology: $("#rv-topology").value, scenario: $("#rv-scenario").value, budget: {max_revisions: n("#rv-revisions"), max_model_calls: n("#rv-calls"), max_total_tokens: n("#rv-tokens"), max_wall_seconds: n("#rv-wall")}})});
   const body = await response.json();
-  if (response.status === 202) { location.hash = `#/review/${enc(body.run_id)}`; return; }
+  if (response.status === 202) { location.hash = `#/jobs/${enc(body.run_id)}`; return; }
   msg.textContent = body.error + (body.owner ? ` (${JSON.stringify(body.owner)})` : "");
 }
 
-async function pageReviewLive(runId) {
-  crumbs([["Runs", "#/"], ["Run Review", "#/review"], [runId]]);
-  setTimeout(() => pollReview(runId, 0), 0);
-  return `<div class="row"><h1>${esc(runId)}</h1><span id="rv-state" class="badge">running</span></div><p class="muted">Live events from the controller-owned run log.</p><div class="card table-wrap"><table id="rv-events"><tr><th>t (s)</th><th>kind</th><th>name</th><th>status</th></tr></table></div>`;
+async function pageJobs() {
+  crumbs([["Reviews"]]);
+  const jobs = (await api("/api/jobs")).jobs || [];
+  return `<header class="job-head"><span class="eyebrow">REVIEW JOBS</span><h1>Submit → watch → decide</h1><p>Every job keeps its request, all attempts, and the runner’s final recorded verdict together.</p></header><div class="job-list">${jobs.map((job) => `<a href="#/jobs/${enc(job.run_id)}"><span>${esc(job.scenario)}</span><strong>${esc(job.run_id)}</strong><small>${esc(job.state)}</small>${job.verdict ? verdictBadge(job.verdict) : ""}</a>`).join("") || `<p class="muted">No review jobs have been submitted from this UI yet.</p>`}</div>`;
 }
 
-async function pollReview(runId, after) {
-  if (location.hash !== `#/review/${enc(runId)}`) return;
+async function pageJob(runId) {
+  crumbs([["Reviews", "#/jobs"], [runId]]);
+  const jobs = (await api("/api/jobs")).jobs || [], job = jobs.find((x) => x.run_id === runId);
+  const request = job?.request || {};
+  setTimeout(() => pollJob(runId, 0), 0);
+  return `<header class="job-head"><span class="eyebrow">REVIEW JOB</span><h1>${esc(runId)}</h1><p>Runner outcomes are evidence. A human decision below is separate and never changes the recorded verdict.</p></header><section class="job-request"><h2>Request</h2><dl><div><dt>Activity</dt><dd>${esc(request.scenario || job?.scenario || "unknown")}</dd></div><div><dt>Mode</dt><dd>${esc(request.mode || job?.mode || "unknown")}</dd></div><div><dt>Topology</dt><dd>${esc(request.agent_topology || job?.topology || "unknown")}</dd></div><div><dt>Budget</dt><dd>${esc(JSON.stringify(request.budget || {}))}</dd></div></dl></section><section class="job-timeline"><header><h2>Attempt timeline</h2><span id="rv-state" class="badge">${esc(job?.state || "running")}</span></header><div id="rv-events" class="timeline-events"></div></section><section id="job-decision" class="job-decision" hidden><span class="eyebrow">HUMAN DECISION</span><h2>Decide what to do with this review</h2><p>This is a recorded human decision, not runner evidence. A PASS covers only the data set, app versions, sequential interleaving, and this machine tested here.</p><textarea id="decision-note" placeholder="Why are you approving or rejecting this review?"></textarea><div><button data-decision="approve" class="primary">Approve review</button><button data-decision="reject">Reject review</button></div><p id="decision-msg"></p></section><details class="job-chat"><summary>Ask evidence about this job</summary><form id="chat-form" data-run-id="${esc(runId)}"><textarea id="chat-question" placeholder="What caused this attempt to fail?"></textarea><button type="submit">Ask evidence →</button></form><div id="chat-result"></div></details>`;
+}
+
+async function pollJob(runId, after) {
+  if (location.hash !== `#/jobs/${enc(runId)}`) return;
   let data;
   try { data = await api(`/api/review/events?run=${enc(runId)}&after=${after}`); }
   catch (err) { $("#rv-state").textContent = "error"; return; }
-  const table = $("#rv-events");
-  if (!table) return;
+  const timeline = $("#rv-events"); if (!timeline) return;
   for (const event of data.events) {
-    const row = table.insertRow();
-    const outcome = event.kind === "check" ? kindOf(event) : "";
-    row.innerHTML = `<td>${event.t == null ? "" : Number(event.t).toFixed(1)}</td><td>${esc(event.kind)}</td><td>${esc(event.name || event.stage || event.msg || "")}</td><td>${outcome ? verdictBadge(event.outcome || event.status) : ""}</td>`;
+    if (["attempt", "stage", "attempt_result", "check"].includes(event.kind)) timeline.insertAdjacentHTML("beforeend", `<article><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>${esc(event.kind === "check" ? humanize(event.name) : event.name || event.stage || event.kind)}</strong>${event.status ? verdictBadge(event.status) : ""}<small>${esc(event.msg || event.error || "")}</small></article>`);
   }
-  if (!data.done) { setTimeout(() => pollReview(runId, data.next), 1500); return; }
-  const status = await api("/api/review/status");
-  const done = status.current && status.current.run_id === runId ? status.current : null;
-  runCache.delete(runId);
-  $("#rv-state").outerHTML = `${verdictBadge(done ? done.verdict : "done")} <a href="#/run/${enc(runId)}">Open run</a>`;
+  if (!data.done) { setTimeout(() => pollJob(runId, data.next), 1500); return; }
+  const detail = await getRun(runId).catch(() => null), verdict = detail?.meta?.verdict || "finished";
+  $("#rv-state").outerHTML = `${verdictBadge(verdict)} <a href="#/run/${enc(runId)}">Open complete evidence</a>`;
+  $("#job-decision").hidden = false;
+}
+
+async function submitDecision(decision) {
+  const runId = routeParts()[1], msg = $("#decision-msg");
+  msg.textContent = "Saving human decision…";
+  const response = await fetch(`/api/jobs/${enc(runId)}/decision`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({decision, note: $("#decision-note").value})});
+  const body = await response.json();
+  msg.textContent = response.ok ? `Recorded ${body.decision} as a human decision.` : body.error;
 }
 
 async function pageOverview(id) {
@@ -949,6 +958,8 @@ async function route() {
   const view = $("#view");
   clearTimeout(state.batchPoll);
   const activeNav = !parts.length ? "runs"
+    : parts[0] === "review" ? "new-review"
+    : parts[0] === "jobs" ? "jobs"
     : parts[0] === "ask" ? "ask"
     : parts[0] === "activities" ? "activities"
     : parts[0] === "batches" ? "batches"
@@ -980,7 +991,8 @@ async function route() {
     else if (parts[0] === "batches" && parts.length === 2) html = await pageBatch(parts[1]);
     else if (parts[0] === "topologies" && parts.length === 1) html = await pageTopologies();
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
-    else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
+    else if (parts[0] === "jobs" && parts.length === 1) html = await pageJobs();
+    else if (parts[0] === "jobs" && parts.length === 2) html = await pageJob(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     window.scrollTo(0, 0);
@@ -1021,7 +1033,9 @@ document.addEventListener("click", (ev) => {
   }
   const obs = ev.target.closest("[data-obs]");
   if (obs) { openEvidence(obs.dataset.obs); return; }
-  if (ev.target.id === "rv-start") { startReview(); return; }
+  if (ev.target.id === "rv-start") { ev.preventDefault(); startReview(); return; }
+  const decision = ev.target.closest("[data-decision]");
+  if (decision) { submitDecision(decision.dataset.decision); return; }
   if (ev.target.closest("#drawer-close") || ev.target.id === "drawer-backdrop") { closeDrawer(); return; }
   const replayDot = ev.target.closest("[data-replay-step]");
   if (replayDot) { rerenderReplay(0, Number(replayDot.dataset.replayStep)); return; }
@@ -1043,6 +1057,7 @@ document.addEventListener("click", (ev) => {
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (ev.target.id === "rv-scenario") { const option = ev.target.selectedOptions[0]; const target = $("#scenario-description"); if (target) target.textContent = option?.dataset.description || ""; return; }
   if (ev.target.id === "topology-pair") { state.topologyPair = ev.target.value; route(); return; }
   if (ev.target.id === "dashboard-run") {
     state.dashboardRunId = ev.target.value;

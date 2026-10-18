@@ -49,7 +49,8 @@
     add(loading, "span", "", "answer-spinner");
     add(loading, "p", "Looking through recorded runs and observations…");
     try {
-      const response = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question: text})});
+      const scoped = form.dataset.runId ? `For run ${form.dataset.runId}: ${text}` : text;
+      const response = await fetch("/api/chat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question: scoped})});
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       result.replaceChildren();
