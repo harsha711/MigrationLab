@@ -19,9 +19,9 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. Nemotron 3.5 Lightning has been served on vLLM 0.27.1 on a Brev H100 (2026-10-17) and measured in small batches (configurations A-F, `docs/results.md`). On the rename scenario, 3 `roles` reviews passed across A-E (`190133`, `204305`, `214321`, each a few reviews per configuration, not a rate); no `single` review passed. In the scenario sweeps, 10 of the 13 catalogue scenarios matched the expected outcome in at least one review. A NeMo Gym resources server exists in `gym/` (implemented, not run against a NeMo Gym trainer; only scripted-plan smoke runs, see `gym/README.md`).
 - **Multi-agent claim:** no superiority over a single agent has been established. On Lightning, rename `roles` passed 3 times and `single` never, but the configurations differed between the two (token budgets, history compaction, the build field) and the samples are a few reviews each, so this is not a comparison (`docs/results.md`, disclosures). Local 4B stand-in runs are separate and measure nothing about Lightning (`docs/local-standin-runs.md`).
 - **Tests:** `uv run pytest` runs 339 tests on Linux with `uv` / Python 3.12: 85 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 109 in `tests/agents`, 81 in `tests/memory` and 64 in `tests/gym`.
-- **Evidence store and review UI (Owner 3, merged through `integrate/memory-ui`):**
+- **Evidence store and review UI (Avritti, merged through `integrate/memory-ui`):**
   - **Fixtures:** ingesting the four `examples/` fixtures reproduces their `summary.json` facts. For `scripted-sync-failure` at `deploy_new`, every old-writer/new-reader case fails and every new-writer/old-reader case passes.
-  - **v1 records and Owner 2's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
+  - **v1 records and Mahek's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
   - **Run Review** has been started from the UI once end-to-end: `#/review`, `--proposals scripted` (no model), topology `roles`, through `agents.loop.run_review` under a real lock file. Run `20261017-213756-agent-loop-scripted` was PASS (65.2 s, 64 checks; attempt 1 failed 9 checks, attempt 2 failed 0). LLM mode from the UI has not been exercised. See `docs/ui.md`.
   - **`memory.retrieval.prior_evidence`** exists, but the controller does not call it yet. It takes a required `model` and selects only runs whose provenance is exactly `agent:<model>`, plus an optional exact `scenario` filter (unit-tested on synthetic run directories only).
 
@@ -41,24 +41,24 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 | `migproto/plans.py` | plan and tester-proposal schema validation | Harsha |
 | `migproto/checks.py` | manual check catalogue, expected-value map, `run_case`, preservation, column agreement | Harsha |
 | `migproto/staged.py` | executes plan stages, retirement gate, per-stage checks, contract-skip on earlier failures | Harsha |
-| `migproto/agents/llm.py` | OpenAI-compatible chat client (plain `requests`, JSON replies) | Owner 2 |
-| `migproto/agents/roles.py` | investigator, planner, tester prompts. `gather_hits` search tool, investigator scoring | Owner 2 |
-| `migproto/agents/loop.py` | controller: investigate, plan, propose tests, execute, revise at most once | Owner 2 |
-| `proposals/scripted/` | scripted proposals that run the loop without a model | Owner 2 |
+| `migproto/agents/llm.py` | OpenAI-compatible chat client (plain `requests`, JSON replies) | Mahek |
+| `migproto/agents/roles.py` | investigator, planner, tester prompts. `gather_hits` search tool, investigator scoring | Mahek |
+| `migproto/agents/loop.py` | controller: investigate, plan, propose tests, execute, revise at most once | Mahek |
+| `proposals/scripted/` | scripted proposals that run the loop without a model | Mahek |
 | `proposals/manual/`, `proposals/negative/`, `patches/` | answer labels, negative fixtures, reference app patches | Harsha |
 | `tests/` | runner tests | Harsha (new agent and memory tests go in `tests/agents/`, `tests/memory/`) |
 | `scripts/export_example.py`, `examples/` | sanitized fixture export and frozen fixtures | Harsha |
 | `docs/contracts.md` | shared data contracts and gap register | Harsha (coordinator) |
-| `migproto/memory/adapter.py`, `store.py`, `query.py` | run directory to scoped records (v0 derivation rules, v1 pass-through, Owner 2 claims), append-only SQLite store `data/memory.sqlite`, exact-scope queries and compatibility matrix | Owner 3 |
-| `migproto/memory/retrieval.py` | `prior_evidence(change, model=, scenario=)` for the controller: earlier agent runs of the same model and change only, never `examples/` or scripted runs | Owner 3 (Owner 2 wires the call) |
-| `migproto/ui/server.py`, `review.py`, `static/` | `migproto ui`: read-only Replay pages, plus Run Review through `agents.controller.run_review` under `migproto.lock` (lazy, disabled until both exist) | Owner 3 |
+| `migproto/memory/adapter.py`, `store.py`, `query.py` | run directory to scoped records (v0 derivation rules, v1 pass-through, Mahek claims), append-only SQLite store `data/memory.sqlite`, exact-scope queries and compatibility matrix | Avritti |
+| `migproto/memory/retrieval.py` | `prior_evidence(change, model=, scenario=)` for the controller: earlier agent runs of the same model and change only, never `examples/` or scripted runs | Avritti (Mahek wires the call) |
+| `migproto/ui/server.py`, `review.py`, `static/` | `migproto ui`: read-only Replay pages, plus Run Review through `agents.controller.run_review` under `migproto.lock` (lazy, disabled until both exist) | Avritti |
 | `gym/` | NeMo Gym resources server wrapping the runner (`gym/resources_server/`, nemo-gym 0.7.0), frozen tasks (`gym/tasks/`), runner-backed verify (`gym/migration_review/`). Implemented, not run against a NeMo Gym trainer; see `gym/README.md` | Harsha |
-| `docs/serving.md`, `docs/results.md` (planned), `docs/model-inventory.md` | vLLM serving record, measured results, model and parameter inventory | Owner 2 |
+| `docs/serving.md`, `docs/results.md` (planned), `docs/model-inventory.md` | vLLM serving record, measured results, model and parameter inventory | Mahek |
 | `docs/bounties.md` | bounty requirements (verified versus unverified), owners, status, open questions | Harsha (coordinator) |
 
 Data flow: `migproto/agents/loop.py` asks roles for proposals. It passes plan and tests to `staged.run`, which starts `old` and `new-staged` servers on a fresh `migproto_run_*` clone of the `migproto_seed` template. The runner executes SQL stages through `db.run_guarded` and records every observation through `RunLog`. The memory adapter then reads finished run directories, meaning those with `summary.json`, into the SQLite store. The UI and `memory.retrieval` only read from that store. They never write observations.
 
-### Agent-layer execution model (Owner 2)
+### Agent-layer execution model (Mahek)
 
 Nemotron is the reasoning model, vLLM is the inference-serving layer, and `migproto/agents/loop.py` is the orchestrator. Do not describe Nemotron or vLLM as the orchestrator, and do not move runner authority into the agent layer.
 
@@ -80,7 +80,7 @@ Design decisions that other agents must not silently revert (single-agent histor
 
 Roles do not share chat history or communicate directly. The controller passes explicit JSON artifacts between isolated role calls. One shared vLLM endpoint serves the pinned Nemotron checkpoint for every role and, when implemented, the single-agent topology. Parallelism is limited to independent reviews or serving-level batching; do not claim parallel role execution for the current workflow.
 
-Owner 2 owns the agent-side integration points: review request to controller, controller to role prompts, OpenAI-compatible client to vLLM, structured model response to schema validation, runner evidence back to the revision loop, and agent telemetry to `RunLog`. Harsha owns plan execution and verdicts; Owner 3 owns persisted evidence queries and UI. Cross-owner interface changes require a handoff note and owner review.
+Mahek owns the agent-side integration points: review request to controller, controller to role prompts, OpenAI-compatible client to vLLM, structured model response to schema validation, runner evidence back to the revision loop, and agent telemetry to `RunLog`. Harsha owns plan execution and verdicts; Avritti owns persisted evidence queries and UI. Cross-owner interface changes require a handoff note and owner review.
 
 ## Commands
 
@@ -136,7 +136,7 @@ Exit codes: 0 on `PASS` or `REPRODUCED`, 1 on `FAIL`, 2 on `ERROR`. Every comman
 
 ## Bounties, models and compute
 
-- Bounties targeted: NVIDIA Nemotron 3.5 Lightning, Red Hat vLLM (Owner 2), and NVIDIA NeMo Gym (Owner 1). Owner 3 presents the evidence. See `docs/bounties.md`. Track-specific requirements are **not verified**, so never claim qualification. Keep unimplemented integrations marked planned.
+- Bounties targeted: NVIDIA Nemotron 3.5 Lightning, Red Hat vLLM (Mahek), and NVIDIA NeMo Gym (Harsha). Avritti presents the evidence. See `docs/bounties.md`. Track-specific requirements are **not verified**, so never claim qualification. Keep unimplemented integrations marked planned.
 - Parameter budget: the submitted system stays within **33B total parameters** (event rule, verified). Count inactive MoE experts and every draft, embedding, critic or judge model. Keep `docs/model-inventory.md` current with exact checkpoints and counts, and check the remaining budget before adding any model.
 - One shared Nemotron 3.5 Lightning vLLM deployment serves all agent roles. Draft models (DSpark, DFlash) stay excluded until organizers confirm accounting.
 - `gpt-oss:120b-cloud` is development-only and stays outside the submitted workflow.
@@ -186,11 +186,11 @@ Findings from the 2026-10-17 smoke tests (runs `20261017-1815*` to `-1832*`, non
 | Role | Assignment |
 |---|---|
 | Owner 1: Harsha, runner and verification | `docs/team/01-runner.md` |
-| Owner 2: agents and orchestration | `docs/team/02-agents.md` |
-| Owner 3: scoped memory and UI | `docs/team/03-memory-ui.md` |
+| Owner 2: Mahek, agents and orchestration | `docs/team/02-agents.md` |
+| Owner 3: Avritti, scoped memory and UI | `docs/team/03-memory-ui.md` |
 
 Overview and integration order: `docs/team/README.md`. Contracts: `docs/contracts.md` (changes coordinated by Harsha).
 
 If the user states their role, work only on that assignment and its necessary dependencies. If no role is given, read `docs/team/` and ask which role to take before modifying implementation. Do not silently take over another teammate's modules. Propose cross-module or contract changes in your handoff notes instead.
 
-For Owner 2 work, changes are limited to the owned agent paths and documentation listed in `docs/team/02-agents.md`. Shared CLI changes require Harsha's review. Do not modify runner verification, memory/UI, NeMo Gym, Saleor worktrees, or shared contracts as part of agent implementation; document the requested interface change for the appropriate owner instead.
+For Mahek's work (Owner 2), changes are limited to the owned agent paths and documentation listed in `docs/team/02-agents.md`. Shared CLI changes require Harsha's review. Do not modify runner verification, memory/UI, NeMo Gym, Saleor worktrees, or shared contracts as part of agent implementation; document the requested interface change for the appropriate owner instead.
