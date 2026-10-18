@@ -1,7 +1,12 @@
 # Agent and Serving Results: Nemotron 3.5 Lightning on vLLM (Brev)
 
-DRAFT, 2026-10-18 00:30 EDT. Configurations A-G, M and scenario sweeps 1-2 are complete;
-configuration H (`parallel` versus `single`, pre-registered) is running.
+DRAFT, 2026-10-18 06:30 EDT. Configurations A-H, M and scenario sweeps 1-2 are complete;
+configuration I is running.
+
+**Pre-registered comparison (configuration H, 72 reviews, 9 scenarios):** `parallel` matched
+the expected outcome in 21 of 36 reviews, `single` in 19 of 36. Two-sided Fisher exact
+p = 0.81, so there is no measured advantage for the multi-agent topology (details under
+Configuration H).
 
 **Where things stand (rename scenario, reviews that passed):**
 
@@ -382,6 +387,71 @@ paragraph without changing it.
 
 **Status (2026-10-18 00:30):** running, batch `runs/brev-batch-20261018-000918` from worktree
 `../hackathon-final` (workers 4-8), code `19dd71f`. No results yet.
+
+**Status (01:35):** split across two runner machines, recorded in the laptop batch's
+`INFRA-NOTE` at the time. Same code (`19dd71f`, confirmed on both checkouts), flags, budgets
+and the one vLLM server on `horizontal-jade-beetle`.
+- The laptop batch `runs/brev-batch-20261018-000918` ran runs 1-2 of every scenario and
+  topology.
+- Mahek's machine (WSL2, 3 workers) ran runs 3-4 as batch `runs/brev-batch-20261018-013233`.
+  It started at 01:33. Both halves' batch records and run directories were copied unchanged
+  (`cp -a`) into this checkout's `runs/`.
+- From 01:33, up to 8 reviews shared the server instead of 5. Calls were slower, which
+  matters for the 3,000 s cap.
+
+### Configuration H: results (both halves done 04:00)
+
+**Primary (pre-registered):** `parallel` matched the expected outcome in **21 of 36**
+reviews, `single` in **19 of 36**. Two-sided Fisher exact **p = 0.81**, so the topologies are
+**not distinguishable at this sample size**. No superiority claim either way. The halves
+agree: laptop 11/18 vs 10/18, Mahek's 10/18 vs 9/18.
+
+| Scenario (expected outcome) | `parallel` | `single` |
+|---|---|---|
+| rename-note (PASS, `staged_rollout`) | 3/4 | 0/4 |
+| raw-sql-rename (PASS, `staged_rollout`) | 0/4 | 0/4 |
+| shorten-note (PASS, `staged_rollout`) | 0/4 | 0/4 |
+| irreversible-data-migration (PASS, `accept_as_is`) | 0/4 | 0/4 |
+| foreign-key-orphans (PASS, `staged_rollout`) | 4/4 | 4/4 |
+| unique-last-name (FAIL, `reject`) | 2/4 | 4/4 |
+| drop-column (PASS, `staged_rollout`) | 4/4 | 4/4 |
+| backfill-then-required (PASS, `staged_rollout`) | 4/4 | 3/4 |
+| add-required-column (PASS, `staged_rollout`) | 4/4 | 4/4 |
+
+The per-scenario differences (rename-note for `parallel`, unique-last-name for `single`) are
+4 reviews per cell and are not tested separately.
+
+**Secondary (reported, not decisive):**
+
+| | `parallel` | `single` |
+|---|---|---|
+| Runner verdicts | 22 PASS, 2 FAIL, 12 INCOMPLETE | 18 PASS, 13 FAIL, 4 INCOMPLETE, 1 ERROR |
+| Stopped by token cap / wall cap | 7 / 5 | 4 / 0 |
+| Median tokens per review | 212,269 | 154,075 |
+| Tokens per matched review (total / matched) | 415,000 (8.72 M / 21) | 361,000 (6.85 M / 19) |
+| Median wall time per review | 1,715 s | 593 s |
+| Total review wall time | 15.0 h | 8.5 h |
+
+- **irreversible-data-migration:** 6 runner PASSes (3 per topology) are scored as not matched.
+  Each recommended `staged_rollout` where `accept_as_is` was expected.
+- **Budget overruns:** 7 `parallel` and 4 `single` reviews ended above 450,000 tokens. The
+  largest overrun was 58,998 tokens (`parallel`) and 22,828 (`single`). The budget is
+  checked between calls, so the call in progress finishes. Reviews stopped by the wall cap
+  ended at 3,000 s.
+- **PASS audit:** an independent script re-read all 40 runner PASSes from `events.jsonl` and
+  the saved plans (21 laptop, 19 Mahek's). None was flagged. It checked that the cross-version
+  cases ran, that old-app retirement was confirmed before any contract stage, and that the
+  recommendation was recorded.
+- **Contract stage:** 18 of the 40 PASSes (9 `parallel`, 9 `single`) have no SQL contract
+  stage: the plan leaves the old shape in place. The runner accepts this, and the scorer only
+  reads verdict and recommendation, so a matched PASS does not mean the migration was
+  finished.
+
+**Exclusion not applied:** `single` shorten-note `20261018-020659-agent-loop-llm` (Mahek's
+half) ended in ERROR because the runner found port 8011 still in use ("stop stray
+servers first"). That is an infrastructure failure, not a model result. It was not recorded
+in an `INFRA-NOTE`, so under the pre-registered rule it stays in and counts as not matched.
+Excluding it gives 21/36 vs 19/35, p = 0.81; the conclusion is unchanged.
 
 ### Configuration H2: longer wall-time cap (exploratory, pre-registered 01:25)
 
