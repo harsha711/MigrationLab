@@ -195,6 +195,16 @@ def test_compatibility_checks_use_plain_language_before_the_grid():
     assert ".compat-summary-grid" in css and ".compat-failure-grid" in css
 
 
+def test_run_overview_has_an_evidence_first_revision_story():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "How the proposed migration changed after runner feedback" in js
+    assert "Planner proposed" in js and "Runner observed" in js and "What changed" in js
+    assert "Different recorded check coverage" in js
+    assert "proposal, not runner evidence" in js
+    assert ".revision-story-card" in css and ".runner-observed" in css
+
+
 def test_batch_endpoints_over_http():
     batch = "brev-batch-20260101-100000"
     handler = server.make_handler(store.connect(":memory:"), threading.Lock(),

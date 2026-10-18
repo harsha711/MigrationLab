@@ -433,27 +433,44 @@ async function pageOverview(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id]]);
   const m = run.meta || {};
-  const attempts = run.attempts.map((a) => {
+  const intent = (attempt) => {
+    const plan = attempt.plans?.[0]?.body || {};
+    return plan.summary || plan.write_consistency || plan.revision_notes || "No planner summary was recorded for this attempt.";
+  };
+  const stageIds = (attempt) => (attempt.plans?.[0]?.body?.stages || []).map((stage) => stage.id || stage.kind).filter(Boolean);
+  const planDelta = (attempt, previous) => {
+    if (!previous) return ["Initial recorded plan; there is no earlier attempt to compare."];
+    const before = new Set(stageIds(previous)), after = new Set(stageIds(attempt));
+    const added = [...after].filter((stage) => !before.has(stage));
+    const removed = [...before].filter((stage) => !after.has(stage));
+    const notes = attempt.plans?.[0]?.body?.revision_notes;
+    const changes = [];
+    if (notes) changes.push(notes);
+    if (added.length) changes.push(`Added stage${added.length === 1 ? "" : "s"}: ${added.map((stage) => stageTitle({stage_id: stage})).join(", ")}.`);
+    if (removed.length) changes.push(`Removed stage${removed.length === 1 ? "" : "s"}: ${removed.map((stage) => stageTitle({stage_id: stage})).join(", ")}.`);
+    if (!changes.length && intent(attempt) !== intent(previous)) changes.push("The recorded planner summary changed; stage IDs stayed the same.");
+    return changes.length ? changes : ["No structural plan change was recorded between these attempts."];
+  };
+  const assessment = (attempt, previous) => {
+    if (attempt.ok === 1) return {tone: "verified", title: "Runner verified this attempt", detail: "All recorded checks for this attempt passed."};
+    if (!previous) return {tone: "initial", title: "Initial runner result", detail: "Use this runner evidence as the baseline for later revisions."};
+    if (attempt.checks_total !== previous.checks_total) return {tone: "coverage", title: "Different recorded check coverage", detail: "The runner executed a different number of checks, so failed-check counts are not directly comparable."};
+    if (attempt.checks_failed < previous.checks_failed) return {tone: "partial", title: "Fewer recorded failed checks", detail: `The count changed from ${previous.checks_failed} to ${attempt.checks_failed}; inspect the named checks before treating this as a fix.`};
+    if (attempt.checks_failed > previous.checks_failed) return {tone: "regressed", title: "More recorded failed checks", detail: `The count changed from ${previous.checks_failed} to ${attempt.checks_failed} with the same recorded check count.`};
+    return {tone: "unchanged", title: "Same recorded failure count", detail: "The count did not change under the same recorded check coverage."};
+  };
+  const story = run.attempts.map((a, index) => {
     const s = short(a.attempt_id);
     const cause = a.claims.find((c) => c.role === "tester-report" && c.kind === "suspected_cause");
-    const cls = a.ok === 1 ? "ok" : a.ok === 0 ? "bad" : "";
-    return `<div class="card attempt ${cls}">
-      <div class="row spread">
-        <div class="row"><strong>${esc(s)}</strong> ${verdictBadge(a.status)}
-          <span class="muted">${a.outcome_counts ? countsText(a.outcome_counts)
-            : `${a.checks_total} checks · ${a.checks_failed} failed`}</span></div>
-        <div class="row"><a href="#/run/${enc(id)}/plan/${s}">Plan</a> · <a href="#/run/${enc(id)}/matrix/${s}">Matrix</a></div>
-      </div>
-      ${a.halted ? `<p><span class="badge fail">halted</span> ${esc(a.halted)}</p>` : ""}
-      ${(a.failed || []).length ? `<p class="muted">Failed: ${a.failed.map((f) => `<code>${esc(f)}</code>`).join(", ")}</p>` : ""}
-      ${cause ? `<p class="muted">Tester's diagnosis: ${esc(cause.text)}</p>` : ""}
-    </div>`;
+    const compare = assessment(a, run.attempts[index - 1]);
+    const failures = (a.failed || []).slice(0, 5);
+    const failedCount = (a.failed || []).length;
+    return `<article class="revision-story-card ${compare.tone}"><header><div><span class="story-index">${index + 1}</span><span class="eyebrow">ATTEMPT ${esc(s)}</span><h3>${verdictBadge(a.status)} ${esc(compare.title)}</h3></div><div class="story-links"><a href="#/run/${enc(id)}/plan/${s}">Open plan</a><a href="#/run/${enc(id)}/matrix/${s}">Compatibility checks</a></div></header><div class="story-grid"><section><span>Planner proposed</span><p>${esc(intent(a))}</p><small>Saved planner artifact; this is a proposal, not runner evidence.</small></section><section><span>What changed</span><ul>${planDelta(a, run.attempts[index - 1]).map((change) => `<li>${esc(change)}</li>`).join("")}</ul></section><section class="runner-observed"><span>Runner observed</span><strong>${a.outcome_counts ? esc(countsText(a.outcome_counts)) : `${a.checks_total} checks · ${a.checks_failed} failed`}</strong><p>${esc(compare.detail)}</p>${a.halted ? `<small>Stopped: ${esc(a.halted)}</small>` : ""}</section></div>${failures.length ? `<footer><span>Failed checks</span>${failures.map((failure) => `<code>${esc(failure)}</code>`).join("")}${failedCount > failures.length ? `<small>+${failedCount - failures.length} more</small>` : ""}</footer>` : ""}${cause ? `<details class="story-diagnosis"><summary>Tester’s recorded diagnosis</summary><p>${esc(cause.text)}</p></details>` : ""}</article>`;
   }).join("");
   const man = run.manifest;
   return `${runHeader(run, "overview")}
-    <h2>Requested change</h2>
-    <p>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</p>
-    <h2>Attempts</h2>${attempts}
+    <section class="revision-story-head"><span class="eyebrow">REVISION STORY</span><h2>How the proposed migration changed after runner feedback</h2><p>Follow the saved planner proposal, the exact runner result, and the next revision. The runner—not the planner—determines whether an attempt passed.</p><div><strong>Requested change</strong><span>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</span></div></section>
+    <section class="revision-story" aria-label="Revision story">${story || `<p class="muted">No attempt records were saved for this run.</p>`}</section>
     ${man ? `<details><summary>Fixture notes</summary><p>${val(man.note)}</p>
       <ul>${(man.sanitization || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ul></details>` : ""}`;
 }
