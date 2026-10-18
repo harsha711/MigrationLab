@@ -214,6 +214,7 @@ def test_compatibility_checks_use_plain_language_before_the_grid():
     assert ".compat-summary-grid" in css and ".compat-failure-grid" in css
     assert "grid-template-rows: 14px minmax(38px, auto) 32px 1fr" in css
     assert ".compat-failure > *" in css and "text-indent: 0" in css
+    assert "justify-content: stretch" in css
 
 
 def test_compatibility_matrix_does_not_equate_green_paths_with_attempt_success():
