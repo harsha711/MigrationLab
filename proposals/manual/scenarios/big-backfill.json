@@ -12,6 +12,11 @@
       "verdict": "PASS",
       "recommendation": "staged_rollout",
       "why": "Each batch locks only 10,000 rows briefly."
+    },
+    "safe-with-default.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "Batches keep writers unblocked, and SET DEFAULT (new rows only) gives old-version inserts a value, so the new version can save them. Added after run 20261017-205806-staged showed the original safe plan left old-app inserts NULL; the original label is unchanged."
     }
   }
 }

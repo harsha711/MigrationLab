@@ -249,6 +249,24 @@ def test_load_generator_rewrites_existing_values():
     assert set(server.writes) <= {(1, "a"), (2, "b"), (3, "c")}   # data never changes
 
 
+def test_load_generator_records_exceptions_as_errors():
+    # Regression: a write blocked past the HTTP timeout raised ReadTimeout, which silently killed
+    # the load thread, so a fully blocked stage looked clean (C5 unsafe, run 20261017-211020).
+    import time as _time
+    from migproto import load
+
+    class TimingOut:
+        def write_note(self, pk, value):
+            _time.sleep(0.01)
+            raise TimeoutError("Read timed out. (read timeout=60)")
+
+    gen = load.LoadGenerator(TimingOut(), {1: "a", 2: "b"}, threads=2).start()
+    _time.sleep(0.1)
+    stats = gen.stop()
+    assert stats["writes"] >= 4 and stats["errors"] == stats["writes"]
+    assert stats["first_errors"][0].startswith("TimeoutError: Read timed out")
+
+
 def test_large_table_scenarios_are_flagged():
     c_ids = {"big-backfill", "plain-index", "int-to-bigint", "long-transaction",
              "schema-and-backfill", "set-not-null"}

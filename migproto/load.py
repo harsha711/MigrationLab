@@ -53,10 +53,16 @@ class LoadGenerator:
         while not self._stop.is_set():
             pk, value = next(cycle)
             t = time.perf_counter()
-            res = self.server.write_note(pk, value)
+            try:
+                res = self.server.write_note(pk, value)
+                ok, error = res.ok, res.error
+            except Exception as exc:
+                # e.g. requests.ReadTimeout when a write stays blocked past the client timeout:
+                # that is the strongest possible signal, so it must be recorded, not lost.
+                ok, error = False, f"{type(exc).__name__}: {exc}"
             ms = (time.perf_counter() - t) * 1000
             with self._lock:
-                self.samples.append((t - self._t0, ms, res.ok, res.error))
+                self.samples.append((t - self._t0, ms, ok, error))
 
     def start(self) -> "LoadGenerator":
         self._t0 = time.perf_counter()
