@@ -174,6 +174,45 @@ def _ids_in(value) -> dict[str, list[str]]:
     return out
 
 
+def _live_run(runs_root, run_id: str) -> dict | None:
+    """A run directory that is not in the store yet (a job still running): request and progress.
+
+    Read-only, from request.json and events.jsonl. There is no verdict until summary.json exists.
+    """
+    run_dir = Path(runs_root) / run_id
+    if not run_id or not re.fullmatch(r"\w[\w.-]*", run_id) or not (run_dir / "events.jsonl").is_file():
+        return None
+    try:
+        request = json.loads((run_dir / "request.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        request = {}
+    events = []
+    for line in (run_dir / "events.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    checks = [e for e in events if e.get("kind") == "check"]
+    last = events[-1] if events else {}
+    return {
+        "run_id": run_id,
+        "state": "finished" if (run_dir / "summary.json").is_file() else "running, no verdict yet",
+        "scenario": request.get("scenario"), "mode": request.get("mode"),
+        "topology": request.get("agent_topology"),
+        "change": (request.get("change") or {}).get("description"),
+        "budget": request.get("budget"),
+        "elapsed_s": last.get("t"),
+        "steps_so_far": [e.get("role") or e.get("name") or e.get("kind") for e in events
+                         if e.get("kind") in ("tool", "investigator_score", "proposal", "attempt",
+                                              "attempt_result")],
+        "attempt_results": [{"attempt": e.get("name") or e.get("msg"), "status": e.get("status")}
+                            for e in events if e.get("kind") == "attempt_result"],
+        "runner_checks": {"recorded": len(checks),
+                          "failed": sum(e.get("status") == "FAIL" for e in checks)},
+        "last_event": {k: last.get(k) for k in ("t", "kind", "name", "role") if last.get(k) is not None},
+    }
+
+
 def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dict:
     refs = extract_ids(question, conn)
     batches = refs["batches"]
@@ -197,6 +236,9 @@ def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dic
         "question": question,
         "question_refs": refs,
         "runs": [_compact_run(query.run_detail(conn, rid)) for rid in refs["runs"]],
+        # Referenced runs not in the store yet (a job still running): progress only.
+        "live_runs": [live for rid in refs["runs"] if not query.run_detail(conn, rid)
+                      and (live := _live_run(runs_root, rid))],
         # A singular "recent run" question uses the latest batch only to resolve the run.
         # Keeping the whole batch here caused the fallback to answer a different question.
         "batches": ([] if recent_run_question else
@@ -409,6 +451,16 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
         if recommendation:
             explanation += f" The recorded runner recommendation was {recommendation}."
         parts.append(explanation)
+    for live in facts.get("live_runs", []):
+        citations.append(live["run_id"])
+        steps = ", ".join(dict.fromkeys(str(x) for x in live.get("steps_so_far") or [])) or "none yet"
+        checks = live.get("runner_checks") or {}
+        parts.append(
+            f"Job {live['run_id']} is {live['state']}. It reviews {live.get('scenario') or 'an unrecorded activity'}"
+            f" ({live.get('change') or 'change not recorded'}) with the {live.get('topology') or 'unrecorded'}"
+            f" topology in {live.get('mode') or 'unrecorded'} mode. Steps so far: {steps}."
+            f" Runner checks recorded: {checks.get('recorded', 0)} ({checks.get('failed', 0)} failed)."
+            + ("" if live["state"] == "finished" else " Only the runner's final verdict decides the outcome."))
     recent = facts.get("recent_run")
     if recent:
         citations.append(recent["run_id"])

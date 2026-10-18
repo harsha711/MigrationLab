@@ -1304,6 +1304,13 @@ async function updateCompareSelection(picked) {
   }
 }
 document.addEventListener("change", (ev) => {
+  // LLM reviews need the measured budget (configuration K); the scripted defaults stop a
+  // Lightning review after its first planner call.
+  if (ev.target.id === "rv-mode") {
+    const budgets = {scripted: [1, 10, 40000, 600], llm: [5, 40, 450000, 3000]}[ev.target.value];
+    if (budgets) ["#rv-revisions", "#rv-calls", "#rv-tokens", "#rv-wall"].forEach((id, i) => { if ($(id)) $(id).value = budgets[i]; });
+    return;
+  }
   if (ev.target.id === "rv-scenario") { const option = ev.target.selectedOptions[0]; const target = $("#scenario-description"); if (target) target.textContent = option?.dataset.description || ""; return; }
   if (ev.target.id === "topology-pair") { state.topologyPair = ev.target.value; route(); return; }
   if (ev.target.id === "dashboard-run") {

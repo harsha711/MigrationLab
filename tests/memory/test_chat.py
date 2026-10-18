@@ -207,3 +207,31 @@ def test_contract_skip_is_attributed_to_its_attempt_not_the_final_pass():
     run["results"]["verdict"] = "FAIL"
     text, _ = chat.facts_answer({"question": "why?", "runs": [run]})
     assert "In attempts 1, 2, earlier checks were still failing" in text
+
+
+def test_running_job_is_described_from_its_run_directory(tmp_path):
+    run_id = "20261018-085545-agent-loop-llm"
+    run = tmp_path / run_id
+    run.mkdir()
+    (run / "request.json").write_text(json.dumps({
+        "scenario": "rename-note", "mode": "llm", "agent_topology": "roles",
+        "change": {"description": "Rename User.note to customer_note."}}))
+    (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in [
+        {"t": 0.1, "kind": "tool", "name": "gather_hits"},
+        {"t": 78.5, "kind": "investigator_score"},
+        {"t": 90.0, "kind": "proposal", "role": "planner"}]) + "\n")
+    db = store.connect(":memory:")
+    facts = chat.build_facts(f"For run {run_id}: what is this job performing?", db, tmp_path)
+    (live,) = facts["live_runs"]
+    assert live["state"] == "running, no verdict yet" and live["topology"] == "roles"
+    assert live["steps_so_far"] == ["gather_hits", "investigator_score", "planner"]
+    assert run_id in facts["record_ids"]["run_ids"]
+    text, cites = chat.facts_answer(facts)
+    assert f"Job {run_id} is running, no verdict yet" in text and "rename-note" in text
+    assert "Only the runner's final verdict decides" in text and cites[0] == run_id
+    assert chat._live_run(tmp_path, "../etc") is None
+
+
+def test_llm_mode_switches_the_form_to_the_measured_budget():
+    source = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'llm: [5, 40, 450000, 3000]' in source
