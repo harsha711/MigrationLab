@@ -179,7 +179,8 @@ Full tables, including every failed review, are in [docs/results.md](docs/result
 ## Next steps
 
 - Isolate the dry run's effect with the pre-registered K0 ablation (K without the dry run;
-  not run), and require a contract stage when a plan claims a finished migration.
+  started, cancelled after 21 of 36 reviews, not analysed), and require a contract stage
+  when a plan claims a finished migration.
 - Compare against one big model on the same task (configuration KB, gpt-oss-120b `single`,
   pre-registered, not run).
 - Run NeMo Gym rollouts and fine-tune Lightning on runner-verified trajectories.

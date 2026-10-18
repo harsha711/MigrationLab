@@ -672,6 +672,11 @@ will be added below this paragraph without changing it.
   conditions over time would be confounded with the flag. The server is the same, and its
   serving record is kept in each batch directory.
 
+**Status (added 2026-10-18):** K0 started automatically after K (batch
+`brev-batch-20261018-120050`) and was cancelled by us at 12:52 UTC, with 21 of 36 reviews
+recorded; the in-flight reviews were killed. It has **not been analysed**, so no K0 result
+is reported and the dry run's effect alone remains unmeasured.
+
 ## Configuration KB: one big model (gpt-oss-120b, `single`) versus K's Lightning `roles` (pre-registered 07:50)
 
 Written and committed before the baseline batch started; the results will be added below this
