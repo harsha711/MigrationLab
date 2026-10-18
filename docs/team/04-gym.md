@@ -10,10 +10,10 @@ merges into `brev/lightning-serving`. Deadline: **11:00 on 2026-10-18**.
 | Worktree | `/home/harsha/Documents/hackathon-gym` |
 | Branch | `feat/nemo-gym` (PR #5 into `brev/lightning-serving`) |
 | Read first | `AGENTS.md` (evidence and development rules), `gym/README.md` (design, commands, what is verified), `gym/HANDOFF.md` (open interface requests) |
-| Do not commit | `vendor` (a symlink to the main checkout's Saleor builds) and `migproto.lock` |
+| Do not commit | `vendor` (a symlink to the main checkout's Saleor builds) and `migproto.lock`. Neither is git-ignored (`vendor/` in `.gitignore` does not match a symlink), so stage files by name and never use `git add -A` or `git commit -a` |
 
-Run `git status` and `git log --oneline -5` first. The previous agent's last commit is
-`01b2e70` (`eval_policy.py`). If you see uncommitted changes you did not make, ask Harsha
+Run `git status` and `git log --oneline -5` first. The previous agent's last code commit is
+`01b2e70` (`eval_policy.py`); only this handoff document follows it. If you see uncommitted changes you did not make, ask Harsha
 before touching them.
 
 ## What exists (all on `feat/nemo-gym`)
@@ -46,13 +46,17 @@ Harsha will push two prompt changes to `origin/brev/lightning-serving`:
   builds.
 
 Both make `tests/gym/test_task_isolation.py::test_frozen_tasks_are_current` fail until the
-tasks are rebuilt. This was already checked: after a rebuild, all 294 tests pass.
+tasks are rebuilt. This was already checked in a trial merge with the local
+`feat/rename-build-line` branch: before the rebuild, only that test fails; after it, all 301
+tests pass (the count can differ slightly in the real merge).
 
 ```bash
 git fetch origin && git merge origin/brev/lightning-serving
 uv run python gym/build_tasks.py && uv run python gym/build_tasks.py --check
 uv run pytest -q
-git commit -am "gym: rebuild frozen tasks for the variant guard and rename build lines"
+git status --short        # vendor and migproto.lock must NOT be staged ("A"); never use -a
+git add gym/tasks/migration_review.jsonl
+git commit -m "gym: rebuild frozen tasks for the variant guard and rename build lines"
 ```
 
 Ask Harsha whether the push has happened. Until it has, skip to task 3.
