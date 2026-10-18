@@ -81,6 +81,10 @@ function attemptPills(run, page, current) {
 
 const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) === s);
 const humanize = (value) => String(value || "unknown").replace(/^case\./, "").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const excerpt = (value, limit = 280) => {
+  const text = String(value || "").trim();
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+};
 const reviewUnavailableReason = (reason) => {
   const text = String(reason || "");
   if (/fcntl|execution lock unavailable/i.test(text)) {
@@ -551,15 +555,23 @@ async function pageMatrix(id, s) {
 async function pageAgents(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], ["Agents"]]);
-  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}</li>`;
-  const perAttempt = run.attempts.filter((a) => a.claims.length).map((a) =>
-    `<h2>${esc(short(a.attempt_id))}</h2><ul>${a.claims.map(claim).join("")}</ul>`).join("");
-  const inv = run.claims_without_attempt;
-  const any = perAttempt || inv.length;
-  return `${runHeader(run, "agents")}
-    ${any ? `<p class="muted">Unstructured v0 claims: free text from agent outputs, no cited evidence IDs.</p>` : `<p class="muted">No agent output in this run.</p>`}
-    ${perAttempt}
-    ${inv.length ? `<details><summary>Investigator findings (${inv.length}, before any attempt)</summary><ul>${inv.map(claim).join("")}</ul></details>` : ""}`;
+  const investigator = run.claims_without_attempt?.filter((claim) => claim.role === "investigator") || [];
+  const claimText = (claims, fallback) => claims.length ? excerpt(claims[0].text) : fallback;
+  const rawClaims = (claims) => claims.length ? `<details class="agent-raw"><summary>Read recorded role output (${claims.length})</summary>${claims.map((claim) => `<article><strong>${esc(claim.kind || "claim")}</strong><p>${esc(claim.text)}</p></article>`).join("")}</details>` : "";
+  const roleFlow = `<section class="agent-role-flow" aria-label="Agent handoff flow"><article><b>1</b><div><span>Investigator</span><strong>Maps the change</strong><small>Findings are handed to the planner.</small></div></article><i>→</i><article><b>2</b><div><span>Planner</span><strong>Proposes a rollout</strong><small>A staged plan goes to the runner.</small></div></article><i>→</i><article><b>3</b><div><span>Tester</span><strong>Returns feedback</strong><small>Test proposals and diagnoses inform revisions.</small></div></article><i>→</i><article class="runner"><b>4</b><div><span>Runner</span><strong>Records the outcome</strong><small>Only runner observations determine pass/fail.</small></div></article></section>`;
+  const discovery = `<section class="agent-discovery"><header><div><span class="eyebrow">BEFORE THE FIRST PLAN</span><h2>Investigator handoff</h2></div><span class="agent-artifact">${investigator.length ? `${investigator.length} finding${investigator.length === 1 ? "" : "s"} recorded` : "No structured findings recorded"}</span></header><p>${esc(claimText(investigator, "No structured investigator finding was saved for this run. The planner artifact below is still available."))}</p><small>Investigator output is an agent claim. It provides context; it does not decide the result.</small>${rawClaims(investigator)}</section>`;
+  const handoffs = run.attempts.map((attempt, index) => {
+    const label = short(attempt.attempt_id);
+    const plan = attempt.plans?.[0]?.body || {};
+    const plannerClaims = attempt.claims.filter((claim) => claim.role === "planner");
+    const testerClaims = attempt.claims.filter((claim) => claim.role?.startsWith("tester"));
+    const stages = plan.stages || [];
+    const plannerSummary = plan.summary || claimText(plannerClaims, "No separate planner explanation was recorded; open the saved plan to inspect its stages.");
+    const testerSummary = claimText(testerClaims, attempt.halted || "No structured tester feedback was saved for this attempt.");
+    const outcome = attempt.status || (attempt.ok === 1 ? "PASS" : attempt.ok === 0 ? "FAIL" : "not recorded");
+    return `<article class="agent-handoff"><header><div><span class="eyebrow">ATTEMPT ${esc(label)}</span><h2>Proposal → feedback → recorded result</h2></div>${verdictBadge(outcome)}</header><div class="agent-handoff-grid"><section class="agent-planner"><span>Planner produced</span><strong>${stages.length ? `${stages.length} staged step${stages.length === 1 ? "" : "s"}` : "Plan structure not recorded"}</strong><p>${esc(excerpt(plannerSummary, 360))}</p><a href="#/run/${enc(id)}/plan/${enc(label)}">Open saved plan →</a>${rawClaims(plannerClaims)}</section><section class="agent-tester"><span>Tester handed back</span><strong>${testerClaims.length ? `${testerClaims.length} recorded feedback item${testerClaims.length === 1 ? "" : "s"}` : "Runner feedback only"}</strong><p>${esc(excerpt(testerSummary, 360))}</p><a href="#/run/${enc(id)}/matrix/${enc(label)}">Open compatibility checks →</a>${rawClaims(testerClaims)}</section><section class="agent-runner"><span>Runner recorded</span><strong>${esc(outcome)}</strong><p>${attempt.outcome_counts ? esc(countsText(attempt.outcome_counts)) : `${attempt.checks_total} checks · ${attempt.checks_failed} failed`}</p>${attempt.halted ? `<small>Stopped: ${esc(attempt.halted)}</small>` : `<small>Deterministic observations are available in the compatibility checks.</small>`}</section></div>${index < run.attempts.length - 1 ? `<footer><span>Handoff to next revision</span><p>The next planner attempt receives explicit controller artifacts; roles do not share chat history directly.</p></footer>` : ""}</article>`;
+  }).join("");
+  return `${runHeader(run, "agents")}<section class="agent-story-head"><span class="eyebrow">AGENT HANDOFFS</span><h2>Who did what, and what did the runner confirm?</h2><p>Roles are isolated. The controller passes explicit artifacts between them; the runner remains the only authority for executed results.</p></section>${roleFlow}${discovery}<section class="agent-handoff-list"><header><span class="eyebrow">ATTEMPT HANDOFFS</span><h2>From proposal to observed outcome</h2></header>${handoffs || `<p class="muted">No attempt artifacts were saved for this run.</p>`}</section>`;
 }
 
 async function pageMetrics(id) {

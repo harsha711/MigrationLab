@@ -205,6 +205,16 @@ def test_run_overview_has_an_evidence_first_revision_story():
     assert ".revision-story-card" in css and ".runner-observed" in css
 
 
+def test_agents_page_explains_role_handoffs_before_raw_claims():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "Who did what, and what did the runner confirm?" in js
+    assert "Planner produced" in js and "Tester handed back" in js and "Runner recorded" in js
+    assert "Only runner observations determine pass/fail." in js
+    assert "roles do not share chat history directly" in js
+    assert ".agent-role-flow" in css and ".agent-handoff-grid" in css
+
+
 def test_batch_endpoints_over_http():
     batch = "brev-batch-20260101-100000"
     handler = server.make_handler(store.connect(":memory:"), threading.Lock(),
