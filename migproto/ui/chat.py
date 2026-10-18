@@ -174,6 +174,18 @@ def _ids_in(value) -> dict[str, list[str]]:
     return out
 
 
+LIVE_FAILURES = 20
+
+
+def _live_failure(check: dict) -> dict:
+    """One failed runner check of a running job: attempt, stage, name and the recorded error."""
+    observed = check.get("observed") if isinstance(check.get("observed"), dict) else {}
+    error = check.get("error") or observed.get("error") or check.get("msg")
+    return {"attempt": str(check.get("attempt_id") or "").rpartition("/")[2] or None,
+            "stage": check.get("step_id"), "name": check.get("name"),
+            "error": str(error)[:200] if error else None}
+
+
 def _live_run(runs_root, run_id: str) -> dict | None:
     """A run directory that is not in the store yet (a job still running): request and progress.
 
@@ -205,8 +217,10 @@ def _live_run(runs_root, run_id: str) -> dict | None:
         "steps_so_far": [e.get("role") or e.get("name") or e.get("kind") for e in events
                          if e.get("kind") in ("tool", "investigator_score", "proposal", "attempt",
                                               "attempt_result")],
-        "attempt_results": [{"attempt": e.get("name") or e.get("msg"), "status": e.get("status")}
+        "attempt_results": [{"attempt": e.get("name") or e.get("msg"), "status": e.get("status"),
+                             "failed_checks": len(e.get("failed") or [])}
                             for e in events if e.get("kind") == "attempt_result"],
+        "failed_checks": [_live_failure(e) for e in checks if e.get("status") == "FAIL"][:LIVE_FAILURES],
         "runner_checks": {"recorded": len(checks),
                           "failed": sum(e.get("status") == "FAIL" for e in checks)},
         "last_event": {k: last.get(k) for k in ("t", "kind", "name", "role") if last.get(k) is not None},
@@ -460,6 +474,10 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
             f" ({live.get('change') or 'change not recorded'}) with the {live.get('topology') or 'unrecorded'}"
             f" topology in {live.get('mode') or 'unrecorded'} mode. Steps so far: {steps}."
             f" Runner checks recorded: {checks.get('recorded', 0)} ({checks.get('failed', 0)} failed)."
+            + "".join(f" In {f.get('attempt') or 'an unrecorded attempt'}, {f.get('name')} failed at"
+                      f" {f.get('stage') or 'an unrecorded stage'}"
+                      + (f": {f['error']}." if f.get("error") else ".")
+                      for f in (live.get("failed_checks") or [])[:5])
             + ("" if live["state"] == "finished" else " Only the runner's final verdict decides the outcome."))
     recent = facts.get("recent_run")
     if recent:

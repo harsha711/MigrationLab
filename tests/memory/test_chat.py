@@ -219,15 +219,21 @@ def test_running_job_is_described_from_its_run_directory(tmp_path):
     (run / "events.jsonl").write_text("\n".join(json.dumps(e) for e in [
         {"t": 0.1, "kind": "tool", "name": "gather_hits"},
         {"t": 78.5, "kind": "investigator_score"},
-        {"t": 90.0, "kind": "proposal", "role": "planner"}]) + "\n")
+        {"t": 90.0, "kind": "proposal", "role": "planner"},
+        {"t": 120.0, "kind": "check", "name": "case.old_write_new_read", "status": "FAIL",
+         "attempt_id": f"{run_id}/a1", "step_id": "deploy_new",
+         "observed": {"error": "read None, expected 'old wrote this'"}}]) + "\n")
     db = store.connect(":memory:")
     facts = chat.build_facts(f"For run {run_id}: what is this job performing?", db, tmp_path)
     (live,) = facts["live_runs"]
     assert live["state"] == "running, no verdict yet" and live["topology"] == "roles"
     assert live["steps_so_far"] == ["gather_hits", "investigator_score", "planner"]
+    assert live["failed_checks"] == [{"attempt": "a1", "stage": "deploy_new", "name": "case.old_write_new_read",
+                                      "error": "read None, expected 'old wrote this'"}]
     assert run_id in facts["record_ids"]["run_ids"]
     text, cites = chat.facts_answer(facts)
     assert f"Job {run_id} is running, no verdict yet" in text and "rename-note" in text
+    assert "In a1, case.old_write_new_read failed at deploy_new: read None" in text
     assert "Only the runner's final verdict decides" in text and cites[0] == run_id
     assert chat._live_run(tmp_path, "../etc") is None
 
