@@ -199,10 +199,12 @@ def test_topology_page_has_descriptive_resource_profile():
 def test_activity_library_assets_are_scenario_first():
     html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
     assert 'href="#/activities" data-nav="activities"' in html
     assert "SCENARIO-FIRST EVIDENCE" in js
     assert "MODEL & TOPOLOGY PERFORMANCE" in js
     assert "/api/scenario-activities" in js
+    assert "activity-overview-metrics" in js and ".activity-overview-metrics article" in css
 
 
 def test_compatibility_checks_use_plain_language_before_the_grid():
