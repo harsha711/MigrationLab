@@ -507,6 +507,44 @@ results; the code (`6654bb0`, branch `feat/config-i`) is tested (348 passed) and
 was deleted). Same procedure, code (`d343bb5`, same code as `6654bb0`), serving script, budgets,
 scenarios and 8 workers; the runner again runs on the instance. The stopped 02:15 batch is not used.
 
+**Status (06:30):** cancelled by Harsha during repetition 2: 28 of 72 reviews finished, and
+the 8 reviews in flight were killed (recorded in the batch's `INFRA-NOTE`). As pre-registered,
+the analysis uses only completed repetition 1 (18 reviews, 9 per arm). It is to be added.
+
+## Configuration J: `roles` versus `single`, with a schema/data profile (pre-registered 06:45)
+
+Written and committed before the batch started; the results will be added below this paragraph
+without changing it. A new experiment, decided after H and part of I. It never changes their
+verdicts.
+
+- **Why:** the prompts named the table and columns but never showed the live table or its
+  data. A reviewer would look at both. The only signal of, for example, one note over 255
+  characters or one duplicate last name was a runner failure after an attempt.
+- **Arms:** `roles` (investigator, planner, tester, one planner per round) and `single` (D1).
+  Both use I's D6 (revise from the best attempt, keep unimplicated stages) and two additions:
+  - **Schema/data profile** (`MIGPROTO_SCHEMA_PROFILE=1`, `migproto/profile.py`): measured
+    read-only at S0 on a throwaway clone (seed template plus the scenario's `prepare_sql`). It
+    is the same generic profile for every scenario: the table's row count, and for each
+    existing column the change names, its type, nullability, default, NULL count, distinct
+    non-NULL count, longest text value, constraints and indexes. Numbers only, no
+    interpretation. It is appended to the scenario text that every role (and `single`)
+    receives, and is recorded in `agents/schema_profile.json`.
+  - **Repeated-failure notice** (`MIGPROTO_REPEAT_NOTICE=1`): when the latest attempt fails a
+    check, or fails with error text identical to the attempt before it, the revision feedback
+    lists them and asks for a different targeted edit.
+- **Everything else as in H/I:** model checkpoint, `serve_lightning.sh` (server reused on
+  `human-brown-mollusk`), sampling (temperature 1.0, top_p 0.95, `THINKING_BUDGET=16384`),
+  prompts, pre-checks, plan rules, RAG off. Budget identical for both: `max_revisions` 5,
+  40 calls, 450,000 tokens, 3,000 s. 8 workers; the runner runs on the instance.
+- **Scenarios:** H's 9. **Runs:** 2 per scenario per topology (36 reviews), interleaved, run
+  index outermost. If the batch is stopped early, only completed run indexes are used.
+- **Primary metric and decision rule:** as in H. `roles` is reported as better only with more
+  matches and two-sided Fisher exact p < 0.05. With 18 reviews per arm, only a large
+  difference can reach significance, so a null result here says little.
+- **Secondary:** as in I. A comparison with H/I is descriptive only, because the
+  configurations and topologies differ.
+- **Exclusions:** as in H (only runs recorded in the batch's `INFRA-NOTE`).
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts

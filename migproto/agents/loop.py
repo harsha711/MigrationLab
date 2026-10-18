@@ -29,6 +29,28 @@ REVISION_RULE = ("Keep every stage of the previous plan that no failed check imp
 
 # Configuration J: the planner and tester prompts carry a read-only S0 schema/data profile.
 SCHEMA_PROFILE = os.environ.get("MIGPROTO_SCHEMA_PROFILE", "") == "1"
+# Configuration J: say which failures (check name or identical error text) the latest attempt
+# repeated from the attempt before it.
+REPEAT_NOTICE = os.environ.get("MIGPROTO_REPEAT_NOTICE", "") == "1"
+
+
+def _repeated(latest: dict, previous: dict) -> dict | None:
+    """Failures of the latest attempt that the attempt before it also had (runner facts)."""
+    names = [n for n in latest["record"]["failed_checks"]
+             if n in set(previous["record"]["failed_checks"])]
+    errors = {c.get("error") for c in previous["failures"] if c.get("error")}
+    same_errors = list(dict.fromkeys(c["error"] for c in latest["failures"]
+                                     if c.get("error") in errors))
+    if not names and not same_errors:
+        return None
+    out = {"note": (f"Your attempt {latest['record']['attempt']} repeated failures of your "
+                    f"attempt {previous['record']['attempt']}: the change you made did not fix "
+                    "them. Make a different, targeted edit to the stages these point to.")}
+    if names:
+        out["checks"] = names
+    if same_errors:
+        out["errors"] = [e[:300] for e in same_errors]
+    return out
 
 
 def _tag(obj: dict, attempt: int) -> dict:
@@ -69,7 +91,8 @@ def _evidence(result: dict, failed_checks: list[dict]) -> dict:
 
 
 def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
-              earlier: list[dict] | None = None, base: dict | None = None) -> dict:
+              earlier: list[dict] | None = None, base: dict | None = None,
+              repeated: dict | None = None) -> dict:
     """Planner feedback: runner facts first, then the tester's model-written diagnosis labelled
     as unverified, then a factual record of each earlier executed attempt. Run 220028 showed
     both failure modes this order avoids: a wrong tester diagnosis read ahead of the runner
@@ -78,6 +101,8 @@ def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
     out = {}
     if base is not None:
         out["revision_base"] = base
+    if repeated is not None:
+        out["repeated_failures"] = repeated
     out.update(_evidence(result, failed_checks))
     if tester_report is not None:
         out["tester_hypothesis"] = {
@@ -130,8 +155,10 @@ def _revision_input(history: list[dict], tester_report: dict | None,
             "attempts it ran the most stages with the fewest failed checks. Your later "
             "attempts did worse (see earlier_attempts). Revise from this plan.")
     earlier = [dict(h["record"]) for h in history if h is not best] + [dict(o) for o in others]
+    repeated = (_repeated(latest, history[-2])
+                if REPEAT_NOTICE and len(history) >= 2 else None)
     return best["plan"], _feedback(best["result"], tester_report if best is latest else None,
-                                   best["failures"], earlier, base=base)
+                                   best["failures"], earlier, base=base, repeated=repeated)
 
 
 def _fit(feedback: dict, limit: int | None = None) -> dict:
@@ -256,6 +283,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "parallel_planners": PARALLEL_PLANNERS if topology == "parallel" else None,
             "revision_base": REVISION_BASE,
             "schema_profile": SCHEMA_PROFILE if llm else None,
+            "repeat_notice": REPEAT_NOTICE if llm else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
