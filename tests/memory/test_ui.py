@@ -146,7 +146,7 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "migrationlab-tour-seen" in js
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
-    assert "editorial-layout" in css and "Migration evidence" in js
+    assert "editorial-layout" in css and "Browse migration reviews" in js
 
 
 def test_first_use_navigation_is_task_oriented():
@@ -165,7 +165,17 @@ def test_run_library_does_not_hydrate_every_run():
     js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
     page = js[js.index("async function pageRuns()"):js.index("function replaySteps")]
     assert "Promise.all" not in page
-    assert "await getRun(selected.run_id)" in page
+    assert "getRun(" not in page
+    assert "Browse migration reviews" in page
+    assert "detailed observations load only after you open a run" in page
+
+
+def test_run_library_is_a_clear_entry_point_to_evidence():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "Find a review" in js and "Open its evidence" in js and "Compare carefully" in js
+    assert "INCOMPLETE" in js
+    assert ".run-library-guide" in css and ".run-quick-link" in css
 
 
 def test_topology_page_has_descriptive_resource_profile():

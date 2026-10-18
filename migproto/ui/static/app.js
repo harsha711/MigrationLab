@@ -167,95 +167,32 @@ async function pageActivities(scenarioId = null) {
 async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
-  const defaultRun = runs.find((run) => run.run_id === "live-ordering-revision") || runs[0];
-  const selected = runs.find((run) => run.run_id === state.dashboardRunId) || defaultRun;
-  const demo = selected ? await getRun(selected.run_id) : null;
-  state.dashboardRunId = demo?.run_id || null;
-  const finalAttempt = demo?.attempts.at(-1);
-  const firstAttempt = demo?.attempts[0];
-  const matrix = finalAttempt ? await api(`/api/matrix?run=${enc(demo.run_id)}&attempt=${enc(finalAttempt.attempt_id)}`) : {rows: [], db_checks: []};
   const rows = runs.map((d) => {
     const search = `${d.run_id} ${d.verdict || ""} ${d.source_kind} ${d.model || "scripted"}`.toLowerCase();
     return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.verdict || "")}" data-kind="${esc(d.source_kind)}">
       <td><input type="checkbox" class="pick" value="${esc(d.run_id)}" aria-label="select for compare"></td>
       <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempt_count} attempt${d.attempt_count === 1 ? "" : "s"}</small></td>
       <td>${verdictBadge(d.verdict)}</td><td>${typeBadges({source_kind: d.source_kind, meta: {model: d.model}})}</td>
-      <td>${d.attempt_count}</td><td>${d.checks_total ?? ""}</td><td>${d.checks_failed}</td></tr>`;
+      <td>${d.elapsed_s == null ? "—" : `${nr(d.elapsed_s)} s`}</td><td>${d.checks_total ?? "—"}</td><td>${d.checks_failed ?? "—"}</td><td><a class="open-run-link" href="#/run/${enc(d.run_id)}">Open <b aria-hidden="true">→</b></a></td></tr>`;
   }).join("");
-  const processStages = [
-    "Review request",
-    "Staged plan",
-    "Runner checks",
-    "Tested outcome"
-  ];
-  const stages = processStages.map((title, index) => `<div class="editorial-stage done"><div><span>${index + 1}</span><strong>${esc(title)}</strong></div><i>${index < processStages.length - 1 ? "→" : ""}</i></div>`).join("");
-  const paths = (matrix.columns || []).map((column) => [column, column.replaceAll("new-staged", "new").replace(" -> ", " → ")]);
-  const checks = [...new Set(matrix.rows.map((item) => item.check_name))]
-    .map((name) => [name, new Set(matrix.rows.filter((item) => item.check_name === name).map((item) => item.column)).size])
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([name]) => name);
-  const scopedResults = [...new Map(matrix.rows.map((item) => [
-    `${item.stage_id || "unknown"}|${item.check_name}|${item.column}`,
-    item
-  ])).values()];
-  const passedResults = scopedResults.filter((item) => kindOf(item) === "PASS").length;
-  const reviewResults = scopedResults.filter(isBad).length;
-  const passRate = scopedResults.length ? Math.round((passedResults / scopedResults.length) * 100) : null;
-  const crossVersionResults = scopedResults.filter((item) => {
-    const [writer, reader] = String(item.column || "").split(" -> ");
-    return writer && reader && writer !== reader;
-  });
-  const crossVersionPassed = crossVersionResults.filter((item) => kindOf(item) === "PASS").length;
-  const matrixMetrics = `<div class="matrix-metrics" aria-label="Recorded compatibility metrics">
-    <div><span>Scoped results</span><strong>${scopedResults.length}</strong><small>stage · check · path</small></div>
-    <div><span>Pass rate</span><strong>${passRate == null ? "—" : `${passRate}%`}</strong><small>${passedResults} of ${scopedResults.length} recorded</small></div>
-    <div class="${reviewResults ? "metric-alert" : "metric-ok"}"><span>Needs review</span><strong>${reviewResults}</strong><small>failed, refused, or errored</small></div>
-    <div><span>Cross-version</span><strong>${crossVersionResults.length ? `${crossVersionPassed}/${crossVersionResults.length}` : "—"}</strong><small>recorded paths passed</small></div>
-  </div>`;
-  const matrixGrid = `<div class="matrix-corner"></div>${paths.map(([, label]) => `<b>${esc(label)}</b>`).join("")}` + checks.map((checkName) => {
-    const cells = paths.map(([column]) => {
-      const candidates = matrix.rows.filter((item) => item.column === column && item.check_name === checkName);
-      const item = candidates.find(isBad) || candidates[0];
-      if (!item) return `<span class="editorial-matrix-cell unknown" title="No recorded observation for this exact scope">—</span>`;
-      const status = isBad(item) ? "fail" : kindOf(item) === "PASS" ? "pass" : "unknown";
-      const mark = status === "pass" ? "✓" : status === "fail" ? "×" : "—";
-      return `<button class="editorial-matrix-cell ${status}" data-obs="${esc(item.observation_id)}" title="${esc(item.check_name)}"><b>${mark}</b></button>`;
-    }).join("");
-    return `<strong title="${esc(checkName)}">${humanize(checkName)}</strong>${cells}`;
-  }).join("");
-  const evidenceItems = (matrix.db_checks || []).filter((item) => item.stage_id && item.stage_id !== "S0");
-  const evidence = (finalAttempt?.stages || []).map((stage) => {
-    const item = evidenceItems.find((candidate) => candidate.stage_id === stage.stage_id);
-    const detail = item ? `${esc(item.check_name)} · recorded observation` : esc(stage.description || stage.phase || stage.stage_kind || "Recorded stage");
-    const content = `<i class="${item && isBad(item) ? "bad" : "ok"}">${item && isBad(item) ? "×" : "✓"}</i><span><strong>${stageTitle(stage)}</strong><small>${detail}</small></span><b>›</b>`;
-    return item ? `<a class="editorial-evidence-item" href="#/obs/${enc(item.observation_id)}">${content}</a>` : `<div class="editorial-evidence-item">${content}</div>`;
-  }).join("");
-  const attempts = (demo?.attempts || []).map((attempt) => {
-    const passed = attempt.ok === 1;
-    const label = attempt.status || (passed ? "PASS" : attempt.ok === 0 ? "FAIL" : "RECORDED");
-    const detail = attempt.halted || `${attempt.checks_total} recorded checks · ${attempt.checks_failed} failed`;
-    return `<article class="${passed ? "passed" : "blocked"}"><i>${passed ? "✓" : "×"}</i><div><small>${humanize(short(attempt.attempt_id))} · ${esc(label)}</small><strong>${esc(detail)}</strong></div><a href="#/run/${enc(demo.run_id)}/matrix/${esc(short(attempt.attempt_id))}">Recorded evidence</a></article>`;
-  }).join(`<span>→</span>`);
-  const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
-  const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
-  const runOptions = runs.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.verdict || "unknown")}</option>`).join("");
-  return `<header class="editorial-head"><div><span class="eyebrow">RECORDED RUNS / EVIDENCE</span><h1>Migration evidence</h1><p>Follow each plan, runner check, and revision from request to tested outcome.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
-    <section class="editorial-layout">
-      <main class="editorial-main">
-        <section class="stage-panel"><div class="stage-panel-title"><span class="eyebrow">HOW THE REVIEW WORKS</span><span>Evidence follows the runner</span></div><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
-        <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
-        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span class="recorded-view">Recorded checks</span></header>${matrixMetrics}<div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">Metrics cover recorded final-attempt application paths only. — means this exact check and application path was not recorded; missing scope remains unknown.</p></section>
-      </main>
-      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><h3 class="rail-section-title">Stage evidence</h3><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
-    </section>
-    <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
+  const outcomeCounts = runs.reduce((counts, run) => ({...counts, [run.verdict || "unknown"]: (counts[run.verdict || "unknown"] || 0) + 1}), {});
+  const finished = (outcomeCounts.PASS || 0) + (outcomeCounts.REPRODUCED || 0);
+  const needsAttention = (outcomeCounts.FAIL || 0) + (outcomeCounts.INCOMPLETE || 0) + (outcomeCounts.ERROR || 0);
+  const featured = runs.slice(0, 3).map((run) => `<a class="run-quick-link" href="#/run/${enc(run.run_id)}"><span>${verdictBadge(run.verdict)}</span><strong>${esc(run.run_id)}</strong><small>${esc(run.model || "model not recorded")} · ${run.checks_total ?? "—"} checks</small><b aria-hidden="true">→</b></a>`).join("");
+  return `<header class="run-library-head"><div><span class="eyebrow">RECORDED RUN LIBRARY</span><h1>Browse migration reviews</h1><p>Choose one recorded review to understand its plan, compatibility checks, revisions, and runner-confirmed outcome.</p></div><a class="button ghost" href="#/activities">Browse by migration activity →</a></header>
+    <section class="run-library-guide"><div><b>1</b><span><strong>Find a review</strong><small>Search by run, model, source, or recorded outcome.</small></span></div><div><b>2</b><span><strong>Open its evidence</strong><small>See the plan and compatibility checks behind that review.</small></span></div><div><b>3</b><span><strong>Compare carefully</strong><small>Select exactly two runs only when their context is comparable.</small></span></div></section>
+    <section class="run-library-summary" aria-label="Run library summary"><div><span>Recorded reviews</span><strong>${runs.length}</strong></div><div class="summary-positive"><span>Passed or reproduced</span><strong>${finished}</strong></div><div class="summary-attention"><span>Needs investigation</span><strong>${needsAttention}</strong><small>fail, incomplete, or error</small></div><div><span>Sources</span><strong>${new Set(runs.map((run) => run.source_kind)).size}</strong><small>fixtures and local runs stay labeled</small></div></section>
+    <section class="run-quick-picks"><header><div><span class="eyebrow">START WITH A RECORDED REVIEW</span><h2>Open a run to see the evidence behind its outcome</h2></div><p>The library itself stays lightweight; detailed observations load only after you open a run.</p></header><div class="run-quick-grid">${featured || `<p class="muted">No recorded reviews are available.</p>`}</div></section>
+    <section id="runs-table" class="section-head"><div><span class="eyebrow">ALL RECORDED REVIEWS</span><h2>Find the review you need</h2><p>Runner outcomes are recorded facts. Model text and plans appear after opening a review.</p></div>
       <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div></section>
-    <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
-      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
+    <div class="filterbar run-library-filter"><input id="run-search" type="search" placeholder="Search by run ID, model, source, or verdict" aria-label="Search runs">
+      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All outcomes</option><option>PASS</option><option>FAIL</option><option>INCOMPLETE</option><option>REPRODUCED</option><option>ERROR</option></select>
       <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
     <div class="card table-wrap runs-card"><table>
-      <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
-      ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
+      <tr><th><span class="sr-only">Compare</span></th><th>review</th><th>recorded outcome</th><th>source & model</th><th>elapsed</th><th>checks</th><th title="Includes every recorded attempt; the outcome column is the final recorded verdict.">failed checks*</th><th><span class="sr-only">Open</span></th></tr>
+      ${rows || `<tr><td colspan="8" class="muted">No finished runs in examples/ or runs/.</td></tr>`}
     </table></div>
+    <p class="run-library-compare-note"><strong>* Failed checks include every recorded attempt.</strong> The outcome column is the final recorded verdict. Comparison preserves each run’s context; use <strong>Compare selected</strong> only for two reviews you intend to inspect side by side.</p>
     ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(reviewUnavailableReason(controller_reason))}</span></div>`}`;
 }
 
