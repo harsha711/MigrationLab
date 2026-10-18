@@ -38,3 +38,7 @@ ADMIN_PASSWORD = "admin"
 
 SEED_CUSTOMERS = 200
 SEED_EMAIL_DOMAIN = "seed.migproto.test"
+# Opt-in Olist seed (`baseline --seed-source olist`). Raw Kaggle files are downloaded
+# manually; the prepared JSON lives under vendor/ (git-ignored, CC BY-NC-SA 4.0 data).
+OLIST_DIR = os.environ.get("MIGPROTO_OLIST_DIR")
+OLIST_PREPARED_DIR = VENDOR / "olist"

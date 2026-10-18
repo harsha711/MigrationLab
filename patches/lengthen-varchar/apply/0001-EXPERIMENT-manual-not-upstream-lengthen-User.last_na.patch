@@ -1,0 +1,50 @@
+From 0342829d6e85466c64f59587a6d588ed57d88d6c Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:28 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): lengthen User.last_name to
+ varchar(512)
+
+---
+ .../migrations/0107_alter_user_last_name_512.py  | 16 ++++++++++++++++
+ saleor/account/models.py                         |  2 +-
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+ create mode 100644 saleor/account/migrations/0107_alter_user_last_name_512.py
+
+diff --git a/saleor/account/migrations/0107_alter_user_last_name_512.py b/saleor/account/migrations/0107_alter_user_last_name_512.py
+new file mode 100644
+index 0000000..22a80b1
+--- /dev/null
++++ b/saleor/account/migrations/0107_alter_user_last_name_512.py
+@@ -0,0 +1,16 @@
++# EXPERIMENT (manual, not upstream): lengthen User.last_name to varchar(512)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.AlterField(
++            model_name="user", name="last_name",
++            field=models.CharField(blank=True, max_length=512),
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..10df0b0 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -171,7 +171,7 @@ class User(
+ ):
+     email = models.EmailField(unique=True)
+     first_name = models.CharField(max_length=256, blank=True)
+-    last_name = models.CharField(max_length=256, blank=True)
++    last_name = models.CharField(max_length=512, blank=True)
+     addresses = models.ManyToManyField(
+         Address, blank=True, related_name="user_addresses"
+     )
+-- 
+2.43.0
+

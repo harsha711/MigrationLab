@@ -1,0 +1,22 @@
+{
+  "scenario": "shorten-note",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "Existing notes are longer than 255 characters (real Olist reviews; synthetic 2000-char note). The type change either fails or, with Django's USING cast, silently truncates them; preservation must catch the loss."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "No rewrite and no truncation: every existing note is preserved."
+    },
+    "truncate.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "Truncation destroys customer data; the preservation check must fail."
+    }
+  }
+}

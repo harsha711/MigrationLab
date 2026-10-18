@@ -1,0 +1,53 @@
+From 6c14e9e9b59c9ef7bcf2ba55639ba6d0b7220624 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:27 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): add a B-tree index on
+ User.last_name, built concurrently
+
+---
+ .../migrations/0107_user_last_name_btree.py   | 20 +++++++++++++++++++
+ saleor/account/models.py                      |  1 +
+ 2 files changed, 21 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_user_last_name_btree.py
+
+diff --git a/saleor/account/migrations/0107_user_last_name_btree.py b/saleor/account/migrations/0107_user_last_name_btree.py
+new file mode 100644
+index 0000000..a5dc1c5
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_last_name_btree.py
+@@ -0,0 +1,20 @@
++# EXPERIMENT (manual, not upstream): add a B-tree index on User.last_name, built concurrently
++
++from django.db import migrations, models
++from django.contrib.postgres.indexes import BTreeIndex
++from django.contrib.postgres.operations import AddIndexConcurrently
++
++
++class Migration(migrations.Migration):
++    atomic = False
++
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        AddIndexConcurrently(
++            model_name="user",
++            index=BTreeIndex(fields=["last_name"], name="account_user_last_name_btree"),
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..fa4ed25 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -231,6 +231,7 @@ class User(
+         )
+         indexes = [
+             *ModelWithMetadata.Meta.indexes,
++            BTreeIndex(fields=["last_name"], name="account_user_last_name_btree"),
+             # Orders searching index
+             GinIndex(
+                 name="order_user_search_gin",
+-- 
+2.43.0
+

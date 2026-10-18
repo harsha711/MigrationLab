@@ -1,0 +1,36 @@
+{
+  "plan_id": "b1-safe",
+  "summary": "Validate length in the new version only; after retirement add a NOT VALID check constraint so new rows are limited while existing long notes are kept.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-keep-column-nullable",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "No schema change before deploy; the column stays text.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note DROP NOT NULL"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-add-length-check-not-valid",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Enforce the limit for future writes without rewriting or validating existing rows.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_note_len CHECK (char_length(note) <= 255) NOT VALID"
+      ]
+    }
+  ]
+}

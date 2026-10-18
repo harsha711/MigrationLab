@@ -1,0 +1,33 @@
+From c4ab2d05a11825996eb46b43b13a705f8b5ac7ad Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:39 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): old version reads
+ User.note through raw SQL
+
+---
+ saleor/graphql/account/types.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/saleor/graphql/account/types.py b/saleor/graphql/account/types.py
+index 2168633..94ed84f 100644
+--- a/saleor/graphql/account/types.py
++++ b/saleor/graphql/account/types.py
+@@ -797,7 +797,14 @@ class User(ModelObjectType[models.User]):
+ 
+     @staticmethod
+     def resolve_note(root: models.User, _info: ResolveInfo):
+-        return root.note
++        # EXPERIMENT (manual): raw SQL read path; linters that only inspect migrations
++        # and ORM-level renames do not see this column reference.
++        from django.db import connection
++
++        with connection.cursor() as cursor:
++            cursor.execute("SELECT note FROM account_user WHERE id = %s", [root.pk])
++            row = cursor.fetchone()
++        return row[0] if row else None
+ 
+     @staticmethod
+     def resolve_events(root: models.User, info: ResolveInfo):
+-- 
+2.43.0
+

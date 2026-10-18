@@ -1,0 +1,17 @@
+{
+  "scenario": "drop-column",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The column is dropped while the old version still selects it, so old-app reads and writes fail."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "The old version keeps working until it is retired; the column is dropped only afterwards."
+    }
+  }
+}

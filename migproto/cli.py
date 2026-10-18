@@ -40,7 +40,12 @@ def cmd_setup(args) -> int:
 
 def cmd_baseline(args) -> int:
     from . import baseline
-    return _run("baseline", lambda log: baseline.run(log, args.rebuild_seed, args.skip_pytest))
+    from .config import OLIST_DIR
+    return _run("baseline", lambda log: baseline.run(
+        log, args.rebuild_seed, args.skip_pytest,
+        seed_source=getattr(args, "seed_source", "synthetic"),
+        olist_dir=getattr(args, "olist_dir", None) or OLIST_DIR,
+        seed_limit=getattr(args, "seed_limit", None)))
 
 
 def cmd_unsafe(args) -> int:
@@ -54,8 +59,9 @@ def cmd_staged(args) -> int:
         plan = plans.load(args.plan)
         tests = plans.load(args.tests) if args.tests else None
         report = runner_api.execute_plan(
-            plan, run_context=runner_api.RunContext(log, provenance=args.provenance),
-            extra_tests=tests)
+            plan, run_context=runner_api.RunContext(log, provenance=args.provenance,
+                                                    keep_db=getattr(args, "keep_db", False)),
+            extra_tests=tests, scenario=getattr(args, "scenario", None))
         result = report.as_dict()
         result["runner_verdict"] = result.pop("verdict")
         return result
@@ -101,11 +107,20 @@ def main(argv=None) -> int:
     b = sub.add_parser("baseline", help="seed template DB, smoke old app, run pytest subset")
     b.add_argument("--rebuild-seed", action="store_true")
     b.add_argument("--skip-pytest", action="store_true")
+    b.add_argument("--seed-source", choices=["synthetic", "olist"], default="synthetic",
+                   help="customer seed: 200 synthetic notes (default) or Olist review comments")
+    b.add_argument("--olist-dir", help="unzipped Kaggle Olist dataset (or MIGPROTO_OLIST_DIR)")
+    b.add_argument("--seed-limit", type=int, help="olist: first N customers (default: all)")
     sub.add_parser("unsafe", help="reproduce old-app breakage from an immediate column rename")
     s = sub.add_parser("staged", help="execute one staged migration plan with compatibility checks")
     s.add_argument("--plan", default=str(PROPOSALS / "scripted" / "plan_v2.json"))
     s.add_argument("--tests", default=str(PROPOSALS / "scripted" / "tester.json"))
     s.add_argument("--provenance", default="scripted")
+    s.add_argument("--scenario", default="rename-note",
+                   help="schema change under review (see migproto/scenarios.py)")
+    s.add_argument("--keep-db", action="store_true",
+                   help="keep the migproto_run_* database after the run, for inspection "
+                        "(drop it by hand afterwards)")
     a = sub.add_parser("agent-loop", help="investigator -> planner -> tester with one revision")
     a.add_argument("--proposals", choices=["scripted", "llm"], default="scripted")
     a.add_argument("--request", help="path to a migproto.contracts/v1 review request JSON")

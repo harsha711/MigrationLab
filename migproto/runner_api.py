@@ -50,6 +50,8 @@ class ExecutionReport:
     observations: list[dict] = field(repr=False)
     error: str | None = None
     contract_version: str = CONTRACT_VERSION
+    scenario: str | None = None
+    recommendation: str | None = None   # accept_as_is | staged_rollout | reject
 
     def as_dict(self, include_observations: bool = False) -> dict:
         """The v0 result keys first (agents' prompts truncate this), then v1 additions."""
@@ -64,7 +66,8 @@ class ExecutionReport:
         d.update(contract_version=self.contract_version, verdict=self.verdict,
                  run_id=self.run_id, attempt_id=self.attempt_id, halted_step=self.halted_step,
                  outcome_counts=self.outcome_counts, database=self.database,
-                 artifacts=self.artifacts)
+                 artifacts=self.artifacts, scenario=self.scenario,
+                 recommendation=self.recommendation)
         if include_observations:
             d["observations"] = self.observations
         return d
@@ -80,7 +83,7 @@ def _verdict(ok: bool, counts: dict[str, int], completed: bool) -> str:
 
 
 def execute_plan(plan: dict, *, run_context: RunContext,
-                 extra_tests: dict | None = None) -> ExecutionReport:
+                 extra_tests: dict | None = None, scenario: str | None = None) -> ExecutionReport:
     log = run_context.log
     if run_context.attempt is not None:
         log.set_attempt(run_context.attempt)
@@ -89,8 +92,9 @@ def execute_plan(plan: dict, *, run_context: RunContext,
             log.listeners.append(run_context.progress)
         start = len(log.checks)
         try:
+            extra = {"scenario": scenario} if scenario is not None else {}
             result = staged.run(log, plan, extra_tests, provenance=run_context.provenance,
-                                keep_db=run_context.keep_db)
+                                keep_db=run_context.keep_db, **extra)
         finally:
             if run_context.progress:
                 log.listeners.remove(run_context.progress)
@@ -101,7 +105,8 @@ def execute_plan(plan: dict, *, run_context: RunContext,
     if result.get("run_db"):
         artifacts.update(plan=f"plan-{plan_id}.json", sql=f"sql/plan-{plan_id}.sql",
                          server_logs=[f"server-old-{plan_id}.log", f"server-new-{plan_id}.log"],
-                         migrate_log=f"migrate-new-staged-{plan_id}.log")
+                         migrate_log=f"migrate-{result.get('new_version', 'new-staged').replace('/', '-')}"
+                                     f"-{plan_id}.log")
     return ExecutionReport(
         verdict=_verdict(result["ok"], counts, result.get("completed_all_stages", False)),
         ok=result["ok"], plan_id=plan_id, run_id=log.run_id, attempt_id=log.attempt_id,
@@ -114,4 +119,5 @@ def execute_plan(plan: dict, *, run_context: RunContext,
                   "database_snapshot_id": log.start_states.get(log.attempt_id),
                   "final_schema_state": log.scope["schema_state"]},
         artifacts=artifacts, observations=observations, error=result.get("error"),
+        scenario=result.get("scenario"), recommendation=result.get("recommendation"),
     )

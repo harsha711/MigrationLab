@@ -1,0 +1,17 @@
+{
+  "scenario": "unique-last-name",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "last_name (Olist city) has many duplicates, so building the unique index fails."
+    },
+    "dedupe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "Deduplicating rewrites thousands of customers' last names (unchanged.last_name fails), and new customers with an empty last name then collide. This needs a product decision."
+    }
+  }
+}

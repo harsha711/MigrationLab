@@ -1,0 +1,51 @@
+{
+  "plan_id": "a5-safe",
+  "summary": "Add a nullable column with a filling trigger, backfill, deploy, retire, then re-check and require it.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-nullable-with-trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "A BEFORE trigger fills the value for rows written by the old version.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean",
+        "CREATE OR REPLACE FUNCTION migproto_opt_in_default() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n    IF NEW.marketing_opt_in IS NULL THEN\n        NEW.marketing_opt_in := false;\n    END IF;\n    RETURN NEW;\nEND;\n$$",
+        "CREATE TRIGGER migproto_opt_in_default BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION migproto_opt_in_default()"
+      ]
+    },
+    {
+      "id": "backfill-opt-in",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Batched backfill of existing rows.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE marketing_opt_in IS NULL LIMIT 2000) UPDATE account_user SET marketing_opt_in = false FROM batch WHERE account_user.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-recheck-and-require",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Re-check for NULLs, require the column, remove the trigger.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL",
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL",
+        "DROP TRIGGER migproto_opt_in_default ON account_user",
+        "DROP FUNCTION migproto_opt_in_default()"
+      ]
+    }
+  ]
+}

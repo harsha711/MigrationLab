@@ -1,0 +1,17 @@
+{
+  "scenario": "backfill-then-required",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The old version keeps inserting rows without the column after NOT NULL is set, so its inserts fail (no database default)."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "The trigger covers old-version inserts until it is retired."
+    }
+  }
+}
