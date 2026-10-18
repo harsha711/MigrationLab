@@ -601,6 +601,52 @@ and K all ran with it. The guard is committed on `feat/schema-profile` but **not
 the running batch, so every K review runs the same code. The run stays in K as a recorded
 ERROR (a non-match). This is not an infrastructure exclusion.
 
+### Configuration K: results (done 08:00)
+
+Batch `brev-batch-20261018-104938` on `human-brown-mollusk`, 36 of 36 reviews, scored with
+`scripts/brev/score_scenarios.py` (targets as in H). There are no infrastructure exclusions.
+
+**Primary: `roles` 11 of 18 matched, `single` 11 of 18 matched. Two-sided Fisher exact
+p = 1.0. No difference.**
+
+| Scenario (expected) | `roles` | `single` |
+|---|---|---|
+| rename-note (PASS, staged) | 2/2 | 2/2 |
+| raw-sql-rename (PASS, staged) | 0/2 (ERROR, ERROR) | 0/2 (ERROR, INCOMPLETE) |
+| shorten-note (PASS, staged) | 0/2 (INCOMPLETE, FAIL) | 1/2 |
+| irreversible-data-migration (PASS, accept_as_is) | 0/2 (PASS but staged) | 0/2 (PASS but staged) |
+| foreign-key-orphans (PASS, staged) | 2/2 | 2/2 |
+| unique-last-name (FAIL, reject) | 2/2 | 1/2 (INCOMPLETE) |
+| drop-column (PASS, staged) | 2/2 | 2/2 |
+| backfill-then-required (PASS, staged) | 1/2 (ERROR) | 1/2 (ERROR) |
+| add-required-column (PASS, staged) | 2/2 | 2/2 |
+| **Total** | **11/18** | **11/18** |
+
+- **Secondary:**
+  - Tokens: `roles` used 1,716,848 in total (about 156k per matched review); `single` used
+    3,200,390 (about 291k per matched review).
+  - Model calls: 136 versus 180.
+  - Summed review time: 4.8 h versus 4.1 h.
+- **ERRORs (5):**
+  - 4 are a planner-1 plan with a duplicate or empty stage id (`id must be a unique
+    non-empty string`). An invalid first plan ends the review before the runner, as in H.
+  - 1 is the malformed-findings crash described above.
+  - All 5 are recorded as non-matches.
+- **PASS audit:** all 23 PASSes have zero failed checks in their final attempt. 8 of them
+  have no SQL contract stage, so for those the retirement gate never ran. Same disclosure as
+  in H.
+- **Dry run (descriptive):**
+  - 69 dry runs, 17 of which found a stage error before execution; 36 planner fix calls,
+    none invalid.
+  - Of the 67 runner attempts, 1 halted on an SQL stage error and 5 on a failed Django
+    migration. In H it was 37 and 36 of 281.
+  - Runner attempts per review: 1.9 in K, 3.9 in H.
+  - These batches differ in more than the dry run (topologies, profile, notice), so this is
+    not the effect of the dry run alone. K0 measures that.
+- **Descriptive, against H** (different configuration, not a test):
+  - All arms: K 22/36 (61%), H 40/72 (56%).
+  - rename-note: `single` went from 0/4 in H to 2/2 here.
+
 ## Configuration K0: K without the dry run, ablation (pre-registered 07:20)
 
 Written and committed while K was running and before any K result was analysed. The results
@@ -657,6 +703,13 @@ paragraph without changing it.
     are not interleaved on one server.
   - The model's reasoning format differs (harmony), so token counts are not like for like.
   - "Same budget" means the same token and call caps, not the same compute.
+
+### Configuration KB: not run (08:20)
+
+The baseline instance (`extra-sapphire-baboon`) ended in `CREATE_FAILED` after about 35
+minutes of building. No gpt-oss-120b review ran. A new instance plus setup and 18 reviews
+would not finish before the demo, so KB was dropped. A comparison against one big model has
+**not** been measured.
 
 ## Scenario sweeps (`roles`, one review per scenario)
 
