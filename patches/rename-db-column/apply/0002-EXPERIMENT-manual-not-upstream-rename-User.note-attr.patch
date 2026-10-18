@@ -1,0 +1,51 @@
+From e42eca66c6da374c1f8b1be43d8afb764e350f4b Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 17:33:28 -0400
+Subject: [PATCH 2/2] EXPERIMENT (manual, not upstream): rename User.note
+ attribute to customer_note, keep column via db_column
+
+---
+ .../migrations/0107_user_note_db_column.py      | 17 +++++++++++++++++
+ saleor/account/models.py                        |  2 +-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+ create mode 100644 saleor/account/migrations/0107_user_note_db_column.py
+
+diff --git a/saleor/account/migrations/0107_user_note_db_column.py b/saleor/account/migrations/0107_user_note_db_column.py
+new file mode 100644
+index 0000000..2f29309
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_note_db_column.py
+@@ -0,0 +1,17 @@
++# EXPERIMENT (manual, not upstream): rename User.note attribute to customer_note, keep column via db_column
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.AlterField(
++            model_name="user", name="note",
++            field=models.TextField(blank=True, db_column="note", null=True),
++        ),
++        migrations.RenameField(model_name="user", old_name="note", new_name="customer_note"),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 2e1c2d5..fffa42e 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -179,7 +179,7 @@ class User(
+     is_active = models.BooleanField(default=True)
+     is_confirmed = models.BooleanField(default=True)
+     last_confirm_email_request = models.DateTimeField(null=True, blank=True)
+-    customer_note = models.TextField(null=True, blank=True)
++    customer_note = models.TextField(null=True, blank=True, db_column="note")
+     date_joined = models.DateTimeField(default=timezone.now, editable=False)
+     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+     last_password_reset_request = models.DateTimeField(null=True, blank=True)
+-- 
+2.43.0
+

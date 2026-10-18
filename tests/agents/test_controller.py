@@ -11,7 +11,7 @@ def test_scripted_revision_preserves_both_attempts(monkeypatch, tmp_path):
     monkeypatch.setattr(roles, "gather_hits", lambda: [])
     calls = []
 
-    def fake_staged(log, plan, tests, provenance, keep_db=False):
+    def fake_staged(log, plan, tests, provenance, keep_db=False, scenario=None):
         calls.append(plan["plan_id"])
         ok = len(calls) == 2
         log.check("runner-check", ok, provenance="runner", msg="complete evidence")
@@ -37,7 +37,7 @@ def test_scripted_revision_preserves_both_attempts(monkeypatch, tmp_path):
 
 def test_budget_and_topology_are_shared_controller_inputs(monkeypatch, tmp_path):
     monkeypatch.setattr(roles, "gather_hits", lambda: [])
-    monkeypatch.setattr(staged, "run", lambda log, plan, tests, provenance, keep_db=False: {
+    monkeypatch.setattr(staged, "run", lambda log, plan, tests, provenance, keep_db=False, scenario=None: {
         "ok": True, "plan_id": plan["plan_id"], "halted": None,
         "stages": [], "failed_checks": [],
     })
@@ -107,3 +107,71 @@ def test_missing_live_model_returns_error(monkeypatch, tmp_path):
     result = loop.run_review(RunLog("test", root=tmp_path), "llm")
     assert result["verdict"] == "ERROR"
     assert "MIGPROTO_LLM_MODEL is required" in result["reason"]
+
+
+def test_scripted_mode_is_rename_only(tmp_path):
+    result = loop.run_review(RunLog("test", root=tmp_path), "scripted",
+                             scenario="add-required-column")
+    assert result["verdict"] == "ERROR"
+    assert "scripted agent proposals exist only for rename-note" in result["reason"]
+
+
+def test_agreed_reject_stops_without_revision(monkeypatch, tmp_path):
+    monkeypatch.setattr(roles, "gather_hits", lambda *a, **k: [])
+    runs = []
+
+    def fake_staged(log, plan, tests, provenance, keep_db=False, scenario=None):
+        runs.append((scenario, plan))
+        log.check("runner-check", False, provenance="runner")
+        return {"ok": False, "plan_id": plan["plan_id"], "halted": None, "stages": [],
+                "failed_checks": [], "recommendation": "reject"}
+
+    monkeypatch.setattr(staged, "run", fake_staged)
+
+    class FakeLLM:
+        model = "nemotron-test"
+        base_url = "http://test/v1"
+        temperature = 1.0
+        top_p = 0.95
+        reasoning_enabled = True
+        force_nonempty_content = True
+        budget = ReviewBudget()
+
+        def serving_metadata(self):
+            return {}
+
+        def chat_json(self, system, user, transcript, validator=None, response_schema=None,
+                      history=None):
+            if response_schema and response_schema["name"] == "migration_plan":
+                return validator({"plan_id": "direct", "recommendation": "reject", "stages": [
+                    {"id": "d", "kind": "deploy_new", "migration": "apply"},
+                    {"id": "r", "kind": "retire_old"}]})
+            if response_schema:
+                return {"checks": [], "custom_cases": []}
+            return {"findings": [], "implicit_paths": [], "summary": "s"}
+
+    result = loop.run_review(RunLog("test", root=tmp_path), "llm", llm=FakeLLM(),
+                             scenario="unique-last-name")
+    assert len(runs) == 1 and runs[0][0] == "unique-last-name"
+    assert "recommendation" not in runs[0][1]
+    assert result["verdict"] == "FAIL"
+    assert result["recommendation"] == "reject" == result["runner_recommendation"]
+    assert result["recommendation_agrees"] is True
+
+
+def test_accept_as_is_must_match_plan_shape():
+    from migproto import plans, scenarios
+    from migproto.agents import facts
+    import pytest
+    validate = facts.plan_validator(facts.for_scenario("add-optional-column", roles.SEARCH_ROOTS))
+    with pytest.raises(plans.PlanError, match="accept_as_is"):
+        validate({"plan_id": "x", "recommendation": "accept_as_is", "stages": [
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "d", "kind": "deploy_new", "migration": "apply"},
+            {"id": "r", "kind": "retire_old"}]})
+    with pytest.raises(plans.PlanError, match="variant"):
+        validate({"plan_id": "x", "stages": [   # omitted migration means state_only
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "d", "kind": "deploy_new"}, {"id": "r", "kind": "retire_old"},
+            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]})
+    assert scenarios.get("add-optional-column").variants.keys() == {"apply"}

@@ -1,0 +1,50 @@
+{
+  "plan_id": "a8-safe",
+  "provenance": "scripted",
+  "summary": "Same staged rollout as rename plan v2 (two-way sync, backfill, retire, contract).",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger keeps note and customer_note equal for writers that only know one column: old-app writes to note are copied to customer_note and new-app writes to customer_note are copied to note. If a single statement changes both, customer_note wins.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable customer_note (metadata-only change) and a bidirectional sync trigger before backfilling.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text NULL",
+        "CREATE OR REPLACE FUNCTION migproto_note_sync() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.customer_note IS NULL THEN\n      NEW.customer_note := NEW.note;\n    ELSIF NEW.note IS NULL THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  ELSIF NEW.note IS DISTINCT FROM OLD.note\n        AND NEW.customer_note IS NOT DISTINCT FROM OLD.customer_note THEN\n    NEW.customer_note := NEW.note;\n  ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND $$",
+        "CREATE TRIGGER migproto_note_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION migproto_note_sync()"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note into customer_note in batches of 100 until no row differs.",
+      "repeat_until_zero_rows": true,
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE id IN (SELECT id FROM account_user WHERE customer_note IS DISTINCT FROM note ORDER BY id LIMIT 100)"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Roll out the new app next to the old one."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop all old app processes before contracting."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove sync machinery and the old column once no old code runs.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS migproto_note_sync ON account_user",
+        "DROP FUNCTION IF EXISTS migproto_note_sync()",
+        "ALTER TABLE account_user DROP COLUMN note"
+      ]
+    }
+  ]
+}

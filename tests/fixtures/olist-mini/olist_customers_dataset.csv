@@ -1,0 +1,7 @@
+"customer_id","customer_unique_id","customer_zip_code_prefix","customer_city","customer_state"
+"c1","aaa1","01000","sao paulo","SP"
+"c2","bbb2","20000","rio de janeiro","RJ"
+"c3","ccc3","30000","belo horizonte","MG"
+"c4","ddd4","40000","salvador","BA"
+"c5","aaa1","01000","campinas","SP"
+"c6","eee5","50000","recife","PE"

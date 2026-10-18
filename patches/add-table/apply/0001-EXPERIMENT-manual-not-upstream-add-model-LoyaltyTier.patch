@@ -1,0 +1,55 @@
+From 23f65886f7bc7eafc0db4b32fdff977e47e0c451 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:26 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): add model LoyaltyTier (new
+ table)
+
+---
+ saleor/account/migrations/0107_loyaltytier.py | 20 +++++++++++++++++++
+ saleor/account/models.py                      |  6 ++++++
+ 2 files changed, 26 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_loyaltytier.py
+
+diff --git a/saleor/account/migrations/0107_loyaltytier.py b/saleor/account/migrations/0107_loyaltytier.py
+new file mode 100644
+index 0000000..cee25a5
+--- /dev/null
++++ b/saleor/account/migrations/0107_loyaltytier.py
+@@ -0,0 +1,20 @@
++# EXPERIMENT (manual, not upstream): add model LoyaltyTier (new table)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.CreateModel(
++            name="LoyaltyTier",
++            fields=[
++                ("id", models.BigAutoField(primary_key=True, serialize=False)),
++                ("name", models.CharField(max_length=100, unique=True)),
++                ("created_at", models.DateTimeField(auto_now_add=True)),
++            ],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..551f3fc 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -479,3 +479,9 @@ class Group(models.Model):
+ 
+     def natural_key(self):
+         return (self.name,)
++
++
++class LoyaltyTier(models.Model):
++    id = models.BigAutoField(primary_key=True)
++    name = models.CharField(max_length=100, unique=True)
++    created_at = models.DateTimeField(auto_now_add=True)
+-- 
+2.43.0
+

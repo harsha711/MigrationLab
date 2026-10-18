@@ -1,0 +1,37 @@
+{
+  "plan_id": "b3-safe",
+  "summary": "Add the foreign key NOT VALID, deploy, retire, clear orphans, then validate.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-fk-not-valid",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "New rows are checked; existing rows are not yet.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_referrer_fk FOREIGN KEY (referrer_id) REFERENCES account_user (id) DEFERRABLE INITIALLY DEFERRED NOT VALID"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-clear-orphans-and-validate",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Dangling references point at nothing; clear them, then validate.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM account_user r WHERE r.id = account_user.referrer_id)",
+        "ALTER TABLE account_user VALIDATE CONSTRAINT account_user_referrer_fk"
+      ]
+    }
+  ]
+}

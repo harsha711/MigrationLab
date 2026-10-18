@@ -1,0 +1,55 @@
+{
+  "plan_id": "a5-unsafe",
+  "summary": "Add nullable column, backfill, make it NOT NULL, then deploy.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-nullable",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the column as nullable.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean"
+      ]
+    },
+    {
+      "id": "backfill-opt-in",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Batched backfill of existing rows.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE marketing_opt_in IS NULL LIMIT 2000) UPDATE account_user SET marketing_opt_in = false FROM batch WHERE account_user.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "backfill-set-not-null",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Require the column right after the backfill.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-drop-default",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "No database default exists; keeps plan shape.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in DROP DEFAULT"
+      ]
+    }
+  ]
+}

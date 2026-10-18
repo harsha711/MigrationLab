@@ -1,0 +1,33 @@
+From e7175fbb630d1750a9d683ba5250149eff29b723 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:42 -0400
+Subject: [PATCH 3/3] EXPERIMENT (manual, not upstream): rename note ->
+ customer_note; raw SQL read updated (state-only)
+
+---
+ saleor/graphql/account/types.py | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/saleor/graphql/account/types.py b/saleor/graphql/account/types.py
+index f698d9f..a9d4b76 100644
+--- a/saleor/graphql/account/types.py
++++ b/saleor/graphql/account/types.py
+@@ -797,7 +797,14 @@ class User(ModelObjectType[models.User]):
+ 
+     @staticmethod
+     def resolve_note(root: models.User, _info: ResolveInfo):
+-        return root.customer_note
++        # EXPERIMENT (manual): raw SQL read path; linters that only inspect migrations
++        # and ORM-level renames do not see this column reference.
++        from django.db import connection
++
++        with connection.cursor() as cursor:
++            cursor.execute("SELECT customer_note FROM account_user WHERE id = %s", [root.pk])
++            row = cursor.fetchone()
++        return row[0] if row else None
+ 
+     @staticmethod
+     def resolve_events(root: models.User, info: ResolveInfo):
+-- 
+2.43.0
+

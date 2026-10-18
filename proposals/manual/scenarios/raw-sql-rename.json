@@ -1,0 +1,17 @@
+{
+  "scenario": "raw-sql-rename",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The old version's raw SQL (and its ORM) still selects note after the rename."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "Both columns stay in sync until the old version (and its raw SQL) is retired."
+    }
+  }
+}

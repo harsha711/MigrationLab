@@ -1,0 +1,36 @@
+{
+  "plan_id": "a4-safe",
+  "summary": "Add the column with a database default first, deploy state-only, drop the default after the old version is retired.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-column-with-db-default",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Metadata-only on Postgres 11+: NOT NULL with a constant default.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-drop-db-default",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "The new version always sends a value; the database default is no longer needed.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in DROP DEFAULT"
+      ]
+    }
+  ]
+}

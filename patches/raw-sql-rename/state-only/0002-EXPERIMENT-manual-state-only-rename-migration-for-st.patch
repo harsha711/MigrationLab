@@ -1,0 +1,45 @@
+From 2b618cb3c5ace7bfbe562c0f9f97b3a965bcd7c8 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 12:11:16 -0400
+Subject: [PATCH 2/3] EXPERIMENT (manual): state-only rename migration for
+ staged rollout
+
+Co-authored-by: Cursor <cursoragent@cursor.com>
+---
+ .../0107_rename_user_note_customer_note.py    | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_rename_user_note_customer_note.py
+
+diff --git a/saleor/account/migrations/0107_rename_user_note_customer_note.py b/saleor/account/migrations/0107_rename_user_note_customer_note.py
+new file mode 100644
+index 0000000..dc832dd
+--- /dev/null
++++ b/saleor/account/migrations/0107_rename_user_note_customer_note.py
+@@ -0,0 +1,24 @@
++# EXPERIMENT (manual, not upstream): state-only rename.
++# Schema changes for account_user.note -> customer_note are applied by the
++# staged migration plan (expand / sync / backfill / contract), not here.
++
++from django.db import migrations
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.RenameField(
++                    model_name="user",
++                    old_name="note",
++                    new_name="customer_note",
++                ),
++            ],
++            database_operations=[],
++        ),
++    ]
+-- 
+2.43.0
+

@@ -171,3 +171,25 @@ Owner 3's work from branch `memory-ui/scoped-review` is merged through `integrat
 - **No measured benefit from retrieval:** whether prior evidence improves planning has not been measured.
 - **Retrieval does not filter by model:** local stand-in runs would be given to Nemotron runs. Add a same-model filter before the controller calls it.
 - **Windows:** `migproto/lock.py` imports `fcntl`, which does not exist on Windows, and `cli.py` imports the lock at module level, so `migproto ui` does not start on Windows. A lazy import in `cli.py` would fix it; that is a shared CLI change for the runner owner (noted in `docs/team/handoff-owner3.md`).
+
+## 10. Scenario catalogue (branch `scenarios/catalogue`, not merged)
+
+The runner now reviews 14 schema changes, not just the rename. Each scenario has its own Saleor patch series, scripted plans, and expected verdicts written before the runs:
+- **Safe controls:** add a column (D1), add a table (D2), rename with `db_column` (D3), add an index concurrently (D4), lengthen a varchar (D5)
+- **Unsafe changes:** required column (A4), backfill then require (A5), drop a column (A3), raw-SQL rename (A8), shorten a column (B1), unique on duplicates (B2), foreign key over orphans (B3), irreversible data migration (B4)
+
+Plans can apply the new version's own migration (so the tool can recommend **accept as-is**) and include a rollback check.
+
+**Results:** on the Olist 10k seed (real public review text, not production data), **22 of 22** scripted plans matched their expected verdicts, and the rename results were unchanged. Two incidents occurred and were fixed: a WSL2 clock jump that expired a login token, and a bug in my refactor. Both are described in [`docs/results-scenarios.md`](docs/results-scenarios.md).
+
+**Key findings:** in three scenarios the migration ran without error but customer data was damaged, and only the runner's data checks caught it:
+- **B1:** Django's `AlterField` silently truncates 6 real reviews.
+- **B4:** an irreversible data migration empties 4,364 notes under the old app.
+- **B2:** a dedupe plan rewrites customers' last names.
+
+**Limits:**
+- Agents have not been run on the new scenarios.
+- Interleaving is sequential.
+- No timing, lock or concurrency claims.
+- Not attempted: A2, A6, A7, and group C.
+- A8 is rejected through the ORM, so the runner cannot isolate the raw-SQL path.

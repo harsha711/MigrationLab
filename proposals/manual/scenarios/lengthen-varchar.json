@@ -1,0 +1,12 @@
+{
+  "scenario": "lengthen-varchar",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "accept.json": {
+      "verdict": "PASS",
+      "recommendation": "accept_as_is",
+      "why": "Postgres widens varchar without rewriting rows; existing values are unchanged."
+    }
+  }
+}

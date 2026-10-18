@@ -83,6 +83,8 @@ def _terminate(conn: psycopg.Connection, dbname: str) -> None:
 def create(dbname: str, template: str | None = None) -> None:
     with admin() as conn:
         if template:
+            # Parallel runners clone the same template; serialize the clones.
+            conn.execute("SELECT pg_advisory_lock(hashtext('migproto_template_clone'))")
             _terminate(conn, template)
             conn.execute(
                 pgsql.SQL("CREATE DATABASE {} TEMPLATE {}").format(

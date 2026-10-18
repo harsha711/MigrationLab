@@ -1,0 +1,63 @@
+From bfd756c1d93667a564c08975a2d40ca5d541027c Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 18:00:34 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): User.referrer foreign key
+ over legacy referrer_id (apply)
+
+---
+ .../account/migrations/0107_user_referrer.py  | 27 +++++++++++++++++++
+ saleor/account/models.py                      |  4 +++
+ 2 files changed, 31 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_user_referrer.py
+
+diff --git a/saleor/account/migrations/0107_user_referrer.py b/saleor/account/migrations/0107_user_referrer.py
+new file mode 100644
+index 0000000..41e8ddd
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_referrer.py
+@@ -0,0 +1,27 @@
++# EXPERIMENT (manual, not upstream): User.referrer foreign key over legacy referrer_id (apply)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.AddField(
++                    model_name="user", name="referrer",
++                    field=models.ForeignKey(blank=True, db_column="referrer_id", db_index=False, null=True, on_delete=models.SET_NULL, related_name="referred_users", to="account.user"),
++                ),
++            ],
++            database_operations=[
++                migrations.RunSQL(
++                    "ALTER TABLE account_user ADD CONSTRAINT account_user_referrer_fk "
++                    "FOREIGN KEY (referrer_id) REFERENCES account_user (id) DEFERRABLE INITIALLY DEFERRED",
++                    reverse_sql="ALTER TABLE account_user DROP CONSTRAINT account_user_referrer_fk",
++                ),
++            ],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..2fd891a 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -180,6 +180,10 @@ class User(
+     is_confirmed = models.BooleanField(default=True)
+     last_confirm_email_request = models.DateTimeField(null=True, blank=True)
+     note = models.TextField(null=True, blank=True)
++    referrer = models.ForeignKey(
++        "self", null=True, blank=True, on_delete=models.SET_NULL,
++        related_name="referred_users", db_column="referrer_id", db_index=False,
++    )
+     date_joined = models.DateTimeField(default=timezone.now, editable=False)
+     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+     last_password_reset_request = models.DateTimeField(null=True, blank=True)
+-- 
+2.43.0
+
