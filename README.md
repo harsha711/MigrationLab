@@ -27,14 +27,13 @@ only the runner decides pass or fail.
 | ![Brev batches: per-scenario results of configuration K](docs/images/ui-batches.png) | ![New review: choose a scenario, topology, mode and budget](docs/images/ui-review.png) |
 | **Brev batches:** configuration K, scored against labels the agents never see | **New review:** submit a review job to the controller |
 
-![Compare page: rename-note, roles PASS (attempt 2, 0 of 35 checks failed) next to single INCOMPLETE (closest attempt 15 of 31 checks failed)](docs/images/ui-compare-roles-single.png)
+![Compare approaches: a recorded rename-note pair from configuration B, roles PASS with 200,226 tokens next to single INCOMPLETE with 305,854 tokens, with token, wall-time, call and failed-checks-per-attempt charts](docs/images/ui-compare-approaches.png)
 
-**Compare two reviews:** one rename-note example from configuration M
-(`brev-batch-20261017-230355`), started 3 seconds apart with the same budget. `roles` passed
-in 8 model calls and 105,450 tokens; `single` stopped INCOMPLETE after 20 calls when it ran
-out of its 450,000-token budget (473,861 used). This is one example, not a rate: in that
-batch `roles` passed 1 of 3 and `single` 0 of 3, and the pre-registered comparisons (H, K)
-found no significant difference between topologies.
+**Compare approaches:** one rename-note pair from configuration B, same model and budget.
+`roles` passed on attempt 4 with 200,226 tokens; `single` stopped INCOMPLETE when it hit the
+300,000-token budget (305,854 used), both in 13 calls. This is one example, not a rate: in
+that configuration `roles` passed 1 of 4 and `single` 0 of 5, and the pre-registered
+comparisons (H, K) found no significant difference between topologies.
 
 ## Quick start
 
