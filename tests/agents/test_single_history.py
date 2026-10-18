@@ -94,11 +94,12 @@ def test_prompt_size_stays_bounded_over_four_attempts(monkeypatch, tmp_path):
     assert len(reports) == 4 and len(plans_sent) == 4
     assert max(len(m) for _, m in llm.sent) <= 8   # system + 3 kept exchanges + request
     # From the second revision on, each request holds the same kept exchanges; only the runner
-    # note grows, by one line per attempt.
-    assert 0 <= _chars(reports[3]) - _chars(reports[2]) < 500
-    assert 0 <= _chars(plans_sent[3]) - _chars(plans_sent[2]) < 500
+    # note (one line per attempt) and the planner feedback's earlier_attempts (one record with
+    # its plan per attempt, capped by roles.EVIDENCE_CHARS through loop._fit) grow.
+    assert 0 <= _chars(reports[3]) - _chars(reports[2]) < 2000
+    assert 0 <= _chars(plans_sent[3]) - _chars(plans_sent[2]) < 2000
     steady = max(_chars(m) for _, m in llm.sent[:10])
-    assert max(_chars(m) for _, m in llm.sent) < steady + 500
+    assert max(_chars(m) for _, m in llm.sent) < steady + 2000
 
 
 def test_uncompacted_history_would_grow(monkeypatch, tmp_path):

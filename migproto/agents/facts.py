@@ -276,6 +276,51 @@ def check_sql_quoting(plan_obj: dict) -> None:
                                       "and close its $$ in the same string")
 
 
+# UPDATE <table> SET <col> = <other_col> [WHERE <condition>], with a bare column on the right.
+_COPY_UPDATE = re.compile(
+    r"^\s*UPDATE\s+[\w.\"]+\s+SET\s+\"?(\w+)\"?\s*=\s*\"?(\w+)\"?\s*"
+    r"(?:WHERE\s+(.*?))?;?\s*$", re.IGNORECASE | re.DOTALL)
+
+
+def _copy_terminates(target: str, source: str, cond: str | None) -> bool:
+    """True when the WHERE condition of `SET target = source` is made false by the update."""
+    if not cond:
+        return False
+
+    def has(pattern: str) -> bool:
+        return re.search(pattern, cond, re.IGNORECASE) is not None
+
+    t, s = rf"\b{target}\b\"?", rf"\b{source}\b\"?"
+    for x, y in ((t, s), (s, t)):
+        if has(rf"{x}\s+IS\s+DISTINCT\s+FROM\s+\"?{y}") or has(rf"{x}\s*(<>|!=)\s*\"?{y}"):
+            return True
+    return has(rf"{t}\s+IS\s+NULL\b") and has(rf"{s}\s+IS\s+NOT\s+NULL\b")
+
+
+def check_backfill_terminates(plan_obj: dict) -> None:
+    """Agent-side pre-check for the most common first-attempt halt on Lightning: a
+    repeat_until_zero_rows copy (`UPDATE t SET a = b ...`) whose WHERE stays true after the
+    update, so every batch matches rows again and the runner stops after 10,000 batches.
+    Seen shapes: `WHERE a IS NULL` (rows where b is NULL stay NULL), `WHERE b IS NOT NULL`
+    and no WHERE at all. Only a plain column copy is checked; the runner still executes and
+    judges the stage."""
+    for st in plan_obj.get("stages", []):
+        if not st.get("repeat_until_zero_rows"):
+            continue
+        for i, sql in enumerate(st.get("sql") or []):
+            m = _COPY_UPDATE.match(sql)
+            if not m or _copy_terminates(*m.groups()):
+                continue
+            target, source = m.group(1), m.group(2)
+            raise plans.PlanError(
+                f"stage {st.get('id')!r}, sql[{i}]: this repeat_until_zero_rows backfill never "
+                f"reaches 0 rows, because its WHERE still matches rows after the update (a row "
+                f"counts as updated even when its value does not change). Use a condition the "
+                f"update makes false, e.g. 'WHERE {target} IS NULL AND {source} IS NOT NULL' or "
+                f"'WHERE {target} IS DISTINCT FROM {source}', or drop repeat_until_zero_rows "
+                "for a single-statement copy")
+
+
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
@@ -287,6 +332,7 @@ def plan_validator(sc_facts: ScenarioFacts):
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
         check_sql_quoting(obj)
+        check_backfill_terminates(obj)
         deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
         named = deploy.get("variant")
         if named is not None and (named in VARIANT_TEXT or named not in sc_facts.variants):
