@@ -85,6 +85,90 @@ def _chars(messages):
     return sum(len(m["content"]) for m in messages)
 
 
+def test_prompt_size_stays_bounded_over_four_attempts(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=3)
+    _, result = _review(monkeypatch, tmp_path, llm)
+    assert len(result["attempts"]) == 4
+    reports = [m for kind, m in llm.sent if kind == "report"]
+    plans_sent = [m for kind, m in llm.sent if kind == "migration_plan"]
+    assert len(reports) == 4 and len(plans_sent) == 4
+    assert max(len(m) for _, m in llm.sent) <= 8   # system + 3 kept exchanges + request
+    # From the second revision on, each request holds the same kept exchanges; only the runner
+    # note grows, by one line per attempt.
+    assert 0 <= _chars(reports[3]) - _chars(reports[2]) < 500
+    assert 0 <= _chars(plans_sent[3]) - _chars(plans_sent[2]) < 500
+    steady = max(_chars(m) for _, m in llm.sent[:10])
+    assert max(_chars(m) for _, m in llm.sent) < steady + 500
+
+
+def test_uncompacted_history_would_grow(monkeypatch, tmp_path):
+    """Control: the same review in roles topology resends nothing, single without compaction
+    would resend everything; compaction keeps single within a small factor of roles."""
+    llm = HistoryLLM(revisions=3)
+    _review(monkeypatch, tmp_path, llm)
+    single_total = sum(_chars(m) for _, m in llm.sent)
+    full = sum(sum(_chars(m) for _, m in llm.sent[:i + 1]) for i in range(len(llm.sent)))
+    assert single_total < full / 3
+
+
+def test_latest_runner_evidence_is_always_present_in_full(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=3)
+    _review(monkeypatch, tmp_path, llm)
+    latest_evidence = None
+    for kind, messages in llm.sent:
+        request = messages[-1]["content"]
+        if latest_evidence is not None:
+            assert any(m["content"] == latest_evidence or m["content"].endswith(latest_evidence)
+                       for m in messages), kind
+        if kind == "report":
+            assert "attempt-" in request and "halt-" in request
+            latest_evidence = request
+
+
+def test_first_turn_and_system_prompt_are_kept(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=3)
+    _review(monkeypatch, tmp_path, llm)
+    first_user = llm.sent[0][1][1]
+    for _, messages in llm.sent:
+        assert messages[0] == {"role": "system", "content": single.SYSTEM}
+        assert messages[1] == first_user
+
+
+def test_compaction_is_deterministic_and_recorded_in_transcript(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=3)
+    log, _ = _review(monkeypatch, tmp_path, llm)
+    tx = json.loads((log.dir / "agents" / "transcript-single.json").read_text())
+    assert len(tx) == len(llm.sent)
+    records = [r["history_compaction"] for r in tx]
+    assert all(r["policy"] == single.POLICY for r in records)
+    assert records[0]["replaced_turns"] == [] and records[2]["replaced_turns"] == []
+    last = records[-1]
+    assert last["kept_turns"] == ["investigator", "tester-report-3", "planner-4"]
+    assert "planner-1" in last["replaced_turns"] and "tester-propose-4" in last["replaced_turns"]
+    sent = "\n".join(m["content"] for m in llm.sent[-1][1])
+    note = sent[sent.index("[Controller memory note."):sent.index("[End of memory note.]")]
+    assert "attempt 1: plan a1-plan-1, FAIL, halted: halt-1; failed checks: check-1" in note
+    assert "model-written" not in note and "model cause" not in note
+    config = next(json.loads(line) for line in (log.dir / "events.jsonl").open()
+                  if json.loads(line)["kind"] == "agent_config")
+    assert config["history_compaction"] == single.POLICY
+
+
+def test_failed_call_stores_no_turn():
+    memory = single.Memory()
+    history, _ = memory.begin()
+    history.append({"role": "user", "content": "request"})   # chat_json raised after this
+    memory.end("investigator")
+    assert memory.turns == []
+
+
+def test_roles_topology_has_no_compaction(monkeypatch, tmp_path):
+    llm = HistoryLLM(revisions=1)
+    log, _ = _review(monkeypatch, tmp_path, llm, topology="roles")
+    assert all(len(m) == 2 for _, m in llm.sent)
+    assert not (log.dir / "agents" / "transcript-single.json").exists()
+
+
 # C1: an invalid planner revision ends the review as FAIL with the runner's earlier results.
 
 @pytest.mark.parametrize("error", [LLMError("no JSON object found"),

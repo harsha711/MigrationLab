@@ -150,7 +150,8 @@ def _link(run_log, handle: Review) -> None:
 
 def configure(handle: Review | None, *, topology: str, model: str | None,
               thinking_budget: int | None, reasoning_enabled: bool | None,
-              max_revisions: int, request_id: str | None) -> None:
+              max_revisions: int, request_id: str | None,
+              history_compaction: str | None = None) -> None:
     """Attach the configuration the review runs with, before any model call."""
     if handle is None:
         return
@@ -161,6 +162,7 @@ def configure(handle: Review | None, *, topology: str, model: str | None,
         "reasoning_enabled": reasoning_enabled,
         "max_revisions": max_revisions,
         "request_id": request_id,
+        "history_compaction": history_compaction,
     })
 
 

@@ -146,6 +146,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "budget": budget.snapshot(),
             "solution_origin": solution_origin,
             "scenario": scenario_id,
+            "history_compaction": single.POLICY if topology == "single" and llm else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -153,7 +154,8 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           thinking_budget=getattr(llm, "thinking_budget", None),
                           reasoning_enabled=llm.reasoning_enabled if llm else None,
                           max_revisions=budget.max_revisions,
-                          request_id=review.get("request_id"))
+                          request_id=review.get("request_id"),
+                          history_compaction=config["history_compaction"])
         log.write_json("agents/review-request.json", review)
 
         # The scenario's OLD app version is the code under review (deployed before the
@@ -182,20 +184,27 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                                notes=sfacts.tester_notes)
 
         transcripts: dict[str, list] = {}
-        shared_history: list[dict] | None = [] if topology == "single" and llm else None
+        memory = single.Memory(single.SYSTEM) if topology == "single" and llm else None
         scenario = scenario_text(review)
         plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
         def call(role: str, fn, *args, **kwargs):
             if llm:
                 llm.trace_name = role
-            transcript_role = "single" if shared_history is not None else role
+            transcript_role = "single" if memory is not None else role
             tx = transcripts.setdefault(transcript_role, [])
-            if shared_history is not None:
-                kwargs.update(history=shared_history, system=single.SYSTEM)
+            compaction = None
+            if memory is not None:
+                history, compaction = memory.begin()
+                kwargs.update(history=history, system=single.SYSTEM)
+            first = len(tx)
             try:
                 out = fn(source, llm, *args, tx, **kwargs)
             finally:
+                if memory is not None:
+                    memory.end(role)
+                    for record in tx[first:]:   # auditable: which turns this call replaced
+                        record["history_compaction"] = compaction
                 log.write_json(f"agents/transcript-{transcript_role}.json", tx)
             log.write_json(f"agents/{role}.json", out)
             return out
@@ -240,7 +249,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             complete_failures = _failure_records(log, check_start)
             report = call(f"tester-report-{attempt}", roles.report_evidence,
                           _evidence(result, complete_failures))
-            transcript_role = "single" if shared_history is not None else f"tester-report-{attempt}"
+            transcript_role = "single" if memory is not None else f"tester-report-{attempt}"
             last_call = transcripts.get(transcript_role, [])[-1:] or [None]
             _emit_claim(log, prov, attempt, report, complete_failures, last_call[0])
             attempts.append({
@@ -254,6 +263,9 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 "runner_recommendation": result.get("recommendation"),
             })
             tracing.attempt(attempt, result, attempts[-1]["failed_checks"])
+            if memory is not None:
+                memory.note_attempt(attempt, result.get("plan_id"), result["ok"],
+                                    result.get("halted"), attempts[-1]["failed_checks"])
             log.event("attempt_result", provenance="runner", name=f"attempt {attempt}",
                       status="PASS" if result["ok"] else "FAIL",
                       failed=attempts[-1]["failed_checks"])
