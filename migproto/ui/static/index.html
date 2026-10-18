@@ -3,23 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MigrationLab | Replay Recorded Run</title>
+  <title>MigrationLab | Understand migration evidence</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <a href="#/" class="brand-lockup" aria-label="MigrationLab home">
+      <a href="#/ask" class="brand-lockup" aria-label="MigrationLab home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span><strong>Migration<span>Lab</span></strong></span>
       </a>
       <nav class="side-nav" aria-label="Primary navigation">
-        <a href="#/run/live-ordering-revision" data-nav="overview"><span class="nav-icon">&#8962;</span> Overview</a>
-        <a href="#/" data-nav="runs" class="primary-nav"><span class="nav-icon">&#9638;</span> Migration evidence</a>
-        <a href="#/batches" data-nav="batches"><span class="nav-icon">&#9776;</span> Batches</a>
-        <a href="#/topologies" data-nav="topologies"><span class="nav-icon">&#8644;</span> Roles vs single</a>
-        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Comparisons</a>
-        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided replay<span class="sr-only">Guided demo</span></a>
+        <a href="#/ask" data-nav="ask"><span class="nav-icon">?</span><span>Ask evidence<small>Start here</small></span></a>
+        <a href="#/" data-nav="runs" class="primary-nav"><span class="nav-icon">&#9638;</span><span>Browse runs<small>Inspect outcomes</small></span></a>
+        <a href="#/batches" data-nav="batches"><span class="nav-icon">&#9776;</span><span>Track batches<small>See progress</small></span></a>
+        <a href="#/topologies" data-nav="topologies"><span class="nav-icon">&#8644;</span><span>Compare approaches<small>Roles, single, parallel</small></span></a>
       </nav>
       <div class="sidebar-foot"><span class="status-dot"></span><span><strong>Evidence store</strong><small>Read-only replay</small></span></div>
     </aside>
@@ -51,27 +49,6 @@
     </section>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <details class="chat-panel">
-    <summary>Ask about runs</summary>
-    <div class="chat-body">
-      <p class="muted">Answers use recorded evidence. Model phrasing is a claim and can be wrong.</p>
-      <div class="chat-suggestions" aria-label="Suggested questions">
-        <span>Try a question</span>
-        <button type="button" data-chat-question="Why did the recent run fail?">Why did the recent run fail?</button>
-        <button type="button" data-chat-question="What checks kept failing in the recent run?">What checks kept failing?</button>
-        <button type="button" data-chat-question="How did roles compare with single in the latest batch?">Compare roles with single</button>
-        <button type="button" data-chat-question="Is parallel better in the latest batch?">Is parallel better?</button>
-        <button type="button" data-chat-question="Which check failed most on rename-note?">Most frequent failure</button>
-        <button type="button" data-chat-question="Did the recent run prove zero downtime?">Did this prove zero downtime?</button>
-      </div>
-      <form id="chat-form">
-        <label for="chat-question" class="sr-only">Question about recorded runs</label>
-        <textarea id="chat-question" maxlength="1000" rows="3" placeholder="Why did run 20261017-230415-agent-loop-llm fail?"></textarea>
-        <button class="primary" type="submit">Ask</button>
-      </form>
-      <div id="chat-result" aria-live="polite"></div>
-    </div>
-  </details>
   <script src="app.js"></script>
   <script src="chat.js"></script>
 </body>

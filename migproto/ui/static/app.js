@@ -94,6 +94,34 @@ const reviewUnavailableReason = (reason) => {
 
 // ---------- pages ----------
 
+function pageAsk() {
+  crumbs([["Ask evidence"]]);
+  const suggestions = [
+    ["Understand a failure", "Why did the recent run fail?", "Get the stop reason and the underlying checks that did not recover."],
+    ["Find persistent issues", "What checks kept failing in the recent run?", "Separate recurring failures from one-off noise."],
+    ["Compare approaches", "How did roles compare with single in the latest batch?", "Compare recorded outcomes without guessing from model opinions."],
+    ["Check a claim", "Is parallel better in the latest batch?", "Apply the pre-registered statistical rule to finished results."],
+    ["Spot a pattern", "Which check failed most on rename-note?", "Search the recorded history for the most common failure."],
+    ["Understand limits", "Did the recent run prove zero downtime?", "See what the evidence supports—and what it does not."],
+  ];
+  return `<section class="ask-page">
+    <header class="ask-hero"><span class="eyebrow">EVIDENCE ASSISTANT</span><h1>What do you want to understand?</h1><p>Ask in plain English. Answers are grounded in recorded runner evidence, with links back to the exact runs.</p></header>
+    <section class="ask-composer" aria-labelledby="ask-title">
+      <div class="ask-composer-head"><div><h2 id="ask-title">Ask about the experiments</h2><p>Try “Why did the latest run fail?” or paste a run ID.</p></div><span class="read-only-pill"><i></i> Read-only evidence</span></div>
+      <form id="chat-form">
+        <label for="chat-question" class="sr-only">Question about recorded runs</label>
+        <textarea id="chat-question" maxlength="1000" rows="3" placeholder="Ask a question about a run, batch, failure, or comparison…" autofocus></textarea>
+        <div class="ask-form-foot"><span><kbd>Ctrl</kbd> <span>+</span> <kbd>Enter</kbd> to ask</span><button class="primary" type="submit">Ask evidence <span aria-hidden="true">→</span></button></div>
+      </form>
+    </section>
+    <div id="chat-result" class="chat-result" aria-live="polite"></div>
+    <section class="question-library" aria-labelledby="question-library-title"><div class="question-library-head"><div><span class="eyebrow">GOOD STARTING POINTS</span><h2 id="question-library-title">Questions you can ask</h2></div><p>Choose one to place it in the question box. You can edit it before asking.</p></div>
+      <div class="question-grid">${suggestions.map(([label, question, detail]) => `<button type="button" class="question-card" data-chat-question="${esc(question)}"><span>${esc(label)}</span><strong>${esc(question)}</strong><small>${esc(detail)}</small><b aria-hidden="true">→</b></button>`).join("")}</div>
+    </section>
+    <aside class="trust-note"><span aria-hidden="true">i</span><div><strong>How to read these answers</strong><p>Runner observations determine outcomes. Explanatory wording helps interpret them but is still a claim. Open the cited runs when a decision matters.</p></div></aside>
+  </section>`;
+}
+
 async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
@@ -872,6 +900,7 @@ async function route() {
   const view = $("#view");
   clearTimeout(state.batchPoll);
   const activeNav = !parts.length ? "runs"
+    : parts[0] === "ask" ? "ask"
     : parts[0] === "batches" ? "batches"
     : parts[0] === "compare" ? "compare"
     : parts[0] === "demo" ? "demo"
@@ -885,6 +914,7 @@ async function route() {
   try {
     let html;
     if (!parts.length) html = await pageRuns();
+    else if (parts[0] === "ask" && parts.length === 1) html = pageAsk();
     else if (parts[0] === "demo" && parts.length === 2) html = await pageDemo(parts[1]);
     else if (parts[0] === "workspace" && parts.length === 2) html = await pageWorkspace(parts[1]);
     else if (parts[0] === "run" && parts.length === 2) html = await pageOverview(parts[1]);

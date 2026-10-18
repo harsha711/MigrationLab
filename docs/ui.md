@@ -18,11 +18,13 @@ uv run migproto ui --port 8766 --db /tmp/scratch.sqlite
 
 No Docker, Postgres or model is needed to look at recorded runs.
 
-## Ask about runs
+## Ask evidence
 
-Open **Ask about runs** at the lower-right of any UI page. It reads only the evidence store
-and batch records under the configured runs root. Questions may name a run, batch, scenario,
-check, observation, or topology; without an ID, retrieval uses the latest batch.
+Open **Ask evidence** from the first sidebar item (`#/ask`). This is the recommended starting
+point for someone who does not yet know a run ID or the evidence schema. It presents one plain-
+language question box and a library of editable example questions. It reads only the evidence
+store and batch records under the configured runs root. Questions may name a run, batch,
+scenario, check, observation, or topology; without an ID, retrieval uses the latest batch.
 
 When both `MIGPROTO_LLM_BASE_URL` and `MIGPROTO_LLM_MODEL` are set, one budgeted request
 (plus one retry) asks the shared model to phrase an answer from a compact facts block. With no
@@ -53,7 +55,8 @@ Every page is read-only unless it says otherwise.
 
 | Page | Address | What it shows |
 |---|---|---|
-| Migration evidence | `#/` | Home page: a summary of one selected run and a table of all runs. Tick two runs to compare them. |
+| Ask evidence | `#/ask` | Recommended starting point: ask a plain-language question and follow its supporting run links. |
+| Browse runs | `#/` | A summary of one selected run and a table of all runs. Tick two runs to compare them. |
 | Run overview | `#/run/<run>` | The requested change and every attempt, failed ones included. |
 | Plan | `#/run/<run>/plan/<attempt>` | The plan's stages and SQL, and which stages actually ran. |
 | Matrix | `#/run/<run>/matrix/<attempt>` | Old app vs new app: which reads and writes worked across versions, stage by stage. |

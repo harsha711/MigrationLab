@@ -39,8 +39,8 @@ def get_json(url):
 
 def test_static_and_runs(base_url):
     status, body = get(base_url + "/")
-    assert status == 200 and b"Replay Recorded Run" in body
-    assert b"Guided demo" in body and b"evidence-drawer" in body
+    assert status == 200 and b"Understand migration evidence" in body
+    assert b"Ask evidence" in body and b"evidence-drawer" in body
     assert b"welcome-tour" in body and b'id="toast"' in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
@@ -144,6 +144,16 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
     assert "editorial-layout" in css and "Migration evidence" in js
+
+
+def test_first_use_navigation_is_task_oriented():
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/ask" data-nav="ask"' in html
+    assert "Ask evidence" in html and "Browse runs" in html
+    assert "Track batches" in html and "Compare approaches" in html
+    assert "What do you want to understand?" in js
+    assert "How to read these answers" in js
 
 
 def test_batch_endpoints_over_http():
