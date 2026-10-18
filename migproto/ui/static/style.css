@@ -248,3 +248,103 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 .evidence-rail>footer p{font-size:10px}.evidence-rail>footer p::after{content:none!important}
 @media(max-width:680px){.run-selector{width:100%;max-width:none}.editorial-head-actions{display:grid;grid-template-columns:1fr;width:100%}.editorial-matrix{grid-template-columns:116px repeat(var(--matrix-columns,4),86px);min-width:calc(126px + var(--matrix-columns,4) * 95px)}}
 @media(max-width:900px){.stage-panel .editorial-stage strong{white-space:normal}.stage-panel .editorial-stage>div{padding-inline:20px}}
+
+/* Dark palette: keep the editorial dashboard legible without leaking light-only colors. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #080d16;
+  --panel: #111927;
+  --panel-2: #172235;
+  --text: #f1f5fb;
+  --muted: #a5b1c4;
+  --border: #2a3850;
+  --accent: #72d8ff;
+  --accent-2: #a78bfa;
+  --pass: #63e6a3;
+  --pass-bg: #123226;
+  --fail: #ff8e99;
+  --fail-bg: #3a1d27;
+  --warn: #ffd166;
+  --warn-bg: #382c17;
+  --none: #8290a6;
+  --none-bg: #1b2739;
+  --code-bg: #0a111d;
+  --glow: 0 18px 48px rgba(0, 0, 0, .3);
+}
+:root[data-theme="dark"] body::before {
+  opacity: .3;
+  background-image: linear-gradient(rgba(114, 216, 255, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(114, 216, 255, .045) 1px, transparent 1px);
+}
+:root[data-theme="dark"] .sidebar {
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+:root[data-theme="dark"] .side-nav a.primary-nav {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+:root[data-theme="dark"] .topbar {
+  border-bottom-color: var(--border);
+  background: rgba(8, 13, 22, .88);
+}
+:root[data-theme="dark"] .top-icon {
+  color: var(--muted);
+}
+:root[data-theme="dark"] .avatar-button {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+:root[data-theme="dark"] .scope-control {
+  color: var(--text) !important;
+}
+:root[data-theme="dark"] .editorial-panel {
+  box-shadow: var(--glow);
+}
+:root[data-theme="dark"] .editorial-stages::after {
+  background: var(--border);
+}
+:root[data-theme="dark"] .editorial-stage > div {
+  background: linear-gradient(135deg, #18243a, #131d2e);
+}
+:root[data-theme="dark"] .editorial-stage span {
+  border-color: var(--panel);
+  box-shadow: 0 0 0 1px var(--border);
+}
+:root[data-theme="dark"] .editorial-stage strong,
+:root[data-theme="dark"] .attempt-transition a,
+:root[data-theme="dark"] .matrix-editorial > header > span {
+  color: var(--text);
+}
+:root[data-theme="dark"] .editorial-stage small {
+  color: var(--muted);
+}
+:root[data-theme="dark"] .attempt-transition article.blocked {
+  background: linear-gradient(90deg, var(--fail-bg), color-mix(in srgb, var(--fail-bg) 45%, var(--panel)));
+}
+:root[data-theme="dark"] .attempt-transition article.passed {
+  background: linear-gradient(90deg, var(--pass-bg), color-mix(in srgb, var(--pass-bg) 45%, var(--panel)));
+}
+:root[data-theme="dark"] .editorial-matrix > b,
+:root[data-theme="dark"] .editorial-matrix > strong {
+  color: var(--muted);
+}
+:root[data-theme="dark"] .editorial-matrix-cell.pass {
+  background: var(--pass-bg);
+}
+:root[data-theme="dark"] .editorial-matrix-cell.fail {
+  background: var(--fail-bg);
+}
+:root[data-theme="dark"] .editorial-matrix-cell.unknown {
+  color: var(--muted);
+  background: var(--none-bg);
+}
+:root[data-theme="dark"] .evidence-rail > footer {
+  background: var(--panel-2);
+}
+:root[data-theme="dark"] .evidence-rail > footer p {
+  color: var(--muted);
+}
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] input {
+  accent-color: var(--accent);
+}
