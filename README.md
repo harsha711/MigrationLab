@@ -15,8 +15,8 @@ only the runner decides pass or fail.
 - **Evaluation environment:** a NeMo Gym resources server wraps the same runner (`gym/`).
 - **Review UI:** replay any recorded review, submit new ones, add human feedback, compare
   topologies and batches.
-- **Live demo (read-only):** https://migrationlab.onrender.com (frozen fixtures only; may
-  take up to a minute to wake).
+- **Live demo (read-only):** https://migrationlab.onrender.com (all 227 recorded Lightning
+  reviews and 28 Brev batches; may take up to a minute to wake).
 
 ## Screenshots
 
@@ -68,25 +68,9 @@ server logs, agent transcripts). Exit code 0 = PASS, 1 = FAIL, 2 = ERROR.
 
 ![Architecture: the controller sends role prompts to Nemotron 3.5 Lightning on vLLM (Brev H100); pre-runner tools profile the schema and dry-run the plan; the deterministic runner executes the plan against old and new Saleor on one Postgres database and its checks flow back to the planner and into the evidence store](docs/images/architecture.png)
 
-The same flow as a text diagram:
+![Nemotron 3.5 Lightning (30B-A3B, NVFP4, 32.9B total parameters) on vLLM 0.27.1 on one Brev H100, serving 8 reviews at once; the serving bottlenecks we hit and what we did about each](docs/images/nemotron-h100.png)
 
-```mermaid
-flowchart LR
-  UI["Review UI<br/>(migproto ui)"] -->|review request| C["Controller<br/>migproto/agents/loop.py"]
-  C -->|role prompts, JSON artifacts| V["vLLM 0.27.1<br/>Nemotron 3.5 Lightning<br/>(Brev H100)"]
-  C -->|"pre-runner tools: schema profile, dry run (not verdicts)"| T["Throwaway DB copy"]
-  C -->|plan + proposed tests| R["Deterministic runner<br/>migproto/staged.py"]
-  R --> PG[("Disposable Postgres<br/>migproto_run_*")]
-  R --> OLD["Saleor old version<br/>:8001"]
-  R --> NEW["Saleor new version<br/>:8002"]
-  OLD --> PG
-  NEW --> PG
-  R -->|checks, verdict| L["RunLog<br/>events.jsonl, summary.json"]
-  L -->|evidence back to planner| C
-  L --> M["Evidence store<br/>SQLite (migproto/memory)"]
-  M --> UI
-  G["NeMo Gym resources server<br/>gym/"] -->|/verify| R
-```
+![vLLM utilization from the server's /metrics counters: 1,130 requests, 19.1M tokens, 32% prefix-cache hits, about 7.5 requests in flight, 562 generated tokens per second for the whole server](docs/images/vllm-utilization.png)
 
 One review, step by step:
 
@@ -118,10 +102,14 @@ review request -> investigator (searches old-version code) -> planner (staged SQ
 ## Hosting the review UI (read-only)
 
 Live at **https://migrationlab.onrender.com**. `render.yaml` is the [Render](https://render.com)
-Blueprint for this public, read-only copy of the UI: in Render, **New → Blueprint**, pick this repository, deploy. It serves the frozen
-fixtures in `examples/` with `migproto ui --host 0.0.0.0 --read-only`, so visitors can replay
-runs and ask the evidence chat (recorded facts only), but cannot start reviews. Live reviews
-need Docker, Postgres, the Saleor worktrees and a model endpoint, so they run locally (below).
+Blueprint for this public, read-only copy of the UI: in Render, **New → Blueprint**, pick
+this repository, deploy. It serves the frozen fixtures in `examples/` plus
+`demo/runs.tar.xz`: all 227 recorded Lightning reviews and the 28 Brev batch records,
+exported by `scripts/export_demo_runs.py`. The export drops model transcripts (prompts),
+trace links, server logs and serving environment files, and replaces home paths. It runs
+`migproto ui --host 0.0.0.0 --read-only`, so visitors can replay runs and batches and ask the
+evidence chat (recorded facts only), but cannot start reviews. Live reviews need Docker,
+Postgres, the Saleor worktrees and a model endpoint, so they run locally (below).
 
 ## How to reproduce the demo
 
@@ -209,14 +197,6 @@ Full tables, including every failed review, are in [docs/results.md](docs/result
 - Run NeMo Gym rollouts and fine-tune Lightning on runner-verified trajectories.
 - Add concurrent old/new writers and lock-wait measurements.
 - Support more apps and frameworks by turning scenario definitions into data.
-
-## Team
-
-| Name | Role | Contact |
-|---|---|---|
-| TODO | Runner, verification, NeMo Gym | TODO |
-| TODO | Agents, orchestration, vLLM serving | TODO |
-| TODO | Evidence store, review UI | TODO |
 
 ## Repository layout
 

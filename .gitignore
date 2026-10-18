@@ -37,3 +37,4 @@ runs/
 *.tar.gz
 *.zip
 migproto.lock
+demo/runs/

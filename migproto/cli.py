@@ -94,7 +94,8 @@ def cmd_all(args) -> int:
 
 def cmd_ui(args) -> int:
     from .ui import server
-    server.serve(host=args.host, port=args.port, db=args.db, read_only=args.read_only)
+    server.serve(host=args.host, port=args.port, db=args.db, runs_root=args.runs,
+                 read_only=args.read_only)
     return 0
 
 
@@ -138,6 +139,7 @@ def main(argv=None) -> int:
     u.add_argument("--read-only", action="store_true",
                    help="replay only: starting reviews and recording decisions are disabled")
     u.add_argument("--db", default=None, help="evidence store path (default data/memory.sqlite)")
+    u.add_argument("--runs", default=None, help="run directories to ingest (default runs/)")
     args = p.parse_args(argv)
     handlers = {"setup": cmd_setup, "baseline": cmd_baseline, "unsafe": cmd_unsafe,
                 "staged": cmd_staged, "agent-loop": cmd_agent_loop, "all": cmd_all,
