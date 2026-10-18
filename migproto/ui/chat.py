@@ -23,6 +23,7 @@ BATCH_RE = re.compile(r"(?<![\w-])(brev-batch-\d{8}-\d{6})(?![\w-])")
 OBS_RE = re.compile(r"[\w.-]+/a\d+/[^\s,;?]+#\d+")
 TOPOLOGIES = ("roles", "single", "parallel")
 RESTRICTED = ("proposals/manual", "proposals/scripted", "patches/")
+RECENT_RUN_RE = re.compile(r"\b(?:recent|latest|last|newest)\s+(?:finished\s+)?run\b", re.I)
 
 
 def _sanitize(value):
@@ -160,15 +161,28 @@ def _ids_in(value) -> dict[str, list[str]]:
 def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dict:
     refs = extract_ids(question, conn)
     batches = refs["batches"]
+    implicit_run = None
+    recent_run_question = bool(RECENT_RUN_RE.search(question)) and not refs["runs"]
     if not batches and not refs["runs"] and not refs["observations"] and not refs["checks"]:
         listed = query.list_batches(runs_root, conn)
         if listed:
             batches = [listed[0]["batch_id"]]
+    if recent_run_question and batches:
+        latest_batch = query.batch_detail(runs_root, batches[0], conn)
+        finished = [r for r in (latest_batch or {}).get("runs", []) if r.get("run_id")]
+        if finished:
+            implicit_run = max(finished, key=lambda r: r["run_id"])
+            refs["runs"] = [implicit_run["run_id"]]
     facts = {
         "question_refs": refs,
         "runs": [_compact_run(query.run_detail(conn, rid)) for rid in refs["runs"]],
-        "batches": [_compact_batch(query.batch_detail(runs_root, bid, conn), refs["scenarios"],
-                                    refs["topologies"]) for bid in batches],
+        # A singular "recent run" question uses the latest batch only to resolve the run.
+        # Keeping the whole batch here caused the fallback to answer a different question.
+        "batches": ([] if recent_run_question else
+                    [_compact_batch(query.batch_detail(runs_root, bid, conn), refs["scenarios"],
+                                    refs["topologies"]) for bid in batches]),
+        "recent_run": (None if not implicit_run or query.run_detail(conn, implicit_run["run_id"])
+                       else implicit_run),
         "observations": [query.get_observation(conn, oid) for oid in refs["observations"]],
         "check_history": {name: query.check_history(conn, name) for name in refs["checks"]},
         "scenario_failed_checks": _scenario_failed_checks(conn, refs["scenarios"]),
@@ -257,6 +271,13 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
                         if failed_names else "")
                      + (f"; {results.get('total_tokens')} tokens" if results.get("total_tokens") is not None else "")
                      + (f"; stop reason: {results.get('reason')}" if results.get("reason") else "") + ".")
+    recent = facts.get("recent_run")
+    if recent:
+        citations.append(recent["run_id"])
+        parts.append(f"The newest finished run was {recent['run_id']}. It recorded verdict "
+                     f"{recent.get('verdict') or 'not recorded'}"
+                     + (f" because {recent.get('stopped')}" if recent.get("stopped") else "")
+                     + ".")
     for batch in facts.get("batches", []):
         if not batch:
             continue

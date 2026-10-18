@@ -79,6 +79,14 @@ def test_scenario_failure_frequency_is_from_observations(conn, tmp_path):
     assert result["facts"]["scenario_failed_checks"][0]["failed"] > 0
 
 
+def test_recent_run_resolves_from_latest_batch(conn, tmp_path):
+    batch_root = Path(__file__).parent / "fixtures" / "batches"
+    result = chat.answer("why did the recent run fail?", conn, batch_root)
+    assert result["mode"] == "facts"
+    assert result["facts"]["question_refs"]["runs"]
+    assert "Batch " not in result["answer"]
+
+
 class BrokenLLM:
     model = "broken"
     base_url = "http://broken"
