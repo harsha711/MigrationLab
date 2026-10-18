@@ -12,6 +12,7 @@ query fixture runs (pass `source_kind="local_run"`).
 
 import json
 import re
+import statistics
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -102,8 +103,15 @@ def evidence_for_claim(conn, claim_id) -> list[dict]:
 
 
 def list_runs(conn) -> list[dict]:
-    rows = conn.execute("SELECT run_id, source_kind, command, verdict, elapsed_s, checks_total, "
-                        "provenance, model FROM runs ORDER BY source_kind, run_id")
+    # Keep the library route lightweight. The UI used to request full run_detail() for every
+    # row just to display these two counts, which meant 100+ HTTP requests for a real batch.
+    rows = conn.execute(
+        "SELECT r.run_id, r.source_kind, r.command, r.verdict, r.elapsed_s, r.checks_total, "
+        "r.provenance, r.model, "
+        "(SELECT COUNT(*) FROM attempts a WHERE a.run_id = r.run_id) AS attempt_count, "
+        "(SELECT COUNT(*) FROM observations o WHERE o.run_id = r.run_id "
+        " AND o.status = 'FAIL') AS checks_failed "
+        "FROM runs r ORDER BY r.source_kind, r.run_id")
     return [dict(r) for r in rows]
 
 
@@ -339,6 +347,30 @@ def _attempt_outcomes(summary: dict) -> list[dict] | None:
             for key, c in sorted(counts.items(), key=lambda kv: number(kv[0]))]
 
 
+def _failed_trajectory(summary: dict, rec: dict) -> list[int] | None:
+    """Failed checks for every recorded attempt, never just the final attempt."""
+    attempts = summary.get("attempts")
+    if isinstance(attempts, list):
+        values = []
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            failed = attempt.get("failed_checks")
+            if isinstance(failed, list):
+                values.append(len(failed))
+            elif isinstance(failed, int):
+                values.append(failed)
+            elif isinstance(attempt.get("checks_failed"), int):
+                values.append(attempt["checks_failed"])
+        if values or attempts:
+            return values
+    outcomes = _attempt_outcomes(summary)
+    if outcomes is not None:
+        return [int(a.get("fail") or 0) for a in outcomes]
+    failed = rec.get("checks_failed")
+    return [failed] if isinstance(failed, int) else None
+
+
 def _first(*values):
     return next((v for v in values if v is not None), None)
 
@@ -445,6 +477,7 @@ def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str],
         "runner_recommendation": s.get("runner_recommendation"),
         "recommendation_agrees": s.get("recommendation_agrees"),
         "attempts": _attempt_outcomes(s),
+        "failed_checks": _failed_trajectory(s, rec),
         "total_tokens": _first(totals.get("total_tokens"), rec.get("total_tokens")),
         "model_calls": _first(totals.get("model_calls"), rec.get("model_calls")),
         "wall_seconds": _first(totals.get("wall_seconds"), s.get("elapsed_s"), rec.get("seconds")),
@@ -591,3 +624,133 @@ def batch_detail(runs_root, batch_id, conn=None, *, now=None,
         return None
     return _batch(path, Path(runs_root), _stored_run_ids(conn), now or datetime.now(),
                   expected_root, _run_id_rows(Path(runs_root)))
+
+
+# ---- Roles versus single: compact evidence-only demo view ----
+
+_CONFIGURATION = re.compile(r"\bCONFIGURATION\s+([BCDEFGM])\b", re.IGNORECASE)
+
+
+def _configuration_letter(note: str | None) -> str | None:
+    match = _CONFIGURATION.search(note or "")
+    return match.group(1).upper() if match else None
+
+
+def _median(rows: list[dict], field: str):
+    values = [r[field] for r in rows if isinstance(r.get(field), (int, float))]
+    return statistics.median(values) if values else None
+
+
+def topology_comparison(runs_root, conn=None) -> dict:
+    """Rename-only roles/single observations, grouped strictly by configuration.
+
+    Each configuration has its own settings. This deliberately returns no pooled rate or
+    cross-configuration winner. It reads the same immutable batch records as Batches.
+    """
+    root = Path(runs_root)
+    stored = _stored_run_ids(conn)
+    rows_by_id = _run_id_rows(root)
+    grouped: dict[str, list[dict]] = {}
+    notes = {}
+    for path in _batch_dirs(root):
+        note = _read_text(path / "CONFIG-NOTE")
+        config = _configuration_letter(note)
+        if config is None:
+            continue
+        batch = _batch(path, root, stored, datetime.now(), EXPECTED_VERDICTS, rows_by_id)
+        notes.setdefault(config, note)
+        grouped.setdefault(config, []).extend(
+            row for row in batch["runs"]
+            if not row["infrastructure_failure"]
+            and row["scenario"] == "rename-note"
+            and row["topology"] in {"roles", "single"}
+        )
+
+    configurations = []
+    for config in sorted(grouped):
+        reviews = grouped[config]
+        setups = {}
+        for topology in ("roles", "single"):
+            rows = [r for r in reviews if r["topology"] == topology]
+            counts = {verdict: 0 for verdict in BATCH_VERDICTS}
+            stops = {"token_budget": 0, "call_budget": 0, "other": 0}
+            for row in rows:
+                verdict = str(row.get("verdict") or "").upper()
+                if verdict in counts:
+                    counts[verdict] += 1
+                if verdict == "INCOMPLETE":
+                    stopped = str(row.get("stopped") or "").lower()
+                    stops["token_budget" if "token" in stopped else "call_budget" if "call" in stopped else "other"] += 1
+            setups[topology] = {"reviews": len(rows), "verdicts": counts, "incomplete_stops": stops,
+                                "median_tokens": _median(rows, "total_tokens"),
+                                "median_seconds": _median(rows, "wall_seconds"), "runs": rows}
+        configurations.append({"configuration": config, "config_note": notes.get(config), "setups": setups})
+    return {"configurations": configurations}
+
+
+def _scenario_label(scenario_id: str) -> str:
+    """A useful label even when this checkout does not know a newer scenario ID."""
+    return scenario_id.replace("-", " ").title()
+
+
+def scenario_activity_overview(conn) -> dict:
+    """Recorded reviews grouped by migration activity, never pooled across activities.
+
+    Scenario metadata is descriptive UI context. Verdicts and measurements remain derived from
+    each run's saved summary; a scenario introduced by another worktree gets a safe fallback.
+    """
+    try:
+        from ..scenarios import SCENARIOS
+    except ImportError:  # pragma: no cover - defensive for partial UI-only checkouts
+        SCENARIOS = {}
+    groups: dict[str, list[dict]] = {}
+    rows = conn.execute("SELECT run_id, source_kind, verdict, elapsed_s, model, topology, "
+                        "summary_json, meta_json, model_calls_json FROM runs ORDER BY run_id")
+    for row in rows:
+        summary = _obj(row["summary_json"]) or {}
+        scenario = summary.get("scenario")
+        if not isinstance(scenario, str) or not _SCENARIO_ID.fullmatch(scenario):
+            continue
+        totals = summary.get("agent_totals") or {}
+        meta = _obj(row["meta_json"]) or {}
+        calls = _obj(row["model_calls_json"]) or []
+        groups.setdefault(scenario, []).append({
+            "run_id": row["run_id"], "source_kind": row["source_kind"],
+            "verdict": summary.get("verdict") or row["verdict"],
+            "topology": summary.get("topology") or meta.get("topology") or row["topology"],
+            "model": summary.get("model") or meta.get("model") or row["model"],
+            "total_tokens": totals.get("total_tokens"),
+            "wall_seconds": totals.get("wall_seconds", summary.get("elapsed_s", row["elapsed_s"])),
+            "model_calls": totals.get("model_calls", len(calls) if calls else None),
+        })
+
+    activities = []
+    for scenario_id, activity_runs in groups.items():
+        definition = SCENARIOS.get(scenario_id)
+        verdicts = {v: 0 for v in BATCH_VERDICTS}
+        for run in activity_runs:
+            verdict = str(run.get("verdict") or "").upper()
+            if verdict in verdicts:
+                verdicts[verdict] += 1
+        groups_by_model: dict[tuple[str, str], list[dict]] = {}
+        for run in activity_runs:
+            key = (run["topology"] or "not recorded", run["model"] or "not recorded")
+            groups_by_model.setdefault(key, []).append(run)
+        performance = []
+        for (topology, model), subset in sorted(groups_by_model.items()):
+            counts = {v: sum(str(r.get("verdict") or "").upper() == v for r in subset)
+                      for v in BATCH_VERDICTS}
+            performance.append({"topology": topology, "model": model, "reviews": len(subset),
+                                "verdicts": counts, "median_tokens": _median(subset, "total_tokens"),
+                                "median_seconds": _median(subset, "wall_seconds"),
+                                "median_calls": _median(subset, "model_calls")})
+        change = definition.change if definition else {}
+        activities.append({
+            "scenario": scenario_id,
+            "title": definition.title if definition else _scenario_label(scenario_id),
+            "description": change.get("description") if definition else "Scenario definition is not available in this checkout.",
+            "tags": list(definition.tags) if definition else [], "table": change.get("table"),
+            "runs": activity_runs, "reviews": len(activity_runs), "verdicts": verdicts,
+            "performance": performance,
+        })
+    return {"activities": sorted(activities, key=lambda activity: activity["scenario"])}

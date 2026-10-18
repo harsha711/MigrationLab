@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
+const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null, topologyPair: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -63,12 +63,12 @@ function runHeader(run, active) {
   const first = short(run.attempts[0]?.attempt_id) || "a1";
   const tabs = [["Overview", `#/run/${enc(id)}`, "overview"],
                 ["Plan", `#/run/${enc(id)}/plan/${first}`, "plan"],
-                ["Matrix", `#/run/${enc(id)}/matrix/${first}`, "matrix"],
+                ["Compatibility checks", `#/run/${enc(id)}/matrix/${first}`, "matrix"],
                 ["Agents", `#/run/${enc(id)}/agents`, "agents"],
                 ["Metrics", `#/run/${enc(id)}/metrics`, "metrics"]];
-  return `<div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
+  return `<section class="run-page-header"><span class="eyebrow">RECORDED MIGRATION REVIEW</span><div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
     <div class="row">${typeBadges(run)}</div>
-    <nav class="tabs">${tabs.map(([l, h, k]) => `<a href="${h}" class="${k === active ? "active" : ""}">${l}</a>`).join("")}</nav>`;
+    <nav class="tabs">${tabs.map(([l, h, k]) => `<a href="${h}" class="${k === active ? "active" : ""}">${l}</a>`).join("")}</nav></section>`;
 }
 
 function attemptPills(run, page, current) {
@@ -81,6 +81,10 @@ function attemptPills(run, page, current) {
 
 const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) === s);
 const humanize = (value) => String(value || "unknown").replace(/^case\./, "").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const excerpt = (value, limit = 280) => {
+  const text = String(value || "").trim();
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+};
 const reviewUnavailableReason = (reason) => {
   const text = String(reason || "");
   if (/fcntl|execution lock unavailable/i.test(text)) {
@@ -94,99 +98,101 @@ const reviewUnavailableReason = (reason) => {
 
 // ---------- pages ----------
 
+function pageAsk() {
+  crumbs([["Ask evidence"]]);
+  const suggestions = [
+    ["Understand a failure", "Why did the recent run fail?", "Get the stop reason and the underlying checks that did not recover."],
+    ["Find persistent issues", "What checks kept failing in the recent run?", "Separate recurring failures from one-off noise."],
+    ["Compare approaches", "How did roles compare with single in the latest batch?", "Compare recorded outcomes without guessing from model opinions."],
+    ["Check a claim", "Is parallel better in the latest batch?", "Apply the pre-registered statistical rule to finished results."],
+    ["Spot a pattern", "Which check failed most on rename-note?", "Search the recorded history for the most common failure."],
+    ["Understand limits", "Did the recent run prove zero downtime?", "See what the evidence supports—and what it does not."],
+  ];
+  return `<section class="ask-page">
+    <header class="ask-hero"><span class="eyebrow">EVIDENCE ASSISTANT</span><h1>What do you want to understand?</h1><p>Ask in plain English. Answers are grounded in recorded runner evidence, with links back to the exact runs.</p></header>
+    <section class="ask-composer" aria-labelledby="ask-title">
+      <div class="ask-composer-head"><div><h2 id="ask-title">Ask about the experiments</h2><p>Try “Why did the latest run fail?” or paste a run ID.</p></div><span class="read-only-pill"><i></i> Read-only evidence</span></div>
+      <form id="chat-form">
+        <label for="chat-question" class="sr-only">Question about recorded runs</label>
+        <textarea id="chat-question" maxlength="1000" rows="3" placeholder="Ask a question about a run, batch, failure, or comparison…" autofocus></textarea>
+        <div class="ask-form-foot"><span><kbd>Ctrl</kbd> <span>+</span> <kbd>Enter</kbd> to ask</span><button class="primary" type="submit">Ask evidence <span aria-hidden="true">→</span></button></div>
+      </form>
+    </section>
+    <div id="chat-result" class="chat-result" aria-live="polite"></div>
+    <section class="question-library" aria-labelledby="question-library-title"><div class="question-library-head"><div><span class="eyebrow">GOOD STARTING POINTS</span><h2 id="question-library-title">Questions you can ask</h2></div><p>Choose one to place it in the question box. You can edit it before asking.</p></div>
+      <div class="question-grid">${suggestions.map(([label, question, detail]) => `<button type="button" class="question-card" data-chat-question="${esc(question)}"><span>${esc(label)}</span><strong>${esc(question)}</strong><small>${esc(detail)}</small><b aria-hidden="true">→</b></button>`).join("")}</div>
+    </section>
+    <aside class="trust-note"><span aria-hidden="true">i</span><div><strong>How to read these answers</strong><p>Runner observations determine outcomes. Explanatory wording helps interpret them but is still a claim. Open the cited runs when a decision matters.</p></div></aside>
+  </section>`;
+}
+
+// ---------- Migration activities (scenario-scoped evidence) ----------
+
+const activityMetric = (value, unit = "") => value == null ? "—" : `${fmt(Math.round(value))}${unit}`;
+const activityVerdicts = (counts) => BATCH_VERDICTS.filter((verdict) => counts?.[verdict]).map((verdict) =>
+  `<span class="badge ${verdict === "PASS" ? "pass" : verdict === "INCOMPLETE" ? "warn" : "fail"}">${counts[verdict]} ${verdict}</span>`).join(" ") || `<span class="muted">Verdict not recorded</span>`;
+
+function activityCards(activities) {
+  return activities.map((activity) => {
+    const groups = activity.performance.slice(0, 3).map((group) => `<div class="activity-mini-metric"><strong>${esc(group.topology)}</strong><span>${activityMetric(group.median_tokens)} tokens median</span><span>${activityMetric(group.median_seconds, " s")} median</span></div>`).join("");
+    return `<a class="activity-card" href="#/activities/${enc(activity.scenario)}"><header><span class="scenario-code">${esc(activity.scenario)}</span><span>${activity.reviews} recorded review${activity.reviews === 1 ? "" : "s"}</span></header><h2>${esc(activity.title)}</h2><p>${esc(activity.description || "Recorded migration activity.")}</p><div class="activity-tags">${(activity.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join("")}</div><div class="activity-outcomes">${activityVerdicts(activity.verdicts)}</div><div class="activity-mini-grid">${groups || `<span class="muted">Resource measurements not recorded</span>`}</div><footer>Inspect activity <b aria-hidden="true">→</b></footer></a>`;
+  }).join("");
+}
+
+function activityPerformanceRows(activity) {
+  return activity.performance.map((group) => `<tr><td><strong>${esc(group.topology)}</strong></td><td>${esc(group.model)}</td><td>${group.reviews}</td><td>${activityVerdicts(group.verdicts)}</td><td>${activityMetric(group.median_tokens)}</td><td>${activityMetric(group.median_seconds, " s")}</td><td>${activityMetric(group.median_calls)}</td></tr>`).join("");
+}
+
+async function pageActivities(scenarioId = null) {
+  const data = await api("/api/scenario-activities");
+  const activities = data.activities || [];
+  const selected = scenarioId ? activities.find((activity) => activity.scenario === scenarioId) : null;
+  if (scenarioId && !selected) return `<p>Migration activity not found. <a href="#/activities">View recorded activities</a></p>`;
+  if (selected) {
+    crumbs([["Migration activities", "#/activities"], [selected.title]]);
+    const runs = selected.runs.map((run) => `<a class="activity-run" href="#/run/${enc(run.run_id)}"><span>${esc(run.topology || "topology not recorded")}</span><strong>${esc(run.run_id)}</strong>${verdictBadge(run.verdict)}<small>${activityMetric(run.total_tokens)} tokens · ${activityMetric(run.wall_seconds, " s")} · ${activityMetric(run.model_calls)} calls</small><b aria-hidden="true">›</b></a>`).join("");
+    return `<header class="activity-detail-head"><a href="#/activities" class="back-link">← All migration activities</a><span class="eyebrow">RECORDED MIGRATION ACTIVITY</span><h1>${esc(selected.title)}</h1><p>${esc(selected.description || "Scenario definition is not recorded in this checkout.")}</p><div class="activity-detail-meta"><span>${esc(selected.scenario)}</span>${selected.table ? `<span>Table · ${esc(selected.table)}</span>` : ""}${(selected.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join("")}</div></header>
+      <section class="activity-detail-summary"><div><span>Recorded reviews</span><strong>${selected.reviews}</strong></div><div><span>Outcome mix</span><p>${activityVerdicts(selected.verdicts)}</p></div><div><span>Comparison rule</span><p>Models and topologies remain separated by this activity.</p></div></section>
+      <section class="activity-performance"><header><div><span class="eyebrow">MODEL & TOPOLOGY PERFORMANCE</span><h2>How each setup performed on this activity</h2></div><p>Median resource values summarize only the listed recorded reviews. They are not a quality score.</p></header><div class="table-wrap"><table><tr><th>Approach</th><th>Model</th><th>Reviews</th><th>Recorded outcomes</th><th>Median tokens</th><th>Median wall time</th><th>Median calls</th></tr>${activityPerformanceRows(selected)}</table></div></section>
+      <section class="activity-run-list"><header><span class="eyebrow">EVIDENCE TRAIL</span><h2>Recorded reviews</h2></header>${runs}</section>`;
+  }
+  crumbs([["Migration activities"]]);
+  const reviewed = activities.reduce((total, activity) => total + activity.reviews, 0);
+  const passing = activities.filter((activity) => activity.verdicts.PASS).length;
+  return `<header class="activity-overview-head"><div><span class="eyebrow">SCENARIO-FIRST EVIDENCE</span><h1>Migration activities</h1><p>Start with the database change, then see how each recorded model and agent setup performed under that activity’s checks.</p></div><aside><strong>${activities.length}</strong><span>activities with evidence</span><strong>${reviewed}</strong><span>recorded reviews</span><strong>${passing}</strong><span>activities with a pass</span></aside></header>
+    <section class="activity-principles"><div><b>1</b><span><strong>Choose an activity</strong><small>Column change, constraint, backfill, or index operation.</small></span></div><div><b>2</b><span><strong>Compare scoped evidence</strong><small>Read outcomes per model and topology—not a pooled leaderboard.</small></span></div><div><b>3</b><span><strong>Open a recorded run</strong><small>Verify the runner checks behind every result.</small></span></div></section>
+    <section class="activity-library"><header><div><span class="eyebrow">ACTIVITY LIBRARY</span><h2>What migrations have we tested?</h2></div><p>Cards only appear after a finished run records that activity.</p></header><div class="activity-card-grid">${activityCards(activities) || `<p class="muted">No scenario-labelled finished runs are in the evidence store.</p>`}</div></section>`;
+}
+
 async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
-  const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
-  const defaultRun = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
-  const demo = details.find((d) => d.run_id === state.dashboardRunId) || defaultRun;
-  state.dashboardRunId = demo?.run_id || null;
-  const finalAttempt = demo?.attempts.at(-1);
-  const firstAttempt = demo?.attempts[0];
-  const matrix = finalAttempt ? await api(`/api/matrix?run=${enc(demo.run_id)}&attempt=${enc(finalAttempt.attempt_id)}`) : {rows: [], db_checks: []};
-  const rows = details.map((d) => {
-    const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
-    const search = `${d.run_id} ${d.meta?.verdict || ""} ${d.source_kind} ${d.meta?.model || "scripted"}`.toLowerCase();
-    return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.meta?.verdict || "")}" data-kind="${esc(d.source_kind)}">
+  const rows = runs.map((d) => {
+    const search = `${d.run_id} ${d.verdict || ""} ${d.source_kind} ${d.model || "scripted"}`.toLowerCase();
+    return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.verdict || "")}" data-kind="${esc(d.source_kind)}">
       <td><input type="checkbox" class="pick" value="${esc(d.run_id)}" aria-label="select for compare"></td>
-      <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempts.length} attempt${d.attempts.length === 1 ? "" : "s"}</small></td>
-      <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
-      <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
+      <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempt_count} attempt${d.attempt_count === 1 ? "" : "s"}</small></td>
+      <td>${verdictBadge(d.verdict)}</td><td>${typeBadges({source_kind: d.source_kind, meta: {model: d.model}})}</td>
+      <td>${d.elapsed_s == null ? "—" : `${nr(d.elapsed_s)} s`}</td><td>${d.checks_total ?? "—"}</td><td>${d.checks_failed ?? "—"}</td><td><a class="open-run-link" href="#/run/${enc(d.run_id)}">Open <b aria-hidden="true">→</b></a></td></tr>`;
   }).join("");
-  const processStages = [
-    "Choose review mode",
-    "AI migration review",
-    "Mock execution",
-    "Revise and Recommend"
-  ];
-  const stages = processStages.map((title, index) => `<div class="editorial-stage done"><div><span>${index + 1}</span><strong>${esc(title)}</strong></div><i>${index < processStages.length - 1 ? "→" : ""}</i></div>`).join("");
-  const paths = (matrix.columns || []).map((column) => [column, column.replaceAll("new-staged", "new").replace(" -> ", " → ")]);
-  const checks = [...new Set(matrix.rows.map((item) => item.check_name))]
-    .map((name) => [name, new Set(matrix.rows.filter((item) => item.check_name === name).map((item) => item.column)).size])
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([name]) => name);
-  const scopedResults = [...new Map(matrix.rows.map((item) => [
-    `${item.stage_id || "unknown"}|${item.check_name}|${item.column}`,
-    item
-  ])).values()];
-  const passedResults = scopedResults.filter((item) => kindOf(item) === "PASS").length;
-  const reviewResults = scopedResults.filter(isBad).length;
-  const passRate = scopedResults.length ? Math.round((passedResults / scopedResults.length) * 100) : null;
-  const crossVersionResults = scopedResults.filter((item) => {
-    const [writer, reader] = String(item.column || "").split(" -> ");
-    return writer && reader && writer !== reader;
-  });
-  const crossVersionPassed = crossVersionResults.filter((item) => kindOf(item) === "PASS").length;
-  const matrixMetrics = `<div class="matrix-metrics" aria-label="Recorded compatibility metrics">
-    <div><span>Scoped results</span><strong>${scopedResults.length}</strong><small>stage · check · path</small></div>
-    <div><span>Pass rate</span><strong>${passRate == null ? "—" : `${passRate}%`}</strong><small>${passedResults} of ${scopedResults.length} recorded</small></div>
-    <div class="${reviewResults ? "metric-alert" : "metric-ok"}"><span>Needs review</span><strong>${reviewResults}</strong><small>failed, refused, or errored</small></div>
-    <div><span>Cross-version</span><strong>${crossVersionResults.length ? `${crossVersionPassed}/${crossVersionResults.length}` : "—"}</strong><small>recorded paths passed</small></div>
-  </div>`;
-  const matrixGrid = `<div class="matrix-corner"></div>${paths.map(([, label]) => `<b>${esc(label)}</b>`).join("")}` + checks.map((checkName) => {
-    const cells = paths.map(([column]) => {
-      const candidates = matrix.rows.filter((item) => item.column === column && item.check_name === checkName);
-      const item = candidates.find(isBad) || candidates[0];
-      if (!item) return `<span class="editorial-matrix-cell unknown" title="No recorded observation for this exact scope">—</span>`;
-      const status = isBad(item) ? "fail" : kindOf(item) === "PASS" ? "pass" : "unknown";
-      const mark = status === "pass" ? "✓" : status === "fail" ? "×" : "—";
-      return `<button class="editorial-matrix-cell ${status}" data-obs="${esc(item.observation_id)}" title="${esc(item.check_name)}"><b>${mark}</b></button>`;
-    }).join("");
-    return `<strong title="${esc(checkName)}">${humanize(checkName)}</strong>${cells}`;
-  }).join("");
-  const evidenceItems = (matrix.db_checks || []).filter((item) => item.stage_id && item.stage_id !== "S0");
-  const evidence = (finalAttempt?.stages || []).map((stage) => {
-    const item = evidenceItems.find((candidate) => candidate.stage_id === stage.stage_id);
-    const detail = item ? `${esc(item.check_name)} · recorded observation` : esc(stage.description || stage.phase || stage.stage_kind || "Recorded stage");
-    const content = `<i class="${item && isBad(item) ? "bad" : "ok"}">${item && isBad(item) ? "×" : "✓"}</i><span><strong>${stageTitle(stage)}</strong><small>${detail}</small></span><b>›</b>`;
-    return item ? `<a class="editorial-evidence-item" href="#/obs/${enc(item.observation_id)}">${content}</a>` : `<div class="editorial-evidence-item">${content}</div>`;
-  }).join("");
-  const attempts = (demo?.attempts || []).map((attempt) => {
-    const passed = attempt.ok === 1;
-    const label = attempt.status || (passed ? "PASS" : attempt.ok === 0 ? "FAIL" : "RECORDED");
-    const detail = attempt.halted || `${attempt.checks_total} recorded checks · ${attempt.checks_failed} failed`;
-    return `<article class="${passed ? "passed" : "blocked"}"><i>${passed ? "✓" : "×"}</i><div><small>${humanize(short(attempt.attempt_id))} · ${esc(label)}</small><strong>${esc(detail)}</strong></div><a href="#/run/${enc(demo.run_id)}/matrix/${esc(short(attempt.attempt_id))}">Recorded evidence</a></article>`;
-  }).join(`<span>→</span>`);
-  const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
-  const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
-  const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
-  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
-    <section class="editorial-layout">
-      <main class="editorial-main">
-        <section class="stage-panel"><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
-        <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
-        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span class="recorded-view">Recorded checks</span></header>${matrixMetrics}<div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">Metrics cover recorded final-attempt application paths only. — means this exact check and application path was not recorded; missing scope remains unknown.</p></section>
-      </main>
-      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><h3 class="rail-section-title">Stage evidence</h3><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
-    </section>
-    <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
+  const outcomeCounts = runs.reduce((counts, run) => ({...counts, [run.verdict || "unknown"]: (counts[run.verdict || "unknown"] || 0) + 1}), {});
+  const finished = (outcomeCounts.PASS || 0) + (outcomeCounts.REPRODUCED || 0);
+  const needsAttention = (outcomeCounts.FAIL || 0) + (outcomeCounts.INCOMPLETE || 0) + (outcomeCounts.ERROR || 0);
+  const featured = runs.slice(0, 3).map((run) => `<a class="run-quick-link" href="#/run/${enc(run.run_id)}"><span>${verdictBadge(run.verdict)}</span><strong>${esc(run.run_id)}</strong><small>${esc(run.model || "model not recorded")} · ${run.checks_total ?? "—"} checks</small><b aria-hidden="true">→</b></a>`).join("");
+  return `<header class="run-library-head"><div><span class="eyebrow">RECORDED RUN LIBRARY</span><h1>Browse migration reviews</h1><p>Choose one recorded review to understand its plan, compatibility checks, revisions, and runner-confirmed outcome.</p></div><a class="button ghost" href="#/activities">Browse by migration activity →</a></header>
+    <section class="run-library-guide"><div><b>1</b><span><strong>Find a review</strong><small>Search by run, model, source, or recorded outcome.</small></span></div><div><b>2</b><span><strong>Open its evidence</strong><small>See the plan and compatibility checks behind that review.</small></span></div><div><b>3</b><span><strong>Compare carefully</strong><small>Select exactly two runs only when their context is comparable.</small></span></div></section>
+    <section class="run-library-summary" aria-label="Run library summary"><div><span>Recorded reviews</span><strong>${runs.length}</strong></div><div class="summary-positive"><span>Passed or reproduced</span><strong>${finished}</strong></div><div class="summary-attention"><span>Needs investigation</span><strong>${needsAttention}</strong><small>fail, incomplete, or error</small></div><div><span>Sources</span><strong>${new Set(runs.map((run) => run.source_kind)).size}</strong><small>fixtures and local runs stay labeled</small></div></section>
+    <section class="run-quick-picks"><header><div><span class="eyebrow">START WITH A RECORDED REVIEW</span><h2>Open a run to see the evidence behind its outcome</h2></div><p>The library itself stays lightweight; detailed observations load only after you open a run.</p></header><div class="run-quick-grid">${featured || `<p class="muted">No recorded reviews are available.</p>`}</div></section>
+    <section id="runs-table" class="section-head"><div><span class="eyebrow">ALL RECORDED REVIEWS</span><h2>Find the review you need</h2><p>Runner outcomes are recorded facts. Model text and plans appear after opening a review.</p></div>
       <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div></section>
-    <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
-      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
+    <div class="filterbar run-library-filter"><input id="run-search" type="search" placeholder="Search by run ID, model, source, or verdict" aria-label="Search runs">
+      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All outcomes</option><option>PASS</option><option>FAIL</option><option>INCOMPLETE</option><option>REPRODUCED</option><option>ERROR</option></select>
       <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
     <div class="card table-wrap runs-card"><table>
-      <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
-      ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
+      <tr><th><span class="sr-only">Compare</span></th><th>review</th><th>recorded outcome</th><th>source & model</th><th>elapsed</th><th>checks</th><th title="Includes every recorded attempt; the outcome column is the final recorded verdict.">failed checks*</th><th><span class="sr-only">Open</span></th></tr>
+      ${rows || `<tr><td colspan="8" class="muted">No finished runs in examples/ or runs/.</td></tr>`}
     </table></div>
+    <p class="run-library-compare-note"><strong>* Failed checks include every recorded attempt.</strong> The outcome column is the final recorded verdict. Comparison preserves each run’s context; use <strong>Compare selected</strong> only for two reviews you intend to inspect side by side.</p>
     ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(reviewUnavailableReason(controller_reason))}</span></div>`}`;
 }
 
@@ -368,27 +374,44 @@ async function pageOverview(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id]]);
   const m = run.meta || {};
-  const attempts = run.attempts.map((a) => {
+  const intent = (attempt) => {
+    const plan = attempt.plans?.[0]?.body || {};
+    return plan.summary || plan.write_consistency || plan.revision_notes || "No planner summary was recorded for this attempt.";
+  };
+  const stageIds = (attempt) => (attempt.plans?.[0]?.body?.stages || []).map((stage) => stage.id || stage.kind).filter(Boolean);
+  const planDelta = (attempt, previous) => {
+    if (!previous) return ["Initial recorded plan; there is no earlier attempt to compare."];
+    const before = new Set(stageIds(previous)), after = new Set(stageIds(attempt));
+    const added = [...after].filter((stage) => !before.has(stage));
+    const removed = [...before].filter((stage) => !after.has(stage));
+    const notes = attempt.plans?.[0]?.body?.revision_notes;
+    const changes = [];
+    if (notes) changes.push(notes);
+    if (added.length) changes.push(`Added stage${added.length === 1 ? "" : "s"}: ${added.map((stage) => stageTitle({stage_id: stage})).join(", ")}.`);
+    if (removed.length) changes.push(`Removed stage${removed.length === 1 ? "" : "s"}: ${removed.map((stage) => stageTitle({stage_id: stage})).join(", ")}.`);
+    if (!changes.length && intent(attempt) !== intent(previous)) changes.push("The recorded planner summary changed; stage IDs stayed the same.");
+    return changes.length ? changes : ["No structural plan change was recorded between these attempts."];
+  };
+  const assessment = (attempt, previous) => {
+    if (attempt.ok === 1) return {tone: "verified", title: "Runner verified this attempt", detail: "All recorded checks for this attempt passed."};
+    if (!previous) return {tone: "initial", title: "Initial runner result", detail: "Use this runner evidence as the baseline for later revisions."};
+    if (attempt.checks_total !== previous.checks_total) return {tone: "coverage", title: "Different recorded check coverage", detail: "The runner executed a different number of checks, so failed-check counts are not directly comparable."};
+    if (attempt.checks_failed < previous.checks_failed) return {tone: "partial", title: "Fewer recorded failed checks", detail: `The count changed from ${previous.checks_failed} to ${attempt.checks_failed}; inspect the named checks before treating this as a fix.`};
+    if (attempt.checks_failed > previous.checks_failed) return {tone: "regressed", title: "More recorded failed checks", detail: `The count changed from ${previous.checks_failed} to ${attempt.checks_failed} with the same recorded check count.`};
+    return {tone: "unchanged", title: "Same recorded failure count", detail: "The count did not change under the same recorded check coverage."};
+  };
+  const story = run.attempts.map((a, index) => {
     const s = short(a.attempt_id);
     const cause = a.claims.find((c) => c.role === "tester-report" && c.kind === "suspected_cause");
-    const cls = a.ok === 1 ? "ok" : a.ok === 0 ? "bad" : "";
-    return `<div class="card attempt ${cls}">
-      <div class="row spread">
-        <div class="row"><strong>${esc(s)}</strong> ${verdictBadge(a.status)}
-          <span class="muted">${a.outcome_counts ? countsText(a.outcome_counts)
-            : `${a.checks_total} checks · ${a.checks_failed} failed`}</span></div>
-        <div class="row"><a href="#/run/${enc(id)}/plan/${s}">Plan</a> · <a href="#/run/${enc(id)}/matrix/${s}">Matrix</a></div>
-      </div>
-      ${a.halted ? `<p><span class="badge fail">halted</span> ${esc(a.halted)}</p>` : ""}
-      ${(a.failed || []).length ? `<p class="muted">Failed: ${a.failed.map((f) => `<code>${esc(f)}</code>`).join(", ")}</p>` : ""}
-      ${cause ? `<p class="muted">Tester's diagnosis: ${esc(cause.text)}</p>` : ""}
-    </div>`;
+    const compare = assessment(a, run.attempts[index - 1]);
+    const failures = (a.failed || []).slice(0, 5);
+    const failedCount = (a.failed || []).length;
+    return `<article class="revision-story-card ${compare.tone}"><header><div><span class="story-index">${index + 1}</span><span class="eyebrow">ATTEMPT ${esc(s)}</span><h3>${verdictBadge(a.status)} ${esc(compare.title)}</h3></div><div class="story-links"><a href="#/run/${enc(id)}/plan/${s}">Open plan</a><a href="#/run/${enc(id)}/matrix/${s}">Compatibility checks</a></div></header><div class="story-grid"><section><span>Planner proposed</span><p>${esc(intent(a))}</p><small>Saved planner artifact; this is a proposal, not runner evidence.</small></section><section><span>What changed</span><ul>${planDelta(a, run.attempts[index - 1]).map((change) => `<li>${esc(change)}</li>`).join("")}</ul></section><section class="runner-observed"><span>Runner observed</span><strong>${a.outcome_counts ? esc(countsText(a.outcome_counts)) : `${a.checks_total} checks · ${a.checks_failed} failed`}</strong><p>${esc(compare.detail)}</p>${a.halted ? `<small>Stopped: ${esc(a.halted)}</small>` : ""}</section></div>${failures.length ? `<footer><span>Failed checks</span>${failures.map((failure) => `<code>${esc(failure)}</code>`).join("")}${failedCount > failures.length ? `<small>+${failedCount - failures.length} more</small>` : ""}</footer>` : ""}${cause ? `<details class="story-diagnosis"><summary>Tester’s recorded diagnosis</summary><p>${esc(cause.text)}</p></details>` : ""}</article>`;
   }).join("");
   const man = run.manifest;
   return `${runHeader(run, "overview")}
-    <h2>Requested change</h2>
-    <p>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</p>
-    <h2>Attempts</h2>${attempts}
+    <section class="revision-story-head"><span class="eyebrow">REVISION STORY</span><h2>How the proposed migration changed after runner feedback</h2><p>Follow the saved planner proposal, the exact runner result, and the next revision. The runner—not the planner—determines whether an attempt passed.</p><div><strong>Requested change</strong><span>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</span></div></section>
+    <section class="revision-story" aria-label="Revision story">${story || `<p class="muted">No attempt records were saved for this run.</p>`}</section>
     ${man ? `<details><summary>Fixture notes</summary><p>${val(man.note)}</p>
       <ul>${(man.sanitization || []).map((s) => `<li>${esc(s)}</li>`).join("")}</ul></details>` : ""}`;
 }
@@ -419,28 +442,40 @@ async function pagePlan(id, s) {
 
 async function pageMatrix(id, s) {
   const run = await getRun(id);
-  crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], [`Matrix ${s}`]]);
+  crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], [`Compatibility checks ${s}`]]);
   const a = findAttempt(run, s);
   if (!a) return `${runHeader(run, "matrix")}<p>${unknown("no such attempt")}</p>`;
   const m = await api(`/api/matrix?run=${enc(id)}&attempt=${enc(a.attempt_id)}`);
-  let grid = `<p class="muted">No app-level cases with step scope in this attempt.</p>`;
-  if (m.rows.length) {
+  const appName = (name) => name === "old" ? "Old app" : name === "new-staged" ? "New app" : name === "new-unsafe" ? "New app (unsafe)" : humanize(name);
+  const readablePath = (column) => {
+    const [writer, reader] = String(column || "").split(" -> ");
+    return writer && reader ? `${appName(writer)} writes → ${appName(reader)} reads` : "Application path not recorded";
+  };
+  const readableCheck = (check) => humanize(String(check || "").replace(/^case\./, ""));
+  const failures = m.rows.filter(isBad);
+  const passes = m.rows.filter((row) => kindOf(row) === "PASS").length;
+  const grid = (rows, title) => {
+    if (!rows.length) return `<p class="muted">No app-level cases with step scope in this attempt.</p>`;
     let body = "", last;
-    for (const r of m.rows) {
+    for (const r of rows) {
       if (r.stage_id !== last) {
         body += `<tr class="stage-row"><td colspan="${m.columns.length + 1}">${val(r.stage_id)}</td></tr>`;
         last = r.stage_id;
       }
-      body += `<tr><td title="${esc(r.path.join(" → "))}"><code>${esc(r.check_name.replace(/^case\./, ""))}</code></td>${
+      body += `<tr><td title="${esc(readablePath(r.column))}"><strong>${esc(readableCheck(r.check_name))}</strong><small>${esc(readablePath(r.column))}</small></td>${
         m.columns.map((c) => `<td class="cell">${c === r.column
           ? `<button class="mark ${esc(kindOf(r))}" data-obs="${esc(r.observation_id)}" title="${esc(r.outcome || r.status)}">${MARKS[kindOf(r)] || "?"}</button>`
           : `<span class="dot">·</span>`}</td>`).join("")}</tr>`;
     }
-    grid = `<div class="card table-wrap"><table class="matrix">
-      <tr><th>case</th>${m.columns.map((c) => `<th class="col">${esc(c.replace(" -> ", " → "))}</th>`).join("")}</tr>
+    return `<section class="compat-detail"><h2>${title}</h2><div class="table-wrap"><table class="matrix">
+      <tr><th>Compatibility check</th>${m.columns.map((c) => `<th class="col">${esc(readablePath(c))}</th>`).join("")}</tr>
       ${body}</table>
-      <p class="legend">Columns: writer → reader app version. ✓ pass, ✗ fail, ⊘ refused, ! error, – skipped, · not tested. Click a mark for its evidence.</p></div>`;
-  }
+      </div><p class="legend">Green ✓ worked. Red ✗ broke. Gray · was not tested for that exact application path. Click a result to inspect the runner evidence.</p></section>`;
+  };
+  const failureCards = failures.slice(0, 6).map((row) => `<button class="compat-failure" data-obs="${esc(row.observation_id)}"><span>What broke</span><strong>${esc(readablePath(row.column))}</strong><small>${esc(readableCheck(row.check_name))} · ${esc(stageTitle({stage_id: row.stage_id}))}</small><b>Open evidence →</b></button>`).join("");
+  const outcome = a.status || run.meta?.verdict || "not recorded";
+  const overview = `<section class="compat-overview"><header><span class="eyebrow">COMPATIBILITY SUMMARY</span><h2>Can old and new application versions coexist during this attempt?</h2><p>These checks exercise writes and reads across both application versions while the migration is in progress.</p></header><div class="compat-summary-grid"><article><span>Attempt outcome</span><strong>${esc(outcome)}</strong><small>The runner’s recorded result for this attempt.</small></article><article class="${failures.length ? "problem" : "success"}"><span>Compatibility checks</span><strong>${failures.length ? `${failures.length} broken` : "No breaks recorded"}</strong><small>${passes} app-level interaction${passes === 1 ? "" : "s"} worked in this attempt.</small></article><article><span>How to read this</span><strong>Old writes → new reads</strong><small>Tests whether data written by one version remains usable by the other.</small></article></div></section>`;
+  const answer = failures.length ? `<section class="compat-answer"><header><span class="eyebrow">WHAT NEEDS ATTENTION</span><h2>The rollout still breaks cross-version behavior</h2><p>Open a failed interaction to see the deterministic runner steps, expected result, and observed failure.</p></header><div class="compat-failure-grid">${failureCards}</div></section>` : `<section class="compat-answer good"><header><span class="eyebrow">WHAT THE RUNNER OBSERVED</span><h2>No app-level compatibility break was recorded for this attempt</h2><p>This applies only to the checks and application paths shown below. Gray cells remain untested, not passed.</p></header></section>`;
   const dbBad = m.db_checks.filter(isBad);
   const dbPass = m.db_checks.filter((d) => kindOf(d) === "PASS").length;
   const dbSkip = m.db_checks.filter((d) => kindOf(d) === "SKIP").length;
@@ -450,21 +485,30 @@ async function pageMatrix(id, s) {
       `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${MARKS[kindOf(d)] || ""} ${esc(d.check_name)} (${val(d.stage_id)})</a>`).join("")}</div>
     <details><summary>Show all</summary><div class="chips" style="margin-top:6px">${m.db_checks.map((d) =>
       `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${esc(d.check_name)}</a>`).join("")}</div></details>` : "";
-  return `${runHeader(run, "matrix")}${attemptPills(run, "matrix", s)}${grid}${db}`;
+  const details = failures.length ? `<details class="compat-all"><summary>Show all compatibility checks (${m.rows.length})</summary>${grid(m.rows, "All recorded compatibility checks")}</details>` : grid(m.rows, "Recorded compatibility checks");
+  return `${runHeader(run, "matrix")}${attemptPills(run, "matrix", s)}${overview}${answer}${failures.length ? grid(failures, "Failed compatibility checks") : ""}${details}${db}`;
 }
 
 async function pageAgents(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], ["Agents"]]);
-  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}</li>`;
-  const perAttempt = run.attempts.filter((a) => a.claims.length).map((a) =>
-    `<h2>${esc(short(a.attempt_id))}</h2><ul>${a.claims.map(claim).join("")}</ul>`).join("");
-  const inv = run.claims_without_attempt;
-  const any = perAttempt || inv.length;
-  return `${runHeader(run, "agents")}
-    ${any ? `<p class="muted">Unstructured v0 claims: free text from agent outputs, no cited evidence IDs.</p>` : `<p class="muted">No agent output in this run.</p>`}
-    ${perAttempt}
-    ${inv.length ? `<details><summary>Investigator findings (${inv.length}, before any attempt)</summary><ul>${inv.map(claim).join("")}</ul></details>` : ""}`;
+  const investigator = run.claims_without_attempt?.filter((claim) => claim.role === "investigator") || [];
+  const claimText = (claims, fallback) => claims.length ? excerpt(claims[0].text) : fallback;
+  const rawClaims = (claims) => claims.length ? `<details class="agent-raw"><summary>Read recorded role output (${claims.length})</summary>${claims.map((claim) => `<article><strong>${esc(claim.kind || "claim")}</strong><p>${esc(claim.text)}</p></article>`).join("")}</details>` : "";
+  const roleFlow = `<section class="agent-role-flow" aria-label="Agent handoff flow"><article><b>1</b><div><span>Investigator</span><strong>Maps the change</strong><small>Findings are handed to the planner.</small></div></article><i>→</i><article><b>2</b><div><span>Planner</span><strong>Proposes a rollout</strong><small>A staged plan goes to the runner.</small></div></article><i>→</i><article><b>3</b><div><span>Tester</span><strong>Returns feedback</strong><small>Test proposals and diagnoses inform revisions.</small></div></article><i>→</i><article class="runner"><b>4</b><div><span>Runner</span><strong>Records the outcome</strong><small>Only runner observations determine pass/fail.</small></div></article></section>`;
+  const discovery = `<section class="agent-discovery"><header><div><span class="eyebrow">BEFORE THE FIRST PLAN</span><h2>Investigator handoff</h2></div><span class="agent-artifact">${investigator.length ? `${investigator.length} finding${investigator.length === 1 ? "" : "s"} recorded` : "No structured findings recorded"}</span></header><p>${esc(claimText(investigator, "No structured investigator finding was saved for this run. The planner artifact below is still available."))}</p><small>Investigator output is an agent claim. It provides context; it does not decide the result.</small>${rawClaims(investigator)}</section>`;
+  const handoffs = run.attempts.map((attempt, index) => {
+    const label = short(attempt.attempt_id);
+    const plan = attempt.plans?.[0]?.body || {};
+    const plannerClaims = attempt.claims.filter((claim) => claim.role === "planner");
+    const testerClaims = attempt.claims.filter((claim) => claim.role?.startsWith("tester"));
+    const stages = plan.stages || [];
+    const plannerSummary = plan.summary || claimText(plannerClaims, "No separate planner explanation was recorded; open the saved plan to inspect its stages.");
+    const testerSummary = claimText(testerClaims, attempt.halted || "No structured tester feedback was saved for this attempt.");
+    const outcome = attempt.status || (attempt.ok === 1 ? "PASS" : attempt.ok === 0 ? "FAIL" : "not recorded");
+    return `<article class="agent-handoff"><header><div><span class="eyebrow">ATTEMPT ${esc(label)}</span><h2>Proposal → feedback → recorded result</h2></div>${verdictBadge(outcome)}</header><div class="agent-handoff-grid"><section class="agent-planner"><span>Planner produced</span><strong>${stages.length ? `${stages.length} staged step${stages.length === 1 ? "" : "s"}` : "Plan structure not recorded"}</strong><p>${esc(excerpt(plannerSummary, 360))}</p><a href="#/run/${enc(id)}/plan/${enc(label)}">Open saved plan →</a>${rawClaims(plannerClaims)}</section><section class="agent-tester"><span>Tester handed back</span><strong>${testerClaims.length ? `${testerClaims.length} recorded feedback item${testerClaims.length === 1 ? "" : "s"}` : "Runner feedback only"}</strong><p>${esc(excerpt(testerSummary, 360))}</p><a href="#/run/${enc(id)}/matrix/${enc(label)}">Open compatibility checks →</a>${rawClaims(testerClaims)}</section><section class="agent-runner"><span>Runner recorded</span><strong>${esc(outcome)}</strong><p>${attempt.outcome_counts ? esc(countsText(attempt.outcome_counts)) : `${attempt.checks_total} checks · ${attempt.checks_failed} failed`}</p>${attempt.halted ? `<small>Stopped: ${esc(attempt.halted)}</small>` : `<small>Deterministic observations are available in the compatibility checks.</small>`}</section></div>${index < run.attempts.length - 1 ? `<footer><span>Handoff to next revision</span><p>The next planner attempt receives explicit controller artifacts; roles do not share chat history directly.</p></footer>` : ""}</article>`;
+  }).join("");
+  return `${runHeader(run, "agents")}<section class="agent-story-head"><span class="eyebrow">AGENT HANDOFFS</span><h2>Who did what, and what did the runner confirm?</h2><p>Roles are isolated. The controller passes explicit artifacts between them; the runner remains the only authority for executed results.</p></section>${roleFlow}${discovery}<section class="agent-handoff-list"><header><span class="eyebrow">ATTEMPT HANDOFFS</span><h2>From proposal to observed outcome</h2></header>${handoffs || `<p class="muted">No attempt artifacts were saved for this run.</p>`}</section>`;
 }
 
 async function pageMetrics(id) {
@@ -496,7 +540,7 @@ async function pageEvidence(oid) {
   if (!o) return `<p>${unknown("observation not found")}</p>`;
   const s = short(o.attempt_id);
   crumbs([["Runs", "#/"], [o.run_id, `#/run/${enc(o.run_id)}`],
-          ...(s ? [[`Matrix ${s}`, `#/run/${enc(o.run_id)}/matrix/${s}`]] : []), [o.check_name]]);
+          ...(s ? [[`Compatibility checks ${s}`, `#/run/${enc(o.run_id)}/matrix/${s}`]] : []), [o.check_name]]);
   const hist = await api(`/api/history?check=${enc(o.check_name)}`);
   const steps = o.steps.length ? `<div class="table-wrap"><table>
       <tr><th>#</th><th>app</th><th>op</th><th>ok</th><th>value / error</th></tr>
@@ -700,6 +744,99 @@ async function pageBatch(id) {
       : b.infra_note ? `<h2>INFRA-NOTE</h2><pre class="batch-note">${esc(b.infra_note)}</pre><p class="muted">No run in runs.jsonl matches a run named in this note.</p>` : ""}`;
 }
 
+// ---------- Roles versus single (recorded rename observations only) ----------
+
+const topologyNumber = (value, suffix = "") => value == null ? unknown("not recorded") : `${fmt(value)}${suffix}`;
+const topologyMedian = (value, unit) => value == null ? unknown("not recorded") : `${fmt(Math.round(value))} ${unit}`;
+const topologyVerdicts = (setup) => BATCH_VERDICTS.filter((v) => setup.verdicts[v]).map((v) =>
+  `<span class="badge ${v === "PASS" ? "pass" : v === "INCOMPLETE" ? "warn" : "fail"}">${setup.verdicts[v]} ${v}</span>`).join(" ") || `<span class="muted">No reviews</span>`;
+
+function incompleteStops(setup) {
+  const stops = setup.incomplete_stops;
+  if (!setup.verdicts.INCOMPLETE) return "";
+  const labels = [["token_budget", "token budget"], ["call_budget", "call budget"], ["other", "reason not recorded"]]
+    .filter(([key]) => stops[key]).map(([key, label]) => `${stops[key]} ${label}`);
+  return `<small>Incomplete: ${esc(labels.join(", "))}</small>`;
+}
+
+function topologySummaryCell(name, setup) {
+  return `<section class="topology-summary-cell"><header><strong>${name}</strong><span>${setup.reviews} review${setup.reviews === 1 ? "" : "s"}</span></header>
+    <div class="topology-verdicts">${topologyVerdicts(setup)}</div>${incompleteStops(setup)}
+    <dl><div><dt>Median tokens</dt><dd>${topologyMedian(setup.median_tokens, "tokens")}</dd></div><div><dt>Median wall time</dt><dd>${topologyMedian(setup.median_seconds, "s")}</dd></div></dl></section>`;
+}
+
+function trajectory(run) {
+  const values = run.failed_checks;
+  if (!Array.isArray(values)) return `<span class="muted">Failed-check trajectory not recorded</span>`;
+  const peak = Math.max(...values, 1);
+  return `<div class="failure-trajectory" aria-label="Failed checks per attempt: ${values.join(", ")}">${values.map((value, index) =>
+    `<span title="Attempt ${index + 1}: ${value} failed check${value === 1 ? "" : "s"}"><i style="--trajectory-height:${Math.max(12, Math.round((value / peak) * 100))}%"></i><b>${value}</b><small>a${index + 1}</small></span>`).join("") || `<span class="muted">No attempt executed</span>`}</div>`;
+}
+
+function topologyRunCard(run) {
+  return `<article class="topology-run ${String(run.verdict).toLowerCase()}"><header><div><span class="eyebrow">${esc(run.topology)}</span><h3>${esc(run.verdict || "unknown")}</h3></div><a href="#/run/${enc(run.run_id)}">Replay</a></header>
+    <p class="topology-run-id">${esc(run.run_id || "run ID not recorded")}</p>
+    <div class="topology-trajectory"><span>Failed checks by attempt</span>${trajectory(run)}</div>
+    <dl><div><dt>Tokens</dt><dd>${topologyNumber(run.total_tokens)}</dd></div><div><dt>Calls</dt><dd>${topologyNumber(run.model_calls)}</dd></div><div><dt>Wall time</dt><dd>${topologyNumber(run.wall_seconds, " s")}</dd></div></dl>
+  </article>`;
+}
+
+function topologyMetricValue(run, field) {
+  if (field === "tokens_per_call") {
+    return typeof run.total_tokens === "number" && typeof run.model_calls === "number" && run.model_calls > 0
+      ? run.total_tokens / run.model_calls : null;
+  }
+  return typeof run[field] === "number" ? run[field] : null;
+}
+
+function topologyMetricLabel(value, field) {
+  if (value == null) return "not recorded";
+  if (field === "wall_seconds") return `${fmt(Math.round(value))} s`;
+  if (field === "tokens_per_call") return `${fmt(Math.round(value))} / call`;
+  return fmt(Math.round(value));
+}
+
+function topologyResourceMetric(label, field, roles, single) {
+  const roleValue = topologyMetricValue(roles, field);
+  const singleValue = topologyMetricValue(single, field);
+  const max = Math.max(roleValue || 0, singleValue || 0, 1);
+  const bar = (value) => value == null ? "0" : `${Math.max(5, Math.round(value / max * 100))}`;
+  return `<article class="resource-metric"><header><strong>${label}</strong><span>recorded pair</span></header>
+    <div class="resource-row roles"><span>Roles</span><b>${topologyMetricLabel(roleValue, field)}</b><i><em style="width:${bar(roleValue)}%"></em></i></div>
+    <div class="resource-row single"><span>Single</span><b>${topologyMetricLabel(singleValue, field)}</b><i><em style="width:${bar(singleValue)}%"></em></i></div>
+  </article>`;
+}
+
+function topologyResourceProfile(roles, single) {
+  return `<section class="topology-resource-profile" aria-label="Recorded resource profile for selected roles and single reviews">
+    <header><div><span class="eyebrow">RECORDED RESOURCE PROFILE</span><h3>What each selected review consumed</h3></div><p>Bar length is relative only within this pair. It does not determine which approach is better.</p></header>
+    <div class="resource-metric-grid">${topologyResourceMetric("Token footprint", "total_tokens", roles, single)}${topologyResourceMetric("Wall time", "wall_seconds", roles, single)}${topologyResourceMetric("Model calls", "model_calls", roles, single)}${topologyResourceMetric("Tokens per call", "tokens_per_call", roles, single)}</div>
+  </section>`;
+}
+
+async function pageTopologies() {
+  crumbs([["Runs", "#/"], ["Roles vs single"]]);
+  const data = await api("/api/topology-comparison");
+  const configurations = data.configurations || [];
+  const pairs = configurations.flatMap((configuration) => {
+    const roles = configuration.setups.roles.runs || [], single = configuration.setups.single.runs || [];
+    return roles.flatMap((r) => single.map((s) => ({configuration: configuration.configuration, roles: r, single: s})));
+  });
+  const selected = pairs.find((pair) => `${pair.configuration}|${pair.roles.run_id}|${pair.single.run_id}` === state.topologyPair) || pairs[0];
+  if (selected) state.topologyPair = `${selected.configuration}|${selected.roles.run_id}|${selected.single.run_id}`;
+  const options = pairs.map((pair) => {
+    const value = `${pair.configuration}|${pair.roles.run_id}|${pair.single.run_id}`;
+    return `<option value="${esc(value)}" ${value === state.topologyPair ? "selected" : ""}>Config ${esc(pair.configuration)} · roles ${esc(pair.roles.verdict || "?")} / single ${esc(pair.single.verdict || "?")}</option>`;
+  }).join("");
+  const rows = configurations.map((configuration) => `<section class="topology-config"><header><div><span class="eyebrow">CONFIGURATION ${esc(configuration.configuration)}</span><h2>Same settings, separate recorded reviews</h2></div><details><summary>Configuration note</summary><pre>${esc(configuration.config_note || "not recorded")}</pre></details></header><div class="topology-summary-grid">${topologySummaryCell("roles", configuration.setups.roles)}${topologySummaryCell("single", configuration.setups.single)}</div></section>`).join("");
+  const pair = selected ? `<section class="topology-pair"><header><div><span class="eyebrow">PRESENTER PAIR · CONFIGURATION ${esc(selected.configuration)}</span><h2>Inspect two recorded reviews side by side</h2><p>Each trajectory includes every saved attempt. The runner recorded the verdicts shown here.</p></div><label><span>Choose a pair</span><select id="topology-pair">${options}</select></label></header>${topologyResourceProfile(selected.roles, selected.single)}<div class="topology-pair-grid">${topologyRunCard(selected.roles)}${topologyRunCard(selected.single)}</div></section>` : `<section class="card"><p class="muted">No roles/single pair is available yet. Batches appear here once both setups have recorded rename reviews in the same configuration.</p></section>`;
+  return `<header class="editorial-head topology-head"><div><span class="eyebrow">RECORDED MODEL REVIEWS</span><h1>Multi-agent vs single-agent</h1><p>Both setups use the same model, runner, and checks. Comparisons are only within each configuration.</p></div></header>
+    <p class="topology-caption">One to three reviews per setup per configuration: observations, not rates. Neither setup is shown to be better.</p>
+    <section class="topology-definition"><div><strong>roles</strong><span>Investigator, planner, and tester use separate calls with no chat history; the controller passes JSON between them.</span></div><div><strong>single</strong><span>One agent performs every step in one conversation with compacted history.</span></div></section>
+    ${pair}
+    ${rows || `<section class="card"><p class="muted">No completed configuration B–M batch records were found under runs/. This view reads batch folders directly and will populate when they are copied in.</p></section>`}`;
+}
+
 async function openEvidence(oid) {
   const drawer = $("#evidence-drawer");
   const backdrop = $("#drawer-backdrop");
@@ -811,9 +948,25 @@ async function route() {
   const parts = routeParts();
   const view = $("#view");
   clearTimeout(state.batchPoll);
+  const activeNav = !parts.length ? "runs"
+    : parts[0] === "ask" ? "ask"
+    : parts[0] === "activities" ? "activities"
+    : parts[0] === "batches" ? "batches"
+    : parts[0] === "topologies" ? "topologies"
+    : parts[0] === "compare" ? "compare"
+    : parts[0] === "demo" ? "demo"
+    : parts[0] === "run" && parts.length === 2 ? "overview" : "runs";
+  document.querySelectorAll(".side-nav [data-nav]").forEach((link) => {
+    const active = link.dataset.nav === activeNav;
+    link.classList.toggle("is-active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
   try {
     let html;
     if (!parts.length) html = await pageRuns();
+    else if (parts[0] === "ask" && parts.length === 1) html = pageAsk();
+    else if (parts[0] === "activities" && parts.length <= 2) html = await pageActivities(parts[1]);
     else if (parts[0] === "demo" && parts.length === 2) html = await pageDemo(parts[1]);
     else if (parts[0] === "workspace" && parts.length === 2) html = await pageWorkspace(parts[1]);
     else if (parts[0] === "run" && parts.length === 2) html = await pageOverview(parts[1]);
@@ -825,6 +978,7 @@ async function route() {
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
     else if (parts[0] === "batches" && parts.length === 1) html = await pageBatches();
     else if (parts[0] === "batches" && parts.length === 2) html = await pageBatch(parts[1]);
+    else if (parts[0] === "topologies" && parts.length === 1) html = await pageTopologies();
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
@@ -889,6 +1043,7 @@ document.addEventListener("click", (ev) => {
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (ev.target.id === "topology-pair") { state.topologyPair = ev.target.value; route(); return; }
   if (ev.target.id === "dashboard-run") {
     state.dashboardRunId = ev.target.value;
     route();

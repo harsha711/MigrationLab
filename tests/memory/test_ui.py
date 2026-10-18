@@ -39,13 +39,16 @@ def get_json(url):
 
 def test_static_and_runs(base_url):
     status, body = get(base_url + "/")
-    assert status == 200 and b"Replay Recorded Run" in body
-    assert b"Guided demo" in body and b"evidence-drawer" in body
+    assert status == 200 and b"Understand migration evidence" in body
+    assert b"Ask evidence" in body and b"evidence-drawer" in body
     assert b"welcome-tour" in body and b'id="toast"' in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
         "unsafe-rename", "scripted-sync-failure", "scripted-staged-success", "live-ordering-revision"}
+    assert all("attempt_count" in run and "checks_failed" in run for run in data["runs"])
+    activities = get_json(base_url + "/api/scenario-activities")["activities"]
+    assert isinstance(activities, list)
 
 
 def test_run_and_observation_endpoints(base_url):
@@ -143,7 +146,83 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "migrationlab-tour-seen" in js
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
-    assert "editorial-layout" in css and "Migration evidence" in js
+    assert "editorial-layout" in css and "Browse migration reviews" in js
+
+
+def test_first_use_navigation_is_task_oriented():
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/ask" data-nav="ask"' in html
+    assert 'data-nav="runs" class="primary-nav"' not in html
+    assert "Ask evidence" in html and "Browse runs" in html
+    assert "Track batches" in html and "Compare approaches" in html
+    assert "What do you want to understand?" in js
+    assert "How to read these answers" in js
+    assert 'parts[0] === "topologies" ? "topologies"' in js
+
+
+def test_run_library_does_not_hydrate_every_run():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    page = js[js.index("async function pageRuns()"):js.index("function replaySteps")]
+    assert "Promise.all" not in page
+    assert "getRun(" not in page
+    assert "Browse migration reviews" in page
+    assert "detailed observations load only after you open a run" in page
+
+
+def test_run_library_is_a_clear_entry_point_to_evidence():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "Find a review" in js and "Open its evidence" in js and "Compare carefully" in js
+    assert "INCOMPLETE" in js
+    assert ".run-library-guide" in css and ".run-quick-link" in css
+
+
+def test_topology_page_has_descriptive_resource_profile():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "RECORDED RESOURCE PROFILE" in js
+    assert "Token footprint" in js and "Tokens per call" in js
+    assert "does not determine which approach is better" in js
+    assert ".resource-metric-grid" in css
+
+
+def test_activity_library_assets_are_scenario_first():
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/activities" data-nav="activities"' in html
+    assert "SCENARIO-FIRST EVIDENCE" in js
+    assert "MODEL & TOPOLOGY PERFORMANCE" in js
+    assert "/api/scenario-activities" in js
+
+
+def test_compatibility_checks_use_plain_language_before_the_grid():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert '"Compatibility checks"' in js
+    assert "COMPATIBILITY SUMMARY" in js and "WHAT NEEDS ATTENTION" in js
+    assert "Old app" in js and "Show all compatibility checks" in js
+    assert ".compat-summary-grid" in css and ".compat-failure-grid" in css
+
+
+def test_run_overview_has_an_evidence_first_revision_story():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "How the proposed migration changed after runner feedback" in js
+    assert "Planner proposed" in js and "Runner observed" in js and "What changed" in js
+    assert "Different recorded check coverage" in js
+    assert "proposal, not runner evidence" in js
+    assert ".revision-story-card" in css and ".runner-observed" in css
+
+
+def test_agents_page_explains_role_handoffs_before_raw_claims():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "Who did what, and what did the runner confirm?" in js
+    assert "Planner produced" in js and "Tester handed back" in js and "Runner recorded" in js
+    assert "Only runner observations determine pass/fail." in js
+    assert "roles do not share chat history directly" in js
+    assert ".agent-role-flow" in css and ".agent-handoff-grid" in css
 
 
 def test_batch_endpoints_over_http():

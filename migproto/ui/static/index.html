@@ -3,29 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MigrationLab | Replay Recorded Run</title>
+  <title>MigrationLab | Understand migration evidence</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <a href="#/" class="brand-lockup" aria-label="MigrationLab home">
+      <a href="#/ask" class="brand-lockup" aria-label="MigrationLab home">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span><strong>Migration<span>Lab</span></strong></span>
       </a>
       <nav class="side-nav" aria-label="Primary navigation">
-        <a href="#/run/live-ordering-revision" data-nav="overview"><span class="nav-icon">&#8962;</span> Overview</a>
-        <a href="#/" data-nav="runs" class="primary-nav"><span class="nav-icon">&#9638;</span> Migration evidence</a>
-        <a href="#/batches" data-nav="batches"><span class="nav-icon">&#9776;</span> Batches</a>
-        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Comparisons</a>
-        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided replay<span class="sr-only">Guided demo</span></a>
+        <a href="#/ask" data-nav="ask"><span class="nav-icon">?</span><span>Ask evidence<small>Start here</small></span></a>
+        <a href="#/activities" data-nav="activities"><span class="nav-icon">&#9670;</span><span>Migration activities<small>Scenario outcomes</small></span></a>
+        <a href="#/" data-nav="runs"><span class="nav-icon">&#9638;</span><span>Browse runs<small>Inspect outcomes</small></span></a>
+        <a href="#/batches" data-nav="batches"><span class="nav-icon">&#9776;</span><span>Track batches<small>See progress</small></span></a>
+        <a href="#/topologies" data-nav="topologies"><span class="nav-icon">&#8644;</span><span>Compare approaches<small>Roles, single, parallel</small></span></a>
       </nav>
       <div class="sidebar-foot"><span class="status-dot"></span><span><strong>Evidence store</strong><small>Read-only replay</small></span></div>
     </aside>
     <div class="main-shell">
       <header class="topbar">
-        <nav id="crumbs" class="crumbs"></nav>
+        <div class="topbar-context"><span class="topbar-kicker">MIGRATION REVIEW WORKSPACE</span><nav id="crumbs" class="crumbs" aria-label="Breadcrumb"></nav></div>
         <div class="top-actions">
+          <span class="topbar-status"><span class="status-dot"></span> Evidence connected</span>
           <button id="theme-toggle" class="theme-button" aria-label="Use dark theme" title="Use dark theme">&#9790;</button>
         </div>
       </header>
@@ -50,5 +51,6 @@
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="app.js"></script>
+  <script src="chat.js"></script>
 </body>
 </html>

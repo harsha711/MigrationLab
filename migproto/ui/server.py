@@ -2,8 +2,9 @@
 
 Replay is read-only: static files plus JSON from the evidence store. "Run Review" starts a
 review only through Owner 2's controller (see review.py) and is disabled, with the reason,
-when the controller or Harsha's execution lock is unavailable. Nothing here executes SQL
-against Saleor databases, starts Saleor servers, or calls a model.
+when the controller or Harsha's execution lock is unavailable. Evidence chat may make one
+budgeted call through the existing model client after releasing the store lock. Nothing here
+executes SQL against Saleor databases or starts Saleor servers.
 """
 
 import json
@@ -21,8 +22,11 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
 MAX_BODY = 4096
 
 
-def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None):
+def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None, chat_answer=None):
     runs_root = Path(runs_root) if runs_root is not None else store.ROOT / "runs"
+    from .chat import build_facts
+    if chat_answer is None:
+        from .chat import answer as chat_answer
 
     def availability():
         return review.available() if review else {"ok": False, "reason": "controller not available"}
@@ -52,6 +56,10 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
                 return {"batches": query.list_batches(runs_root, conn)}
             if path == "/api/batch":
                 return query.batch_detail(runs_root, p("id"), conn)
+            if path == "/api/topology-comparison":
+                return query.topology_comparison(runs_root, conn)
+            if path == "/api/scenario-activities":
+                return query.scenario_activity_overview(conn)
         raise KeyError(path)
 
     class Handler(BaseHTTPRequestHandler):
@@ -96,7 +104,25 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
             if length > MAX_BODY:
                 return self._json(413, {"error": "request body too large"})
             raw = self.rfile.read(length) if length else b""
-            if urlparse(self.path).path != "/api/review" or review is None:
+            path = urlparse(self.path).path
+            if path == "/api/chat":
+                try:
+                    body = json.loads(raw or b"{}")
+                    question = body.get("question")
+                    if not isinstance(question, str) or not question.strip():
+                        raise ValueError("question must be a non-empty string")
+                    if len(question) > 1000:
+                        raise ValueError("question must be at most 1000 characters")
+                    with lock:
+                        facts = build_facts(question.strip(), conn, runs_root)
+                    # The potentially slow model call happens after releasing the DB lock.
+                    result = chat_answer(question.strip(), facts=facts)
+                    return self._json(200, result)
+                except (ValueError, AttributeError) as exc:
+                    return self._json(400, {"error": str(exc)})
+                except RuntimeError as exc:
+                    return self._json(500, {"error": str(exc)})
+            if path != "/api/review" or review is None:
                 return self._json(503, {"error": availability()["reason"]})
             try:
                 body = json.loads(raw or b"{}")
