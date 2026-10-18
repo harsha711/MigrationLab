@@ -21,7 +21,9 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
 MAX_BODY = 4096
 
 
-def make_handler(conn, lock, review: ReviewManager | None = None):
+def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None):
+    runs_root = Path(runs_root) if runs_root is not None else store.ROOT / "runs"
+
     def availability():
         return review.available() if review else {"ok": False, "reason": "controller not available"}
 
@@ -46,6 +48,10 @@ def make_handler(conn, lock, review: ReviewManager | None = None):
                 return query.get_observation(conn, p("id"))
             if path == "/api/history":
                 return {"check_name": p("check"), "rows": query.check_history(conn, p("check"))}
+            if path == "/api/batches":
+                return {"batches": query.list_batches(runs_root, conn)}
+            if path == "/api/batch":
+                return query.batch_detail(runs_root, p("id"), conn)
         raise KeyError(path)
 
     class Handler(BaseHTTPRequestHandler):
@@ -111,12 +117,14 @@ def make_handler(conn, lock, review: ReviewManager | None = None):
     return Handler
 
 
-def serve(host="127.0.0.1", port=8765, db=None) -> None:
+def serve(host="127.0.0.1", port=8765, db=None, runs_root=None) -> None:
+    """`runs_root` (default runs/) is read for runs to ingest and for brev-batch-* records."""
+    runs_root = Path(runs_root) if runs_root is not None else store.ROOT / "runs"
     conn = store.connect(db)
     lock = threading.Lock()
-    ingested = store.ingest_all(conn)
+    ingested = store.ingest_all(conn, sources=(store.ROOT / "examples", runs_root))
     review = ReviewManager(conn, lock)
-    server = ThreadingHTTPServer((host, port), make_handler(conn, lock, review))
+    server = ThreadingHTTPServer((host, port), make_handler(conn, lock, review, runs_root))
     print(f"evidence store: {db or store.DEFAULT_DB} ({len(ingested)} runs ingested)")
     avail = review.available()
     print(f"Run Review: {'available' if avail['ok'] else 'disabled: ' + avail['reason']}")

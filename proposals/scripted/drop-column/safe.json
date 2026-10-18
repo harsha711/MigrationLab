@@ -1,0 +1,36 @@
+{
+  "plan_id": "a3-safe",
+  "summary": "Remove the field from Django state only, retire the old version, then drop the column.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-keep-column-nullable",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "No schema change is needed; make sure the column accepts NULL for new-app inserts.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note DROP NOT NULL"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-drop-note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the column once no version reads it.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note"
+      ]
+    }
+  ]
+}

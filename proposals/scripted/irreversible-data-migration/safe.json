@@ -1,0 +1,24 @@
+{
+  "plan_id": "b4-safe",
+  "summary": "Deploy the reversible data migration that copies notes; check rollback.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run.",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "rollback_check",
+      "kind": "rollback_check",
+      "description": "Migrate back to the previous schema and check the old version still works."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

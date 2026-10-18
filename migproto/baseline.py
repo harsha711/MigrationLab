@@ -4,8 +4,9 @@ import re
 import subprocess
 import time
 
-from . import db, scope, seed
-from .config import PORTS, SEED_CUSTOMERS, SEED_DB, VENV_PY, WORKTREES
+from . import db, olist, scope, seed
+from .config import (OLIST_PREPARED_DIR, PORTS, SEED_CUSTOMERS, SEED_DB, SEED_EMAIL_DOMAIN,
+                     VENV_PY, WORKTREES)
 from .runlog import MANUAL, RunLog
 from .saleor_app import AppServer, manage, saleor_env
 
@@ -18,23 +19,49 @@ PYTEST_SUBSET = [
 PYTEST_VERSIONS = ["old", "new-unsafe"]
 
 
-def seed_ready() -> bool:
+def seed_ready(source: str = "synthetic", expected: int = SEED_CUSTOMERS) -> bool:
+    """The template holds exactly the requested seed: right source and customer count."""
     if not db.exists(SEED_DB):
         return False
     try:
-        return len(seed.seed_rows(SEED_DB, "note")) == SEED_CUSTOMERS
+        total, from_olist = db.query(
+            SEED_DB,
+            "SELECT count(*), count(*) FILTER (WHERE email LIKE %s) FROM account_user "
+            "WHERE email LIKE %s",
+            (f"{olist.EMAIL_PREFIX}%", f"%@{SEED_EMAIL_DOMAIN}"),
+        )[0]
     except Exception:
         return False
+    if source == "olist":
+        return total == from_olist == expected
+    return total == expected and from_olist == 0
 
 
-def build_seed(log: RunLog) -> None:
+def prepare_seed(source: str, olist_dir=None, limit: int | None = None) -> tuple[str, dict]:
+    """Seed script plus provenance. Olist data is prepared into a git-ignored JSON file."""
+    if source == "olist":
+        if not olist_dir:
+            raise RuntimeError("--seed-source olist needs --olist-dir (or MIGPROTO_OLIST_DIR)")
+        path = OLIST_PREPARED_DIR / f"customers-{limit or 'all'}.json"
+        provenance = olist.prepare(olist_dir, path, limit)
+        return olist.django_seed_script(path), provenance
+    if source != "synthetic":
+        raise ValueError(f"unknown seed source {source!r}")
+    return (seed.django_seed_script(seed.synthetic_notes()),
+            {"source": "synthetic", "customers": SEED_CUSTOMERS})
+
+
+def build_seed(log: RunLog, script: str | None = None, provenance: dict | None = None) -> None:
     log.set_step("seed")
+    if script is None:
+        script, provenance = prepare_seed("synthetic")
+    log.event("seed_source", **(provenance or {}))
     db.drop(SEED_DB)
     db.create(SEED_DB)
     steps = [
         ("migrate", ["migrate", "-v", "1"]),
         ("populatedb", ["populatedb", "--createsuperuser", "--withoutimages"]),
-        ("seed_customers", ["shell", "-c", seed.django_seed_script(seed.synthetic_notes())]),
+        ("seed_customers", ["shell", "-c", script]),
     ]
     for name, args in steps:
         t0 = time.monotonic()
@@ -109,13 +136,15 @@ def run_pytest(log: RunLog, version: str) -> bool:
                      expected={"exit": 0}, observed={"exit": proc.returncode, "counts": counts})
 
 
-def run(log: RunLog, rebuild_seed: bool = False, skip_pytest: bool = False) -> dict:
-    if rebuild_seed or not seed_ready():
-        build_seed(log)
+def run(log: RunLog, rebuild_seed: bool = False, skip_pytest: bool = False,
+        seed_source: str = "synthetic", olist_dir=None, seed_limit: int | None = None) -> dict:
+    script, provenance = prepare_seed(seed_source, olist_dir, seed_limit)
+    if rebuild_seed or not seed_ready(seed_source, provenance["customers"]):
+        build_seed(log, script, provenance)
     else:
-        log.event("seed_reused", name=SEED_DB)
+        log.event("seed_reused", name=SEED_DB, **provenance)
     ok = smoke_old(log)
     if not skip_pytest:
         for version in PYTEST_VERSIONS:
             ok &= run_pytest(log, version)
-    return {"ok": ok}
+    return {"ok": ok, "seed": {k: v for k, v in provenance.items() if k != "path"}}

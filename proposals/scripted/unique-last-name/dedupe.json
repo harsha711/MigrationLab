@@ -1,0 +1,37 @@
+{
+  "plan_id": "b2-dedupe",
+  "summary": "Rename duplicates, build the unique index concurrently, attach the constraint.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-dedupe-and-index",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Suffix duplicates, then build the index without blocking writes.",
+      "sql": [
+        "UPDATE account_user SET last_name = last_name || ' #' || id WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY last_name ORDER BY id) AS rn FROM account_user) d WHERE rn > 1)",
+        "CREATE UNIQUE INDEX CONCURRENTLY account_user_last_name_uniq ON account_user (last_name)"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-attach-constraint",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Turn the index into a constraint.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_last_name_key UNIQUE USING INDEX account_user_last_name_uniq"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "scenario": "foreign-key-orphans",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "Orphan referrer_id values make the validated foreign key fail."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "NOT VALID skips the failing scan; orphans are cleared before validation."
+    }
+  }
+}

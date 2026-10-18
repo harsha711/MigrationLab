@@ -1,0 +1,18 @@
+{
+  "plan_id": "d1-accept",
+  "summary": "Deploy as-is: the new nullable column is ignored by the old version.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration change the schema."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

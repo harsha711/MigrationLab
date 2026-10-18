@@ -1,0 +1,9 @@
+10:00:00 INFO  fixture supervisor log (finished batch)
+10:01:00 RUN   1/6 rename-note roles starting on worker 1 (~$1.00)
+10:02:00 RUN   2/6 rename-note single starting on worker 2 (~$1.01)
+10:03:00 RUN   3/6 rename-note roles starting on worker 1 (~$1.02)
+10:05:00 RUN   4/6 drop-column roles starting on worker 2 (~$1.03)
+10:06:00 RUN   1/6 rename-note roles PASS run=20260101-100100-agent-loop-llm 300.0 s, calls=4 tokens=20000 stopped=None (~$1.04)
+10:06:01 RUN   5/6 rename-note single starting on worker 1 (~$1.04)
+10:06:30 RUN   6/6 rename-note single starting on worker 1 (~$1.05)
+10:20:00 DONE  5 runs {'roles:PASS': 1}; estimated spend ~$1.50

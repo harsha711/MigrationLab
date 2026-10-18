@@ -163,11 +163,33 @@ Owner 3's work from branch `memory-ui/scoped-review` is merged through `integrat
 | v1 and controller records | Runner v1 fields (`outcome`, `check_type`, `app_version`, `schema_state`, snapshot) and Owner 2's structured claims with evidence IDs, plan lineage, review request and budgets | Unit tests: synthetic fixtures (`tests/memory/fixtures/`). By hand after the merge: scripted run `20261017-165715` ingests with all 64 checks scoped to attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve. Investigator claims show attempt unknown |
 | Compatibility matrix | Shows each case's result by writer and reader app version, per stage and attempt | `scripted-sync-failure` at `deploy_new`: every old-writer/new-reader case fails and every new-writer/old-reader case passes |
 | `memory.retrieval.prior_evidence` | Gives the controller failed, refused and errored observations from earlier agent runs of the same change. Never `examples/`, scripted runs or runs with unknown scope | Temporary run directories in tests. On the local runs it selected only the six `agent:` runs (excluding 4 fixtures, 23 scripted or manual runs, 1 run with unknown or different change). The controller does not call it yet |
-| Run Review (`migproto/ui/review.py`) | Starts one review through `agents.controller.run_review` under the execution lock and shows live events | **A fake controller and a fake lock only.** With the controller and lock merged, the UI reports Run Review as available, but no review has been started from it |
+| Run Review (`migproto/ui/review.py`) | Starts one review through `agents.controller.run_review` under the execution lock and shows live events | One end-to-end UI start: `#/review`, scripted (no model), topology `roles`, run `20261017-213756-agent-loop-scripted`, PASS in 65.2 s (64 checks; attempt 1 failed 9, attempt 2 failed 0). Unit test `tests/memory/test_review_controller.py` reaches `loop.run_review` under a real lock file with only `_run_review` stubbed. LLM mode from the UI has not been exercised |
 
 **Limits:**
 - **Unit tests use synthetic data:** real runs were checked by hand only; the unit fixtures are not replaced yet.
-- **No live review:** no review has been started from the UI.
+- **No LLM review from the UI:** the live UI exercise used scripted proposals only.
 - **No measured benefit from retrieval:** whether prior evidence improves planning has not been measured.
 - **Retrieval does not filter by model:** local stand-in runs would be given to Nemotron runs. Add a same-model filter before the controller calls it.
 - **Windows:** `migproto/lock.py` imports `fcntl`, which does not exist on Windows, and `cli.py` imports the lock at module level, so `migproto ui` does not start on Windows. A lazy import in `cli.py` would fix it; that is a shared CLI change for the runner owner (noted in `docs/team/handoff-owner3.md`).
+
+## 10. Scenario catalogue (branch `scenarios/catalogue`, not merged)
+
+The runner now reviews 14 schema changes, not just the rename. Each scenario has its own Saleor patch series, scripted plans, and expected verdicts written before the runs:
+- **Safe controls:** add a column (D1), add a table (D2), rename with `db_column` (D3), add an index concurrently (D4), lengthen a varchar (D5)
+- **Unsafe changes:** required column (A4), backfill then require (A5), drop a column (A3), raw-SQL rename (A8), shorten a column (B1), unique on duplicates (B2), foreign key over orphans (B3), irreversible data migration (B4)
+
+Plans can apply the new version's own migration (so the tool can recommend **accept as-is**) and include a rollback check.
+
+**Results:** on the Olist 10k seed (real public review text, not production data), **22 of 22** scripted plans matched their expected verdicts, and the rename results were unchanged. Two incidents occurred and were fixed: a WSL2 clock jump that expired a login token, and a bug in my refactor. Both are described in [`docs/results-scenarios.md`](docs/results-scenarios.md).
+
+**Key findings:** in three scenarios the migration ran without error but customer data was damaged, and only the runner's data checks caught it:
+- **B1:** Django's `AlterField` silently truncates 6 real reviews.
+- **B4:** an irreversible data migration empties 4,364 notes under the old app.
+- **B2:** a dedupe plan rewrites customers' last names.
+
+**Limits:**
+- Agents have not been run on the new scenarios.
+- Interleaving is sequential.
+- No timing, lock or concurrency claims.
+- Not attempted: A2, A6, A7, and group C.
+- A8 is rejected through the ORM, so the runner cannot isolate the raw-SQL path.

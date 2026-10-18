@@ -1,0 +1,54 @@
+From a949a3514887801049f24a7af5b8378eb631e5b5 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 17:33:30 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): add required
+ User.marketing_opt_in (state-only)
+
+---
+ .../migrations/0107_user_marketing_opt_in.py  | 21 +++++++++++++++++++
+ saleor/account/models.py                      |  1 +
+ 2 files changed, 22 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_user_marketing_opt_in.py
+
+diff --git a/saleor/account/migrations/0107_user_marketing_opt_in.py b/saleor/account/migrations/0107_user_marketing_opt_in.py
+new file mode 100644
+index 0000000..e761b0c
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_marketing_opt_in.py
+@@ -0,0 +1,21 @@
++# EXPERIMENT (manual, not upstream): add required User.marketing_opt_in (state-only)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.AddField(
++                    model_name="user", name="marketing_opt_in",
++                    field=models.BooleanField(default=False),
++                ),
++            ],
++            database_operations=[],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..690f48c 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -180,6 +180,7 @@ class User(
+     is_confirmed = models.BooleanField(default=True)
+     last_confirm_email_request = models.DateTimeField(null=True, blank=True)
+     note = models.TextField(null=True, blank=True)
++    marketing_opt_in = models.BooleanField(default=False)
+     date_joined = models.DateTimeField(default=timezone.now, editable=False)
+     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+     last_password_reset_request = models.DateTimeField(null=True, blank=True)
+-- 
+2.43.0
+

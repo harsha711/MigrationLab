@@ -36,3 +36,4 @@ runs/
 *.tar
 *.tar.gz
 *.zip
+migproto.lock

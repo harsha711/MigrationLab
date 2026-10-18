@@ -33,8 +33,18 @@ class RunLog:
 
     def __init__(self, command: str, root: Path = RUNS):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.dir = root / f"{stamp}-{command}"
-        self.dir.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)
+        # Created exclusively: two commands started in the same second (parallel supervisors
+        # sharing one runs/ directory) once logged into one directory. The second gets "-2".
+        for n in range(1, 100):
+            self.dir = root / (f"{stamp}-{command}" + (f"-{n}" if n > 1 else ""))
+            try:
+                self.dir.mkdir()
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise RuntimeError(f"no free run directory for {stamp}-{command}")
         self.command = command
         self.run_id = self.dir.name
         self.started = time.monotonic()

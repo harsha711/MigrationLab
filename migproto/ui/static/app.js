@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, workspaceAttempt: null, tourStep: 0, lastFocus: null };
+const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -27,7 +27,7 @@ function verdictBadge(v) {
   if (!v) return `<span class="badge">${unknown()}</span>`;
   const u = String(v).toUpperCase();
   const cls = ["PASS", "REPRODUCED"].includes(u) ? "pass"
-    : ["FAIL", "ERROR", "REFUSED"].includes(u) ? "fail" : u === "INCOMPLETE" ? "warn" : "";
+    : ["FAIL", "ERROR", "REFUSED"].includes(u) ? "fail" : "";
   return `<span class="badge ${cls}">${esc(v)}</span>`;
 }
 
@@ -80,6 +80,17 @@ function attemptPills(run, page, current) {
 }
 
 const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) === s);
+const humanize = (value) => String(value || "unknown").replace(/^case\./, "").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const reviewUnavailableReason = (reason) => {
+  const text = String(reason || "");
+  if (/fcntl|execution lock unavailable/i.test(text)) {
+    return "Live review requires Linux or macOS because the execution lock uses fcntl. Recorded replay remains available.";
+  }
+  if (/controller not available/i.test(text)) {
+    return "The live-review controller is not connected. Recorded replay remains available.";
+  }
+  return text || "Live review is not available. Recorded replay remains available.";
+};
 
 // ---------- pages ----------
 
@@ -87,10 +98,12 @@ async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
   const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
-  const checks = details.reduce((n, d) => n + (d.meta?.checks_total || 0), 0);
-  const attempts = details.reduce((n, d) => n + d.attempts.length, 0);
-  const failures = details.reduce((n, d) => n + d.attempts.reduce((x, a) => x + a.checks_failed, 0), 0);
-  const demo = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
+  const defaultRun = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
+  const demo = details.find((d) => d.run_id === state.dashboardRunId) || defaultRun;
+  state.dashboardRunId = demo?.run_id || null;
+  const finalAttempt = demo?.attempts.at(-1);
+  const firstAttempt = demo?.attempts[0];
+  const matrix = finalAttempt ? await api(`/api/matrix?run=${enc(demo.run_id)}&attempt=${enc(finalAttempt.attempt_id)}`) : {rows: [], db_checks: []};
   const rows = details.map((d) => {
     const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
     const search = `${d.run_id} ${d.meta?.verdict || ""} ${d.source_kind} ${d.meta?.model || "scripted"}`.toLowerCase();
@@ -100,13 +113,81 @@ async function pageRuns() {
       <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
       <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
   }).join("");
-  const activity = details.slice(0, 4).map((d) => `<a href="#/run/${enc(d.run_id)}" class="activity-item"><span class="activity-icon ${d.meta?.verdict === "PASS" ? "ok" : "warn"}">${d.meta?.verdict === "PASS" ? "&#10003;" : "!"}</span><span><strong>${esc(d.run_id)}</strong><small>${d.attempts.length} attempt${d.attempts.length === 1 ? "" : "s"} · ${d.meta?.checks_total || 0} checks</small></span><time>${esc(d.meta?.verdict || "recorded")}</time></a>`).join("");
-  const demoStages = demo?.attempts.at(-1)?.stages || [];
-  return `<header class="dashboard-title"><div><span class="eyebrow">REVIEW COMMAND CENTER</span><h1>Migration safety, at a glance.</h1><p>Inspect plans, replay compatibility evidence, and understand revisions from one workspace.</p></div><div class="dashboard-actions"><button class="button ghost" data-command-open aria-label="Open quick navigation">&#8984; Quick find</button>${demo ? `<a class="button primary" href="#/workspace/${enc(demo.run_id)}">Open latest review &#8594;</a>` : ""}</div></header>
-    <section class="kpi-ribbon" aria-label="Review summary"><article><span>Reviews</span><strong>${fmt(details.length)}</strong><small>recorded runs</small></article><article><span>Runner checks</span><strong>${fmt(checks)}</strong><small>executed observations</small></article><article><span>Plan attempts</span><strong>${fmt(attempts)}</strong><small>history preserved</small></article><article><span>Issues caught</span><strong>${fmt(failures)}</strong><small>before deployment</small></article></section>
-    <section class="command-grid"><article class="featured-review"><header><div><span class="eyebrow">FEATURED REVIEW</span><h2>${esc(demo?.run_id || "No recorded review")}</h2></div>${demo ? `<span class="review-outcome">Revised plan passed</span>` : ""}</header><p>${esc(demo?.attempts.at(-1)?.plans?.[0]?.body?.summary || "Open a recorded migration review to inspect its evidence.")}</p><div class="mini-journey">${demoStages.map((s, i) => `<span title="${stageTitle(s)}"><i>${i + 1}</i><b>${stageTitle(s)}</b></span>`).join("")}</div><footer><div><strong>${demo?.attempts.length || 0}</strong><small>attempts</small></div><div><strong>${demo?.meta?.checks_total || 0}</strong><small>checks</small></div><div><strong>${demo?.results?.model_call_count ?? "—"}</strong><small>model calls</small></div>${demo ? `<a href="#/workspace/${enc(demo.run_id)}">Review evidence &#8594;</a>` : ""}</footer></article>
-      <aside class="activity-panel"><header><span class="eyebrow">RECENT ACTIVITY</span><a href="#runs-table" data-scroll-runs>View all</a></header>${activity || `<p class="muted">No activity recorded.</p>`}</aside></section>
-    <section id="runs-table" class="library-panel"><header><div><span class="eyebrow">REVIEW LIBRARY</span><h2>All recorded reviews</h2></div><div class="row"><button id="compare" disabled>Compare selected</button><a class="button${controller_available ? " primary" : "-muted"}" href="#/review" title="${esc(controller_reason || "Start a live review through the controller")}">New review</a></div></header><div class="library-tools"><label class="search-field"><span>&#8981;</span><input id="run-search" type="search" placeholder="Search run, model, or verdict" aria-label="Search runs"></label><select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select><select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div><div class="table-wrap"><table><thead><tr><th scope="col"></th><th scope="col">Review</th><th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Attempts</th><th scope="col">Checks</th><th scope="col">Issues</th></tr></thead><tbody>${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}</tbody></table></div>${controller_available ? "" : `<footer><span class="status-dot"></span><p><strong>Replay mode</strong> New reviews are unavailable here: ${esc(controller_reason || "the controller is not connected")}.</p></footer>`}</section>`;
+  const processStages = [
+    "Choose review mode",
+    "AI migration review",
+    "Mock execution",
+    "Revise and Recommend"
+  ];
+  const stages = processStages.map((title, index) => `<div class="editorial-stage done"><div><span>${index + 1}</span><strong>${esc(title)}</strong></div><i>${index < processStages.length - 1 ? "→" : ""}</i></div>`).join("");
+  const paths = (matrix.columns || []).map((column) => [column, column.replaceAll("new-staged", "new").replace(" -> ", " → ")]);
+  const checks = [...new Set(matrix.rows.map((item) => item.check_name))]
+    .map((name) => [name, new Set(matrix.rows.filter((item) => item.check_name === name).map((item) => item.column)).size])
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([name]) => name);
+  const scopedResults = [...new Map(matrix.rows.map((item) => [
+    `${item.stage_id || "unknown"}|${item.check_name}|${item.column}`,
+    item
+  ])).values()];
+  const passedResults = scopedResults.filter((item) => kindOf(item) === "PASS").length;
+  const reviewResults = scopedResults.filter(isBad).length;
+  const passRate = scopedResults.length ? Math.round((passedResults / scopedResults.length) * 100) : null;
+  const crossVersionResults = scopedResults.filter((item) => {
+    const [writer, reader] = String(item.column || "").split(" -> ");
+    return writer && reader && writer !== reader;
+  });
+  const crossVersionPassed = crossVersionResults.filter((item) => kindOf(item) === "PASS").length;
+  const matrixMetrics = `<div class="matrix-metrics" aria-label="Recorded compatibility metrics">
+    <div><span>Scoped results</span><strong>${scopedResults.length}</strong><small>stage · check · path</small></div>
+    <div><span>Pass rate</span><strong>${passRate == null ? "—" : `${passRate}%`}</strong><small>${passedResults} of ${scopedResults.length} recorded</small></div>
+    <div class="${reviewResults ? "metric-alert" : "metric-ok"}"><span>Needs review</span><strong>${reviewResults}</strong><small>failed, refused, or errored</small></div>
+    <div><span>Cross-version</span><strong>${crossVersionResults.length ? `${crossVersionPassed}/${crossVersionResults.length}` : "—"}</strong><small>recorded paths passed</small></div>
+  </div>`;
+  const matrixGrid = `<div class="matrix-corner"></div>${paths.map(([, label]) => `<b>${esc(label)}</b>`).join("")}` + checks.map((checkName) => {
+    const cells = paths.map(([column]) => {
+      const candidates = matrix.rows.filter((item) => item.column === column && item.check_name === checkName);
+      const item = candidates.find(isBad) || candidates[0];
+      if (!item) return `<span class="editorial-matrix-cell unknown" title="No recorded observation for this exact scope">—</span>`;
+      const status = isBad(item) ? "fail" : kindOf(item) === "PASS" ? "pass" : "unknown";
+      const mark = status === "pass" ? "✓" : status === "fail" ? "×" : "—";
+      return `<button class="editorial-matrix-cell ${status}" data-obs="${esc(item.observation_id)}" title="${esc(item.check_name)}"><b>${mark}</b></button>`;
+    }).join("");
+    return `<strong title="${esc(checkName)}">${humanize(checkName)}</strong>${cells}`;
+  }).join("");
+  const evidenceItems = (matrix.db_checks || []).filter((item) => item.stage_id && item.stage_id !== "S0");
+  const evidence = (finalAttempt?.stages || []).map((stage) => {
+    const item = evidenceItems.find((candidate) => candidate.stage_id === stage.stage_id);
+    const detail = item ? `${esc(item.check_name)} · recorded observation` : esc(stage.description || stage.phase || stage.stage_kind || "Recorded stage");
+    const content = `<i class="${item && isBad(item) ? "bad" : "ok"}">${item && isBad(item) ? "×" : "✓"}</i><span><strong>${stageTitle(stage)}</strong><small>${detail}</small></span><b>›</b>`;
+    return item ? `<a class="editorial-evidence-item" href="#/obs/${enc(item.observation_id)}">${content}</a>` : `<div class="editorial-evidence-item">${content}</div>`;
+  }).join("");
+  const attempts = (demo?.attempts || []).map((attempt) => {
+    const passed = attempt.ok === 1;
+    const label = attempt.status || (passed ? "PASS" : attempt.ok === 0 ? "FAIL" : "RECORDED");
+    const detail = attempt.halted || `${attempt.checks_total} recorded checks · ${attempt.checks_failed} failed`;
+    return `<article class="${passed ? "passed" : "blocked"}"><i>${passed ? "✓" : "×"}</i><div><small>${humanize(short(attempt.attempt_id))} · ${esc(label)}</small><strong>${esc(detail)}</strong></div><a href="#/run/${enc(demo.run_id)}/matrix/${esc(short(attempt.attempt_id))}">Recorded evidence</a></article>`;
+  }).join(`<span>→</span>`);
+  const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
+  const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
+  const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
+  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
+    <section class="editorial-layout">
+      <main class="editorial-main">
+        <section class="stage-panel"><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
+        <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
+        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span class="recorded-view">Recorded checks</span></header>${matrixMetrics}<div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">Metrics cover recorded final-attempt application paths only. — means this exact check and application path was not recorded; missing scope remains unknown.</p></section>
+      </main>
+      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><h3 class="rail-section-title">Stage evidence</h3><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
+    </section>
+    <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
+      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div></section>
+    <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
+      <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
+      <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
+    <div class="card table-wrap runs-card"><table>
+      <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
+      ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
+    </table></div>
+    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(reviewUnavailableReason(controller_reason))}</span></div>`}`;
 }
 
 function replaySteps(run) {
@@ -161,11 +242,6 @@ async function pageDemo(id) {
 
 const stageTitle = (stage) => {
   const id = (stage?.stage_id || stage?.id || "Recorded stage").replaceAll("-", " ");
-  if (/expand|add column|trigger/.test(id)) return "Add compatible field";
-  if (/backfill/.test(id)) return "Backfill existing data";
-  if (/deploy new/.test(id)) return "Deploy new application";
-  if (/retire old/.test(id)) return "Retire old application";
-  if (/contract|drop old|remove old/.test(id)) return "Remove legacy field";
   return id.replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
@@ -178,10 +254,9 @@ function matrixStatus(rows, stageId, side) {
     : {kind: "pass", label: "Pass", obs: scoped[0].observation_id};
 }
 
-function workspaceMark(result, stage, side) {
+function workspaceMark(result) {
   const icon = result.kind === "pass" ? "&#10003;" : result.kind === "fail" ? "&#10005;" : "&#183;";
-  const spoken = `${side} application: ${result.label} at ${stageTitle(stage)}`;
-  const attrs = result.obs ? ` data-obs="${esc(result.obs)}" title="Open TestEvidence" aria-label="${esc(spoken)}. Open evidence."` : ` disabled title="No scoped observation recorded" aria-label="${esc(spoken)}"`;
+  const attrs = result.obs ? ` data-obs="${esc(result.obs)}" title="Open TestEvidence"` : " disabled title=\"No scoped observation recorded\"";
   return `<button class="compat-result ${result.kind}"${attrs}><span>${icon}</span>${esc(result.label)}</button>`;
 }
 
@@ -199,8 +274,7 @@ async function pageWorkspace(id) {
   const matrices = await Promise.all(run.attempts.map((a) => api(`/api/matrix?run=${enc(id)}&attempt=${enc(a.attempt_id)}`)));
   const first = run.attempts[0];
   const revised = run.attempts[1] || first;
-  const selectedAttempt = run.attempts.find((a) => short(a.attempt_id) === state.workspaceAttempt) || revised;
-  state.workspaceAttempt = short(selectedAttempt?.attempt_id);
+  const selectedAttempt = revised;
   const matrix = matrices[run.attempts.indexOf(selectedAttempt)] || {rows: [], db_checks: []};
   const stages = selectedAttempt?.stages || [];
   const selectedId = state.workspaceStage || stages[0]?.stage_id;
@@ -214,11 +288,11 @@ async function pageWorkspace(id) {
   const planner = revised?.claims?.find((c) => c.role === "planner");
   const tester = first?.claims?.find((c) => c.role === "tester-report");
   const calls = run.results?.model_calls || [];
-  const timeline = stages.map((s, i) => `<button class="workspace-stage ${s.stage_id === selectedId ? "active" : ""}" data-stage-select="${esc(s.stage_id)}"${s.stage_id === selectedId ? ' aria-current="step"' : ""}><span>${i + 1}</span><div><strong>${stageTitle(s)}</strong><small>${esc(s.description || s.stage_kind || "")}</small></div><i>${s.phase ? esc(s.phase) : esc(s.stage_kind)}</i></button>`).join("");
+  const timeline = stages.map((s, i) => `<button class="workspace-stage ${s.stage_id === selectedId ? "active" : ""}" data-stage-select="${esc(s.stage_id)}"><span>${i + 1}</span><div><strong>${stageTitle(s)}</strong><small>${esc(s.description || s.stage_kind || "")}</small></div><i>${s.phase ? esc(s.phase) : esc(s.stage_kind)}</i></button>`).join("");
   const rows = stages.map((s) => {
     const old = matrixStatus(matrix.rows, s.stage_id, "old");
     const newer = matrixStatus(matrix.rows, s.stage_id, "new-staged");
-    return `<tr data-workspace-row data-stage="${esc(s.stage_id)}" data-status="${old.kind === "fail" || newer.kind === "fail" ? "FAIL" : old.kind === "pass" || newer.kind === "pass" ? "PASS" : "UNKNOWN"}" data-version="${esc((matrix.rows.filter((r) => r.stage_id === s.stage_id).flatMap((r) => r.path || [])).join(" "))}"><th scope="row"><strong>${stageTitle(s)}</strong><small><code>${esc(s.stage_id)}</code> · ${esc(s.phase || s.stage_kind)}</small></th><td>${workspaceMark(old, s, "Old")}</td><td>${workspaceMark(newer, s, "New")}</td></tr>`;
+    return `<tr data-workspace-row data-stage="${esc(s.stage_id)}" data-status="${old.kind === "fail" || newer.kind === "fail" ? "FAIL" : old.kind === "pass" || newer.kind === "pass" ? "PASS" : "UNKNOWN"}" data-version="${esc((matrix.rows.filter((r) => r.stage_id === s.stage_id).flatMap((r) => r.path || [])).join(" "))}"><td><strong>${stageTitle(s)}</strong><small>${esc(s.phase || s.stage_kind)}</small></td><td>${workspaceMark(old)}</td><td>${workspaceMark(newer)}</td></tr>`;
   }).join("");
   const trace = [
     ["01", "Investigator", investigator?.text || "No structured investigator conclusion recorded.", run.claims_without_attempt?.length || 0],
@@ -226,86 +300,68 @@ async function pageWorkspace(id) {
     ["03", "Tester", tester?.text || first?.halted || "No tester conclusion recorded.", calls.filter((c) => c.role?.startsWith("tester")).length],
     ["04", "Feedback", feedback?.text || "No revision feedback recorded.", run.attempts.length - 1]
   ].map(([n, role, text, count]) => `<article class="trace-step"><b>${n}</b><div><span>${role}</span><p>${esc(text)}</p><small>${role === "Feedback" ? `${count} revision round(s)` : `${count} recorded ${role === "Investigator" ? "finding(s)" : "model call(s)"}`}</small></div></article>`).join("");
-  return `<div class="mode-banner"><span>&#9655;</span><div><strong>Recorded migration review</strong><small>You are replaying saved evidence. Nothing on this screen changes a database.</small></div></div><div class="workspace-head"><div><span class="eyebrow">INTERACTIVE COMPATIBILITY REVIEW</span><h1>${esc(id)}</h1><p>Follow one clear story: the first plan was blocked, agent feedback revised it, and the runner verified the safer ordering.</p></div><div class="workspace-actions"><button class="button ghost" data-open-tour>&#10024; Guide me</button><button class="button primary" data-reveal-revision>Compare plans</button><div class="final-outcome"><span>&#10003;</span><p><small>FINAL OUTCOME</small><strong>${run.attempts.length > 1 ? "Revised plan passed" : esc(run.meta?.verdict || "Unknown")}</strong><em>${run.attempts.length - 1} unsafe attempt preserved</em></p></div></div></div>
-    <section class="journey-strip"><div><span>Migration journey</span><strong>Step ${selectedIndex + 1} of ${stages.length}</strong></div><div class="journey-track"><i style="width:${stages.length ? ((selectedIndex + 1) / stages.length) * 100 : 0}%"></i>${stages.map((s, i) => `<button class="${i <= selectedIndex ? "visited" : ""}" data-stage-select="${esc(s.stage_id)}" title="${stageTitle(s)}" aria-label="Step ${i + 1}: ${stageTitle(s)}"${i === selectedIndex ? ' aria-current="step"' : ""}><span>${i + 1}</span></button>`).join("")}</div><div class="journey-now"><span class="stage-pulse"></span><p><small>YOU ARE HERE</small><strong>${stageTitle(selectedStage)}</strong></p><button data-next-stage>${selectedIndex === stages.length - 1 ? "Restart journey" : "Next stage"} &#8594;</button></div></section>
+  return `<div class="workspace-head"><div><span class="eyebrow">INTERACTIVE COMPATIBILITY REVIEW</span><h1>${esc(id)}</h1><p>Explore recorded plan decisions and runner evidence. Selecting a result opens its scoped TestEvidence.</p></div><div class="workspace-actions"><button class="button ghost" data-open-tour>&#10024; Guide me</button><button class="button primary" data-reveal-revision>Reveal safe plan</button><div class="row">${verdictBadge(run.meta?.verdict)} ${typeBadges(run)}</div></div></div>
+    <section class="journey-strip"><div><span>Migration journey</span><strong>Step ${selectedIndex + 1} of ${stages.length}</strong></div><div class="journey-track"><i style="width:${stages.length ? ((selectedIndex + 1) / stages.length) * 100 : 0}%"></i>${stages.map((s, i) => `<button class="${i <= selectedIndex ? "visited" : ""}" data-stage-select="${esc(s.stage_id)}" title="${stageTitle(s)}"><span>${i + 1}</span></button>`).join("")}</div><div class="journey-now"><span class="stage-pulse"></span><p><small>YOU ARE HERE</small><strong>${stageTitle(selectedStage)}</strong></p><button data-next-stage>${selectedIndex === stages.length - 1 ? "Restart journey" : "Next stage"} &#8594;</button></div></section>
     <section class="workspace-layout">
-      <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}
-        <div class="execution-controls"><span class="eyebrow">REPLAY CONTROLS</span><button data-reset-workspace>Restart replay</button><button data-replay-selected>Replay selected step</button><button data-focus-checks>View recorded checks</button><small>Replay controls only. No database is changed.</small></div></aside>
-      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><div class="attempt-switch" aria-label="Select plan attempt">${run.attempts.map((a) => `<button data-attempt-select="${esc(short(a.attempt_id))}" class="${a === selectedAttempt ? "active" : ""}" aria-pressed="${a === selectedAttempt}">${esc(short(a.attempt_id))}<span class="${a.ok === 1 ? "ok" : "bad"}">${a.ok === 1 ? "Passed" : "Blocked"}</span></button>`).join("")}</div></div>
-        <div class="scope-filters"><select id="workspace-version" aria-label="Filter by application version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage" aria-label="Filter by migration stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status" aria-label="Filter by test status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select><p class="scope-unavailable">Additional scope not recorded in this v0 fixture: schema fingerprint and snapshot ID.</p></div>
-        <div class="compat-table" id="recorded-checks" tabindex="-1"><table><caption>Old and new application compatibility by migration stage. Select a result to inspect its evidence.</caption><thead><tr><th scope="col">Migration stage</th><th scope="col">Old application</th><th scope="col">New application</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}</aside>
+      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><span class="source-pill"><i></i> Recorded evidence</span></div>
+        <div class="scope-filters"><select id="workspace-version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select></div>
+        <div class="compat-table"><table><thead><tr><th>Migration stage</th><th>Old application</th><th>New application</th></tr></thead><tbody>${rows}</tbody></table></div>
         <div class="scope-callout"><b>Why scope matters</b><p>A pass for the new application does not prove the old application can read or write the same schema. Every cell is derived from observations scoped to an application path and migration stage.</p></div>
       </main>
-      <aside class="workspace-panel insight-panel"><div class="panel-heading"><div><span class="eyebrow">RECOMMENDATION</span><h2>What should I do?</h2></div><span class="counter fail">Action required</span></div><article class="recommendation"><span>FINAL RECOMMENDATION</span><h3>Do not deploy an immediate rename</h3><dl><dt>Reason</dt><dd>${esc(first?.halted || "The recorded first plan failed a mandatory runner check.")}</dd><dt>Evidence</dt><dd>${failed ? `<button data-obs="${esc(failed.observation_id)}">${esc(failed.observation_id)}</button>` : unknown("not recorded")}</dd><dt>Safe alternative</dt><dd>Additive field + dual-write + backfill + retire old app before contract.</dd></dl></article></aside>
+      <aside class="workspace-panel insight-panel"><div class="panel-heading"><div><span class="eyebrow">AGENT TRACE</span><h2>Reasoning handoffs</h2></div><span class="counter">${run.attempts.length - 1} revision</span></div><div class="trace-list">${trace}</div>
+        <article class="recommendation"><span>FINAL RECOMMENDATION</span><h3>Do not deploy an immediate rename</h3><dl><dt>Reason</dt><dd>${esc(first?.halted || "The recorded first plan failed a mandatory runner check.")}</dd><dt>Evidence</dt><dd>${failed ? `<button data-obs="${esc(failed.observation_id)}">${esc(failed.observation_id)}</button>` : unknown("not recorded")}</dd><dt>Safe alternative</dt><dd>Additive field + dual-write + backfill + retire old app before contract.</dd></dl></article></aside>
     </section>
-    <details class="progressive-card revision-section" id="revision-story"><summary><span><small>PLAN COMPARISON</small><strong>Why did the first attempt fail?</strong></span><em>Compare failed and revised plans &#8594;</em></summary><div class="progressive-body"><div class="revision-grid">${planColumn(first, "Attempt 1 · blocked", "unsafe")}<div class="revision-evidence"><span>RUNNER FAILURE</span><strong>${esc(failed?.check_name || first?.failed?.[0] || "Recorded failure")}</strong><p>${esc(first?.halted || "The first plan did not complete.")}</p>${failed ? `<button class="button ghost" data-obs="${esc(failed.observation_id)}">Inspect evidence</button>` : ""}<hr><span>AGENT FEEDBACK</span><p>${esc(feedback?.text || "No revision note recorded.")}</p></div>${planColumn(revised, "Attempt 2 · passed", "safe")}</div></div></details>
-    <details class="progressive-card"><summary><span><small>AGENT TRACE</small><strong>How did the agents reach the revision?</strong></span><em>${run.attempts.length - 1} revision round &#8594;</em></summary><div class="progressive-body"><div class="trace-list">${trace}</div></div></details>
-    <details class="progressive-card"><summary><span><small>EVALUATION</small><strong>View recorded model and test measurements</strong></span><em>Open metrics &#8594;</em></summary><div class="progressive-body evaluation-strip"><div><span class="eyebrow">RECORDED RESULTS</span><h2>Measured, not inferred</h2></div><div><span>Plan attempts</span><strong>${run.attempts.length}</strong></div><div><span>Final test-pass rate</span><strong>${revised?.checks_total ? Math.round((revised.checks_total - revised.checks_failed) / revised.checks_total * 100) : 0}%</strong></div><div><span>Token usage</span><strong>${fmt(run.results?.total_tokens)}</strong></div><div><span>Model latency</span><strong>${nr(run.results?.model_seconds)}s</strong></div><p>Single-agent vs. multi-agent safe-plan rate is not shown because no equivalent baseline has been recorded.</p></div></details>`;
+    <section class="revision-section" id="revision-story"><div class="panel-heading"><div><span class="eyebrow">FAILED PLAN &#8594; REVISED PLAN</span><h2>The failure stays visible</h2></div><span class="source-pill">${run.attempts.length} attempts</span></div><div class="revision-grid">${planColumn(first, "Attempt 1 · unsafe ordering", "unsafe")}<div class="revision-evidence"><span>RUNNER FAILURE</span><strong>${esc(failed?.check_name || first?.failed?.[0] || "Recorded failure")}</strong><p>${esc(first?.halted || "The first plan did not complete.")}</p>${failed ? `<button class="button ghost" data-obs="${esc(failed.observation_id)}">Inspect evidence</button>` : ""}<hr><span>AGENT FEEDBACK</span><p>${esc(feedback?.text || "No revision note recorded.")}</p></div>${planColumn(revised, "Attempt 2 · revised ordering", "safe")}</div></section>
+    <section class="evaluation-strip"><div><span class="eyebrow">EVALUATION RESULTS</span><h2>Recorded measurements</h2></div><div><span>Plan attempts</span><strong>${run.attempts.length}</strong></div><div><span>Final test-pass rate</span><strong>${revised?.checks_total ? Math.round((revised.checks_total - revised.checks_failed) / revised.checks_total * 100) : 0}%</strong></div><div><span>Token usage</span><strong>${fmt(run.results?.total_tokens)}</strong></div><div><span>Model latency</span><strong>${nr(run.results?.model_seconds)}s</strong></div><p>Single-agent vs. multi-agent safe-plan rate is not shown because no equivalent baseline has been recorded.</p></section>`;
 }
 
 async function pageReview() {
   crumbs([["Runs", "#/"], ["Run Review"]]);
-  const s = await api("/api/review/status");
-  const cur = s.current;
-  const running = cur && cur.state === "running";
-  return `<h1>Run Review</h1>
-    <p class="muted">Starts one review through the agent controller, which calls the runner.
-      The UI itself never runs SQL or starts servers.</p>
-    ${cur ? `<div class="card">Last review: <a href="#/review/${enc(cur.run_id)}">${esc(cur.run_id)}</a>
-      ${running ? `<span class="badge">running</span>` : verdictBadge(cur.verdict)}
-      ${cur.error ? `<span class="muted">${esc(cur.error)}</span>` : ""}</div>` : ""}
-    <div class="card">
-      ${s.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(s.reason)}</p>`}
-      <div class="row">
-        <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option>
-          <option value="llm">llm (configured endpoint)</option></select></label>
-        <label>Topology <select id="rv-topology"><option value="roles">roles</option>
-          <option value="single">single agent</option></select></label>
-        <button id="rv-start" ${s.ok && !running ? "" : "disabled"}>Start</button>
-      </div>
-      <p id="rv-msg" class="muted"></p>
-    </div>`;
+  const status = await api("/api/review/status");
+  const current = status.current;
+  const running = current && current.state === "running";
+  const unavailable = status.ok ? "" : reviewUnavailableReason(status.reason);
+  return `<h1>Run Review</h1><p class="muted">Starts one review through the controller, which calls the runner. The UI never runs SQL or starts Saleor directly.</p>
+    ${current ? `<div class="card">Last review: <a href="#/review/${enc(current.run_id)}">${esc(current.run_id)}</a> ${running ? `<span class="badge">running</span>` : verdictBadge(current.verdict)} ${current.error ? `<span class="muted">${esc(current.error)}</span>` : ""}</div>` : ""}
+    <div class="card">${status.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(unavailable)}</p>`}<div class="row">
+      <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option><option value="llm">llm (configured endpoint)</option></select></label>
+      <label>Topology <select id="rv-topology"><option value="roles">roles</option><option value="single">single agent</option></select></label>
+      <button id="rv-start" ${status.ok && !running ? "" : "disabled"}>Start</button></div><p id="rv-msg" class="muted"></p></div>`;
 }
 
 async function startReview() {
   const msg = $("#rv-msg");
   msg.textContent = "Starting…";
-  const r = await fetch("/api/review", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: $("#rv-mode").value, topology: $("#rv-topology").value }),
-  });
-  const body = await r.json();
-  if (r.status === 202) { location.hash = `#/review/${enc(body.run_id)}`; return; }
+  const response = await fetch("/api/review", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: $("#rv-mode").value, topology: $("#rv-topology").value})});
+  const body = await response.json();
+  if (response.status === 202) { location.hash = `#/review/${enc(body.run_id)}`; return; }
   msg.textContent = body.error + (body.owner ? ` (${JSON.stringify(body.owner)})` : "");
 }
 
 async function pageReviewLive(runId) {
   crumbs([["Runs", "#/"], ["Run Review", "#/review"], [runId]]);
   setTimeout(() => pollReview(runId, 0), 0);
-  return `<div class="row"><h1>${esc(runId)}</h1><span id="rv-state" class="badge">running</span></div>
-    <p class="muted">Live events from <code>runs/${esc(runId)}/events.jsonl</code>.</p>
-    <div class="card table-wrap"><table id="rv-events"><tr><th>t (s)</th><th>kind</th><th>name</th><th>status</th></tr></table></div>`;
+  return `<div class="row"><h1>${esc(runId)}</h1><span id="rv-state" class="badge">running</span></div><p class="muted">Live events from the controller-owned run log.</p><div class="card table-wrap"><table id="rv-events"><tr><th>t (s)</th><th>kind</th><th>name</th><th>status</th></tr></table></div>`;
 }
 
 async function pollReview(runId, after) {
-  if (location.hash !== `#/review/${enc(runId)}`) return;   // user navigated away
+  if (location.hash !== `#/review/${enc(runId)}`) return;
   let data;
   try { data = await api(`/api/review/events?run=${enc(runId)}&after=${after}`); }
   catch (err) { $("#rv-state").textContent = "error"; return; }
   const table = $("#rv-events");
   if (!table) return;
-  for (const e of data.events) {
+  for (const event of data.events) {
     const row = table.insertRow();
-    const k = e.kind === "check" ? kindOf(e) : "";
-    row.innerHTML = `<td>${e.t == null ? "" : Number(e.t).toFixed(1)}</td><td>${esc(e.kind)}</td>
-      <td>${esc(e.name || e.stage || e.msg || "")}</td><td>${k ? verdictBadge(e.outcome || e.status) : ""}</td>`;
+    const outcome = event.kind === "check" ? kindOf(event) : "";
+    row.innerHTML = `<td>${event.t == null ? "" : Number(event.t).toFixed(1)}</td><td>${esc(event.kind)}</td><td>${esc(event.name || event.stage || event.msg || "")}</td><td>${outcome ? verdictBadge(event.outcome || event.status) : ""}</td>`;
   }
   if (!data.done) { setTimeout(() => pollReview(runId, data.next), 1500); return; }
-  const s = await api("/api/review/status");
-  const done = s.current && s.current.run_id === runId ? s.current : null;
+  const status = await api("/api/review/status");
+  const done = status.current && status.current.run_id === runId ? status.current : null;
   runCache.delete(runId);
-  $("#rv-state").outerHTML = `${verdictBadge(done ? done.verdict : "done")}
-    <a href="#/run/${enc(runId)}">Open run</a>`;
+  $("#rv-state").outerHTML = `${verdictBadge(done ? done.verdict : "done")} <a href="#/run/${enc(runId)}">Open run</a>`;
 }
 
 async function pageOverview(id) {
@@ -347,9 +403,7 @@ async function pagePlan(id, s) {
   if (!plan) body = `<p>${unknown("no plan recorded for this attempt")}</p>`;
   else {
     const b = plan.body || {};
-    body = `<p><code>${esc(plan.plan_id)}</code>${plan.parent_plan_id
-        ? ` <span class="muted">revises <code>${esc(plan.parent_plan_id)}</code></span>` : ""}${
-        plan.solution_origin ? ` <span class="badge">${esc(plan.solution_origin)}</span>` : ""}</p>
+    body = `<p><code>${esc(plan.plan_id)}</code></p>
       ${b.summary ? `<p>${esc(b.summary)}</p>` : ""}
       ${b.revision_notes ? `<div class="card"><strong>Revision notes</strong><p>${esc(b.revision_notes)}</p></div>` : ""}
       <h2>Stages</h2>
@@ -402,24 +456,13 @@ async function pageMatrix(id, s) {
 async function pageAgents(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], ["Agents"]]);
-  const link = (e) => e.resolved
-    ? `<a class="chip ${esc(kindOf(e))}" href="#/obs/${enc(e.observation_id)}">${MARKS[kindOf(e)] || ""} ${esc(e.check_name)}</a>`
-    : `<span class="chip SKIP" title="${esc(e.observation_id)}">not found: ${esc(e.observation_id.split("/").pop())}</span>`;
-  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}
-    ${c.structured
-      ? `<div class="chips" style="margin:4px 0 6px">${c.evidence.length ? c.evidence.map(link).join("") : `<span class="muted">no evidence cited</span>`}</div>`
-      : ""}</li>`;
+  const claim = (c) => `<li><strong>${esc(c.role)}</strong> <span class="muted">${esc(c.kind || "")}</span>: ${esc(c.text)}</li>`;
   const perAttempt = run.attempts.filter((a) => a.claims.length).map((a) =>
     `<h2>${esc(short(a.attempt_id))}</h2><ul>${a.claims.map(claim).join("")}</ul>`).join("");
   const inv = run.claims_without_attempt;
-  const allClaims = [...run.attempts.flatMap((a) => a.claims), ...inv];
-  const hasV0 = allClaims.some((c) => !c.structured);
-  const retrieved = (run.retrievals || []).flatMap((r) => r.observation_ids || []);
+  const any = perAttempt || inv.length;
   return `${runHeader(run, "agents")}
-    ${!allClaims.length ? `<p class="muted">No agent output in this run.</p>`
-      : hasV0 ? `<p class="muted">Claims without evidence chips are unstructured v0 text from agent outputs.</p>` : ""}
-    ${retrieved.length ? `<div class="card"><strong>Prior evidence given to the planner</strong>
-      <div class="chips" style="margin-top:6px">${retrieved.map((id) => `<a class="chip SKIP" href="#/obs/${enc(id)}">${esc(id)}</a>`).join("")}</div></div>` : ""}
+    ${any ? `<p class="muted">Unstructured v0 claims: free text from agent outputs, no cited evidence IDs.</p>` : `<p class="muted">No agent output in this run.</p>`}
     ${perAttempt}
     ${inv.length ? `<details><summary>Investigator findings (${inv.length}, before any attempt)</summary><ul>${inv.map(claim).join("")}</ul></details>` : ""}`;
 }
@@ -430,22 +473,13 @@ async function pageMetrics(id) {
   const r = run.results || {};
   const calls = (r.model_calls || []).map((c) =>
     `<tr><td>${val(c.role)}</td><td>${nr(c.seconds)}</td><td>${nr(c.total_tokens)}</td></tr>`).join("");
-  const b = r.budget || {};
-  const used = (value, limit) => value == null ? nr(null) : limit == null ? esc(value) : `${esc(value)} / ${esc(limit)}`;
-  const sampling = Object.entries(r.sampling || {}).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join(", ");
-  const serving = Object.entries(r.serving || {}).filter(([, v]) => v != null).map(([k, v]) => `${k}=${v}`).join(", ");
   return `${runHeader(run, "metrics")}
     <div class="card">${kv([
       ["model", nr(r.model)], ["endpoint", nr(r.base_url)], ["checkpoint", nr(r.checkpoint_revision)],
-      ["serving backend (as recorded)", nr(r.serving_backend)], ["serving details", nr(serving)],
-      ["hardware", nr(r.hardware)], ["topology", nr(r.topology)], ["sampling", nr(sampling)],
-      ["wall time (s)", nr(r.elapsed_s)],
-      ["model calls (used / limit)", used(r.model_call_count, b.max_model_calls)],
+      ["serving backend", nr(r.serving_backend)], ["hardware", nr(r.hardware)],
+      ["wall time (s)", nr(r.elapsed_s)], ["model calls", nr(r.model_call_count)],
       ["model time (s)", nr(r.model_seconds)],
       ["tokens (in / out / total)", r.total_tokens == null ? nr(null) : `${r.prompt_tokens} / ${r.completion_tokens} / ${r.total_tokens}`],
-      ["token budget (used / limit)", used(r.total_tokens, b.max_total_tokens)],
-      ["valid proposal rate", nr(r.valid_proposal_rate)],
-      ["stopped because", nr(r.reason)],
       ["contract", val(run.meta?.contract_version)],
       ["recorded run id", nr(r.recorded_run_id)],
       ["database snapshot", r.database_snapshot_ids ? r.database_snapshot_ids.map((s) => `<code>${esc(s)}</code>`).join(", ") : nr(null)],
@@ -515,17 +549,166 @@ async function pageCompare(a, b) {
     <div class="compare">${await col(a)}${await col(b)}</div>`;
 }
 
+// ---------- Brev batches (supervisor records, read-only) ----------
+
+const BATCH_VERDICTS = ["PASS", "FAIL", "INCOMPLETE", "ERROR"];
+const BATCH_POLL_MS = 20000;
+const SCORE_LABEL = "scored against manual expected verdicts (never shown to agents)";
+const scoreHead = `<th scope="col" class="score-head">matches expected<small>${SCORE_LABEL}</small></th>`;
+
+const duration = (s) => {
+  if (s == null) return unknown("not recorded");
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h} h ${m} min` : m ? `${m} min ${sec} s` : `${sec} s`;
+};
+const clock = (iso) => iso ? esc(iso.replace("T", " ")) : unknown("not recorded");
+
+function scoreCell(r) {
+  if (r.matches_expected == null) return `<span class="muted" title="No manual expected verdict for this scenario, or an infrastructure failure">not scored</span>`;
+  const t = r.expected ? `expected ${r.expected.verdict} with ${r.expected.recommendations.join(" or ")}; runner: ${r.verdict ?? "?"} with ${r.runner_recommendation ?? "?"}` : "";
+  return `<span class="badge ${r.matches_expected ? "pass" : "fail"}" title="${esc(t)}">${r.matches_expected ? "yes" : "no"}</span>`;
+}
+
+function batchCounts(counts) {
+  if (!counts.length) return `<p class="muted">No model results in this batch.</p>`;
+  const other = (c) => Object.entries(c.other).map(([k, n]) => `${n} ${esc(k)}`).join(", ");
+  return `<div class="table-wrap"><table class="batch-counts">
+    <tr><th scope="col">scenario</th><th scope="col">topology</th>${BATCH_VERDICTS.map((v) => `<th scope="col" class="count">${v}</th>`).join("")}<th scope="col">other</th>${scoreHead}</tr>
+    ${counts.map((c) => `<tr><th scope="row">${val(c.scenario, "not recorded")}</th><td>${val(c.topology, "not recorded")}</td>
+      ${BATCH_VERDICTS.map((v) => `<td class="count ${c[v] ? v.toLowerCase() : "zero"}">${c[v]}</td>`).join("")}<td>${other(c) || ""}</td>
+      <td class="count">${c.scored ? `${c.matched} of ${c.scored}` : `<span class="muted">not scored</span>`}</td></tr>`).join("")}
+  </table></div>`;
+}
+
+function inProgressTable(b) {
+  if (!b.in_progress.length) return "";
+  const running = b.in_progress.filter((r) => r.status === "running");
+  const lost = b.in_progress.filter((r) => r.status !== "running");
+  const rows = (list) => list.map((r) => `<tr>
+    <td>${val(r.n, "?")}</td><td>${val(r.scenario, "not recorded")}</td><td>${val(r.topology, "not recorded")}</td>
+    <td>${val(r.worker, "not recorded")}</td><td>${clock(r.started_at)}</td>
+    <td>${r.status === "running" ? `<span class="badge running">running</span> ${duration(r.elapsed_seconds)}` : `<span class="badge warn">no runs.jsonl row</span>`}</td></tr>`).join("");
+  const table = (list) => `<div class="card table-wrap"><table class="batch-runs">
+    <tr><th>#</th><th>scenario</th><th>topology</th><th>worker</th><th>started (supervisor clock)</th><th>status</th></tr>${rows(list)}</table></div>`;
+  return `${running.length ? `<h2>Running now</h2><p class="muted">Started in supervisor.log, no runs.jsonl row yet. No verdict exists until the run finishes; these are not counted.</p>${table(running)}` : ""}
+    ${lost.length ? `<h2>Started without a result</h2><p class="muted">supervisor.log says these started and the batch logged DONE, but runs.jsonl has no readable row for them.</p>${table(lost)}` : ""}`;
+}
+
+function batchStatusBadge(b) {
+  if (b.status === "running") return `<span class="badge running" title="supervisor.log has no DONE line yet; last line ${esc(b.log_last_line_at || "?")}">running${b.planned_runs ? ` · ${b.run_count} of ${b.planned_runs} recorded` : ""}${b.running_count ? ` · ${b.running_count} in progress` : ""}</span>`;
+  if (b.status === "finished") return `<span class="badge">finished (DONE logged)</span>`;
+  return `<span class="badge">${unknown("no supervisor.log")}</span>`;
+}
+
+const pollNote = (b) => `<p class="muted poll-note">Read at ${clock(b.checked_at)}${b.status === "running" && b.log_last_line_at ? `; last supervisor.log line ${clock(b.log_last_line_at)}` : ""}. Refreshes every ${BATCH_POLL_MS / 1000} s.</p>`;
+
+function attemptChain(attempts) {
+  if (!attempts) return unknown("not recorded");
+  if (!attempts.length) return `<span class="muted">no attempt executed</span>`;
+  return `<span class="att-chain">${attempts.map((a) => {
+    const bad = (a.fail || 0) + (a.refused || 0) + (a.error || 0);
+    const title = `${a.attempt}: ${a.fail ?? "?"} fail · ${a.refused ?? "?"} refused · ${a.error ?? "?"} error · ${a.pass ?? "?"} pass · ${a.skipped ?? "?"} skipped`;
+    const extra = `${a.refused ? `<small>+${a.refused}⊘</small>` : ""}${a.error ? `<small>+${a.error}!</small>` : ""}`;
+    return `<span class="att-chip ${bad ? "bad" : "ok"}" title="${esc(title)}">${val(a.fail, "?")}${extra}</span>`;
+  }).join(`<i>→</i>`)}</span>`;
+}
+
+function recommendationCell(r) {
+  const agrees = r.recommendation_agrees === true ? `<span class="badge pass">agree</span>`
+    : r.recommendation_agrees === false ? `<span class="badge fail">disagree</span>` : "";
+  return `<span class="rec">agent: ${val(r.recommendation, r.recommendation_recorded ? "none" : "not recorded")}</span><span class="rec">runner: ${val(r.runner_recommendation, "not recorded")}</span>${agrees}`;
+}
+
+function runDirWarning(r) {
+  const parts = [];
+  if (r.summary_conflict?.length) parts.push(`summary.json disagrees with runs.jsonl on ${r.summary_conflict.join(", ")}: it was written by another run, so only the runs.jsonl row is shown`);
+  if (r.shared_with?.length) parts.push(`run directory also named by ${r.shared_with.map((o) => `${o.batch_id} run ${o.n ?? "?"}`).join(", ")} (same-second run ID); its files may mix both runs`);
+  return parts.length ? `<small class="cell-sub run-dir-warning" title="${esc(parts.join(". "))}">&#9888; ${esc(parts.join(". "))}. Not scored.</small>` : "";
+}
+
+function batchRunRows(runs) {
+  return runs.map((r) => {
+    const suspect = r.summary_conflict?.length || r.shared_with?.length;
+    return `<tr>
+    <td>${val(r.n, "?")}</td>
+    <td>${r.run_id ? `<code>${esc(r.run_id)}</code>` : unknown("no run directory")}${r.has_summary || r.summary_conflict?.length ? "" : `<small class="cell-sub">no summary.json</small>`}${runDirWarning(r)}</td>
+    <td>${val(r.scenario, "not recorded")}</td><td>${val(r.topology, "not recorded")}</td>
+    <td>${verdictBadge(r.verdict)}${r.stopped ? `<small class="cell-sub" title="${esc(r.stopped)}">${esc(String(r.stopped).slice(0, 60))}</small>` : ""}</td>
+    <td>${recommendationCell(r)}</td>
+    <td class="attempts">${attemptChain(r.attempts)}</td>
+    <td>${scoreCell(r)}</td>
+    <td class="num">${r.total_tokens == null ? nr(null) : fmt(r.total_tokens)}</td>
+    <td class="num">${nr(r.model_calls)}</td>
+    <td class="num">${r.wall_seconds == null ? nr(null) : Number(r.wall_seconds).toFixed(0)}</td>
+    <td class="links">${suspect ? `<span class="muted" title="The run directory holds another run's files">no link (shared directory)</span>`
+      : `${r.in_store ? `<a href="#/run/${enc(r.run_id)}">Replay</a>` : `<span class="muted" title="Run is not in the evidence store">not ingested</span>`}
+      ${r.trace_url ? `<a href="${esc(r.trace_url)}" target="_blank" rel="noopener noreferrer" title="Langfuse trace (viewer only; summary.json and events.jsonl are the evidence)">Trace &#8599;</a>` : `<span class="muted">no trace</span>`}`}</td>
+  </tr>`;
+  }).join("");
+}
+
+function batchRunsTable(runs) {
+  return `<div class="card table-wrap"><table class="batch-runs">
+    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th>${scoreHead}<th>tokens</th><th>calls</th><th>wall (s)</th><th>links</th></tr>
+    ${batchRunRows(runs)}</table></div>`;
+}
+
+const BATCH_LEGEND = `<p class="legend">Failed checks per attempt, a1 → last: the number counts failed assertions; refusals (⊘) and execution errors (!) are counted separately. Every attempt stays visible, including failed ones. Hover a chip for full outcome counts.</p>`;
+
+function batchBadges(b) {
+  const s = b.scenario_score;
+  return `${batchStatusBadge(b)} ${b.models.map((m) => `<span class="badge">model: ${esc(m)}</span>`).join(" ") || `<span class="badge">${unknown("model not recorded")}</span>`}
+    <span class="badge">${b.model_result_count} model result${b.model_result_count === 1 ? "" : "s"}</span>
+    ${s.scored ? `<span class="badge" title="${SCORE_LABEL}">matches expected: ${s.matched} of ${s.scored} scored</span>` : ""}
+    ${b.infrastructure_failures.length ? `<span class="badge warn">${b.infrastructure_failures.length} infrastructure failure${b.infrastructure_failures.length === 1 ? "" : "s"}, not counted</span>` : ""}
+    ${b.stop_file ? `<span class="badge">STOP set</span>` : ""}
+    ${b.unreadable_lines ? `<span class="badge warn">${b.unreadable_lines} unreadable runs.jsonl line(s)</span>` : ""}`;
+}
+
+const configNote = (b) => b.config_note ? `<pre class="batch-note">${esc(b.config_note)}</pre>` : `<p>${unknown("no CONFIG-NOTE")}</p>`;
+
+async function pageBatches() {
+  crumbs([["Runs", "#/"], ["Batches"]]);
+  const { batches } = await api("/api/batches");
+  const withRuns = batches.filter((b) => b.has_runs_jsonl || b.in_progress.length);
+  const empty = batches.filter((b) => !b.has_runs_jsonl && !b.in_progress.length);
+  const cards = withRuns.map((b) => `<section class="card batch-card">
+    <div class="row spread"><h2><a href="#/batches/${enc(b.batch_id)}">${esc(b.batch_id)}</a></h2><a class="button ghost" href="#/batches/${enc(b.batch_id)}">Open batch &#8594;</a></div>
+    <div class="row">${batchBadges(b)}</div>
+    ${configNote(b)}
+    ${batchCounts(b.counts)}
+  </section>`).join("");
+  return `<header class="editorial-head"><div><h1>Brev batches</h1><p>Supervisor records from <code>runs/brev-batch-*</code>, newest first. Counts are per scenario and topology. Runs named in a batch's INFRA-NOTE are infrastructure failures and are never counted as model results. A pass applies only to the conditions that batch tested. A batch is finished only when its supervisor.log has a DONE line.</p></div></header>
+    ${batches.length ? pollNote(batches[0]) : ""}
+    ${cards || `<p class="muted">No batch with runs.jsonl under runs/.</p>`}
+    ${empty.length ? `<details class="card"><summary>${empty.length} batch director${empty.length === 1 ? "y" : "ies"} without runs.jsonl (no review completed)</summary><ul>${empty.map((b) => `<li><code>${esc(b.batch_id)}</code>${b.config_note ? `: ${esc(b.config_note)}` : ""}</li>`).join("")}</ul></details>` : ""}`;
+}
+
+async function pageBatch(id) {
+  crumbs([["Runs", "#/"], ["Batches", "#/batches"], [id]]);
+  const b = await api(`/api/batch?id=${enc(id)}`);
+  const modelRuns = b.runs.filter((r) => !r.infrastructure_failure);
+  return `<div class="row"><h1>${esc(b.batch_id)}</h1></div>
+    <div class="row">${batchBadges(b)}</div>${pollNote(b)}
+    <h2>Configuration</h2>${configNote(b)}
+    <h2>Model results by scenario and topology</h2>${batchCounts(b.counts)}
+    ${inProgressTable(b)}
+    <h2>Finished runs</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}
+    ${b.infrastructure_failures.length ? `<section class="infra-section"><h2>Infrastructure failures</h2>
+      <p class="muted">Listed in INFRA-NOTE. These are not model results and are excluded from the counts above.</p>
+      <pre class="batch-note">${esc(b.infra_note)}</pre>${batchRunsTable(b.infrastructure_failures)}</section>`
+      : b.infra_note ? `<h2>INFRA-NOTE</h2><pre class="batch-note">${esc(b.infra_note)}</pre><p class="muted">No run in runs.jsonl matches a run named in this note.</p>` : ""}`;
+}
+
 async function openEvidence(oid) {
-  state.lastFocus = document.activeElement;
   const drawer = $("#evidence-drawer");
   const backdrop = $("#drawer-backdrop");
   const content = $("#drawer-content");
   content.innerHTML = `<div class="drawer-loading">Loading recorded evidence...</div>`;
   drawer.classList.add("open"); drawer.setAttribute("aria-hidden", "false"); backdrop.hidden = false;
-  $("#drawer-close").focus();
   try {
     const o = await api(`/api/observation?id=${enc(oid)}`);
-    const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s, i) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${i + 1}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
+    const steps = o.steps.length ? `<div class="drawer-steps">${o.steps.map((s) => `<div class="drawer-step ${s.ok === 1 ? "ok" : s.ok === 0 ? "bad" : ""}"><span>${s.ok === 1 ? "✓" : s.ok === 0 ? "×" : "—"}</span><div><strong>${val(s.app_version)} / ${val(s.op)}</strong><small>${s.error ? esc(s.error) : s.value == null ? "No value recorded" : esc(s.value)}</small></div></div>`).join("")}</div>` : `<p class="muted">Database- or runner-level check; no app steps recorded.</p>`;
     const expected = o.expectation ?? o.raw?.expected ?? o.raw?.msg;
     const observed = o.outcome ?? o.error ?? o.raw?.observed ?? (o.raw?.old_alive !== undefined ? `old_alive=${o.raw.old_alive}` : null);
     const versions = o.app_versions?.length ? o.app_versions.join(", ") : null;
@@ -542,7 +725,6 @@ function closeDrawer() {
   $("#evidence-drawer").classList.remove("open");
   $("#evidence-drawer").setAttribute("aria-hidden", "true");
   $("#drawer-backdrop").hidden = true;
-  state.lastFocus?.focus?.();
 }
 
 function showToast(message, tone = "info") {
@@ -554,10 +736,9 @@ function showToast(message, tone = "info") {
 }
 
 function openTour() {
-  state.lastFocus = document.activeElement;
   const tour = $("#welcome-tour");
   tour.hidden = false;
-  requestAnimationFrame(() => { tour.classList.add("open"); tour.querySelector("[data-tour-start]")?.focus(); });
+  requestAnimationFrame(() => tour.classList.add("open"));
 }
 
 function closeTour() {
@@ -565,34 +746,6 @@ function closeTour() {
   tour.classList.remove("open");
   localStorage.setItem("migrationlab-tour-seen", "1");
   setTimeout(() => { tour.hidden = true; }, 220);
-  state.lastFocus?.focus?.();
-}
-
-async function openCommand() {
-  state.lastFocus = document.activeElement;
-  const palette = $("#command-palette");
-  palette.hidden = false;
-  requestAnimationFrame(() => { palette.classList.add("open"); $("#command-search").value = ""; $("#command-search").focus(); });
-  try {
-    const {runs} = await api("/api/runs");
-    $("#command-results").innerHTML = `<a href="#/"><span>Dashboard</span><kbd>Home</kbd></a><a href="#/workspace/live-ordering-revision"><span>Interactive review workspace</span><kbd>Review</kbd></a><a href="#/demo/live-ordering-revision"><span>Guided replay</span><kbd>Demo</kbd></a>${runs.map((r) => `<a href="#/run/${enc(r.run_id)}"><span>${esc(r.run_id)}</span><kbd>${esc(r.verdict || "run")}</kbd></a>`).join("")}`;
-  } catch (_) { /* Static navigation remains available if the index cannot load. */ }
-}
-
-function closeCommand() {
-  const palette = $("#command-palette");
-  palette.classList.remove("open");
-  setTimeout(() => { palette.hidden = true; }, 160);
-  state.lastFocus?.focus?.();
-}
-
-function trapFocus(container, ev) {
-  if (ev.key !== "Tab") return;
-  const items = [...container.querySelectorAll('a[href],button:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')];
-  if (!items.length) return;
-  const first = items[0], last = items[items.length - 1];
-  if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
-  else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
 }
 
 function celebrate(target) {
@@ -626,9 +779,38 @@ function rerenderReplay(delta = 0, exact = null) {
 
 // ---------- router ----------
 
+const routeParts = () => location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+const batchPage = (parts) => parts[0] === "batches" && parts.length <= 2
+  ? (parts.length === 1 ? pageBatches : () => pageBatch(parts[1])) : null;
+
+// Batches pages re-read the supervisor files every BATCH_POLL_MS (GET only), keeping scroll
+// position and open <details>.
+function scheduleBatchPoll() {
+  clearTimeout(state.batchPoll);
+  if (!batchPage(routeParts())) return;
+  state.batchPoll = setTimeout(async () => {
+    const hash = location.hash;
+    const page = batchPage(routeParts());
+    if (!page) return;
+    if (document.hidden) { scheduleBatchPoll(); return; }
+    try {
+      const html = await page();
+      if (location.hash !== hash) return;
+      const view = $("#view");
+      const open = [...view.querySelectorAll("details")].map((d) => d.open);
+      const y = window.scrollY;
+      view.innerHTML = html;
+      view.querySelectorAll("details").forEach((d, i) => { if (open[i]) d.open = true; });
+      window.scrollTo(0, y);
+    } catch (err) { /* keep the last rendering; the next poll retries */ }
+    scheduleBatchPoll();
+  }, BATCH_POLL_MS);
+}
+
 async function route() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  const parts = routeParts();
   const view = $("#view");
+  clearTimeout(state.batchPoll);
   try {
     let html;
     if (!parts.length) html = await pageRuns();
@@ -641,14 +823,14 @@ async function route() {
     else if (parts[0] === "run" && parts[2] === "metrics") html = await pageMetrics(parts[1]);
     else if (parts[0] === "obs") html = await pageEvidence(parts.slice(1).join("/"));
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
+    else if (parts[0] === "batches" && parts.length === 1) html = await pageBatches();
+    else if (parts[0] === "batches" && parts.length === 2) html = await pageBatch(parts[1]);
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
-    document.querySelectorAll("[data-nav]").forEach((link) => link.classList.remove("active"));
-    const navKey = parts[0] === "workspace" ? "workspace" : parts[0] === "compare" ? "compare" : parts[0] === "demo" ? "demo" : "runs";
-    document.querySelector(`[data-nav="${navKey}"]`)?.classList.add("active");
     window.scrollTo(0, 0);
+    scheduleBatchPoll();
     if (parts[0] === "workspace" && !localStorage.getItem("migrationlab-tour-seen")) requestAnimationFrame(openTour);
   } catch (err) {
     view.innerHTML = `<div class="card">Failed to load: ${esc(err.message)}</div>`;
@@ -656,10 +838,6 @@ async function route() {
 }
 
 document.addEventListener("click", (ev) => {
-  if (ev.target.closest("[data-command-open]")) { openCommand(); return; }
-  if (ev.target.id === "command-palette" || ev.target.closest("#command-results a")) { closeCommand(); return; }
-  const attemptSelect = ev.target.closest("[data-attempt-select]");
-  if (attemptSelect) { state.workspaceAttempt = attemptSelect.dataset.attemptSelect; state.workspaceStage = null; route(); showToast(`Showing ${state.workspaceAttempt} evidence.`); return; }
   if (ev.target.closest("[data-open-tour]")) { openTour(); return; }
   if (ev.target.closest("[data-tour-close]")) { closeTour(); return; }
   if (ev.target.closest("[data-tour-start]")) {
@@ -676,7 +854,6 @@ document.addEventListener("click", (ev) => {
   }
   if (ev.target.closest("[data-reveal-revision]")) {
     const target = $("#revision-story");
-    if (target) target.open = true;
     target?.scrollIntoView({behavior: "smooth", block: "center"});
     if (target) { target.classList.add("revealed"); celebrate(target); }
     showToast("The safe plan keeps the failed attempt visible.", "success");
@@ -684,9 +861,6 @@ document.addEventListener("click", (ev) => {
   }
   const stageSelect = ev.target.closest("[data-stage-select]");
   if (stageSelect) { state.workspaceStage = stageSelect.dataset.stageSelect; route(); showToast(`Selected: ${stageSelect.title || "migration stage"}`); return; }
-  if (ev.target.closest("[data-reset-workspace]")) { state.workspaceStage = null; route(); showToast("Replay state reset. No database was changed."); return; }
-  if (ev.target.closest("[data-replay-selected]")) { const row = document.querySelector(`[data-workspace-row][data-stage="${CSS.escape(state.workspaceStage || "")}"]`); row?.scrollIntoView({behavior: "smooth", block: "center"}); row?.classList.add("spotlight"); setTimeout(() => row?.classList.remove("spotlight"), 1200); showToast("Showing recorded results for the selected step."); return; }
-  if (ev.target.closest("[data-focus-checks]")) { $("#recorded-checks")?.focus(); $("#recorded-checks")?.scrollIntoView({behavior: "smooth", block: "center"}); showToast("Choose a scoped result to inspect its evidence."); return; }
   if (ev.target.closest("[data-scroll-runs]")) {
     document.querySelector("#runs-table")?.scrollIntoView({behavior: "smooth", block: "start"});
     return;
@@ -707,14 +881,19 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("#theme-toggle")) {
     const root = document.documentElement;
     root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
-    root.setAttribute("data-bs-theme", root.dataset.theme);
-    localStorage.setItem("migrationlab-theme", root.dataset.theme); return;
+    localStorage.setItem("migrationlab-theme", root.dataset.theme);
+    syncThemeToggle(); return;
   }
   if (ev.target.closest("a, input, button, summary")) return;
   const row = ev.target.closest("[data-href]");
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (ev.target.id === "dashboard-run") {
+    state.dashboardRunId = ev.target.value;
+    route();
+    return;
+  }
   if (["workspace-version", "workspace-stage", "workspace-status"].includes(ev.target.id)) {
     const version = $("#workspace-version")?.value || "";
     const stage = $("#workspace-stage")?.value || "";
@@ -734,29 +913,9 @@ document.addEventListener("change", (ev) => {
   btn.disabled = picked.length !== 2;
   btn.onclick = () => { location.hash = `#/compare/${enc(picked[0])}/${enc(picked[1])}`; };
 });
-document.addEventListener("input", (ev) => {
-  if (ev.target.id === "run-search") filterRuns();
-  if (ev.target.id === "command-search") {
-    const q = ev.target.value.toLowerCase();
-    document.querySelectorAll("#command-results a").forEach((item) => { item.hidden = !item.textContent.toLowerCase().includes(q); });
-  }
-});
+document.addEventListener("input", (ev) => { if (ev.target.id === "run-search") filterRuns(); });
 document.addEventListener("keydown", (ev) => {
-  const tour = $("#welcome-tour");
-  const drawer = $("#evidence-drawer");
-  const command = $("#command-palette");
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") { ev.preventDefault(); command.hidden ? openCommand() : closeCommand(); return; }
-  if (!command.hidden && ["ArrowDown", "ArrowUp"].includes(ev.key)) {
-    ev.preventDefault();
-    const items = [...command.querySelectorAll("#command-results a:not([hidden])")];
-    const current = items.indexOf(document.activeElement);
-    const index = ev.key === "ArrowDown" ? Math.min(items.length - 1, current + 1) : Math.max(0, current < 0 ? items.length - 1 : current - 1);
-    items[index]?.focus(); return;
-  }
-  if (!tour.hidden) trapFocus(tour, ev);
-  else if (!command.hidden) trapFocus(command, ev);
-  else if (drawer.classList.contains("open")) trapFocus(drawer, ev);
-  if (ev.key === "Escape") { if (!tour.hidden) closeTour(); else if (!command.hidden) closeCommand(); else if (drawer.classList.contains("open")) closeDrawer(); }
+  if (ev.key === "Escape") closeDrawer();
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowRight") rerenderReplay(1);
   if (location.hash.startsWith("#/demo/") && ev.key === "ArrowLeft") rerenderReplay(-1);
   if (location.hash.startsWith("#/workspace/") && ["ArrowRight", "ArrowLeft"].includes(ev.key) && !ev.target.matches("input,select,textarea")) {
@@ -768,6 +927,14 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 window.addEventListener("hashchange", route);
-document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "dark";
-document.documentElement.setAttribute("data-bs-theme", document.documentElement.dataset.theme);
+function syncThemeToggle() {
+  const button = document.querySelector("#theme-toggle");
+  if (!button) return;
+  const dark = document.documentElement.dataset.theme === "dark";
+  button.textContent = dark ? "☀" : "☾";
+  button.setAttribute("aria-label", dark ? "Use light theme" : "Use dark theme");
+  button.title = dark ? "Use light theme" : "Use dark theme";
+}
+document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "light";
+syncThemeToggle();
 route();

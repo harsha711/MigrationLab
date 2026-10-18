@@ -1,0 +1,12 @@
+{
+  "scenario": "add-optional-column",
+  "provenance": "manual",
+  "note": "Expected runner verdicts. Never shown to evaluated agents.",
+  "plans": {
+    "accept.json": {
+      "verdict": "PASS",
+      "recommendation": "accept_as_is",
+      "why": "Adding a NULL-allowed column changes nothing the old app reads or writes."
+    }
+  }
+}

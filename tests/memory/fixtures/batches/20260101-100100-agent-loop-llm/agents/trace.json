@@ -1,0 +1,8 @@
+{
+  "provider": "langfuse",
+  "trace_id": "fixture-trace",
+  "session_id": "20260101-100100-agent-loop-llm",
+  "environment": "fixture",
+  "url": "https://langfuse.example/project/p/traces/fixture-trace",
+  "note": "viewer only; events.jsonl and summary.json are the evidence record"
+}

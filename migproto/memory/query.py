@@ -11,9 +11,26 @@ query fixture runs (pass `source_kind="local_run"`).
 """
 
 import json
+import re
 import sqlite3
+from datetime import datetime, timedelta
+from pathlib import Path
 
 APP_ORDER = ["old", "new-staged", "new-unsafe"]
+BATCH_PREFIX = "brev-batch-"
+BATCH_VERDICTS = ("PASS", "FAIL", "INCOMPLETE", "ERROR")
+# Answer labels for scoring finished batches in the UI. Evaluation side only: nothing an agent
+# calls (memory.retrieval, the controller) may use expected_target or this path.
+EXPECTED_VERDICTS = Path(__file__).resolve().parents[2] / "proposals" / "manual" / "scenarios"
+_BATCH_ID = re.compile(r"brev-batch-[\w.-]+")
+_RUN_ID = re.compile(r"\w[\w.-]*")  # one path component, never "." or ".."
+_SCENARIO_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
+# Run stamps in INFRA-NOTE: "20261017-192959" or, after a full one, the short form "-193746".
+_INFRA_STAMP = re.compile(r"(?<!\d)(\d{8})?-(\d{6})(?!\d)")
+# supervisor.log: "21:04:16 RUN   9/10 <scenario> <topology> starting on worker 4 (~$12.82)".
+# Older batches log "RUN   1/2 roles starting (~$2.07)" (no scenario, no worker).
+_LOG_LINE = re.compile(r"(\d\d):(\d\d):(\d\d) +([A-Z]+)\b(.*)")
+_LOG_START = re.compile(r"\s+(\d+)/(\d+) +(.+?) +starting(?: on worker (\d+))?\b")
 
 
 def _obj(value):
@@ -244,3 +261,333 @@ def results_panel(conn, run_id) -> dict:
         "start_states": meta.get("start_states") or [],
         "gym": None,  # NeMo Gym results not connected (gym/results/ does not exist)
     }
+
+
+# ---- Brev batches: read-only views of runs/brev-batch-*/ and their runs' files ----
+#
+# Batches are read from disk, not from the store: runs.jsonl, CONFIG-NOTE and INFRA-NOTE are
+# supervisor records, not runner observations. Nothing here writes files or store rows.
+# The only answer labels read are EXPECTED_VERDICTS, by expected_target, to score finished runs.
+# Scripted plans are never read.
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _read_json(path: Path):
+    text = _read_text(path)
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        return None
+
+
+def _read_jsonl(path: Path) -> tuple[list[dict], int]:
+    """Records and the number of unreadable lines (a batch still running may end mid-line)."""
+    records, bad = [], 0
+    for line in (_read_text(path) or "").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+        else:
+            bad += 1
+    return records, bad
+
+
+def infra_run_stamps(note: str | None, default_date: str | None = None) -> set[str]:
+    """Run stamps (YYYYMMDD-HHMMSS) named in an INFRA-NOTE.
+
+    A short "-HHMMSS" takes the date of the previous full stamp, else `default_date`.
+    Batch directory names ("brev-batch-...") are not runs and are skipped.
+    """
+    stamps, date = set(), default_date
+    for m in _INFRA_STAMP.finditer(note or ""):
+        if (note or "")[max(0, m.start() - len(BATCH_PREFIX)):m.start()] == BATCH_PREFIX:
+            continue
+        date = m.group(1) or date
+        if date:
+            stamps.add(f"{date}-{m.group(2)}")
+    return stamps
+
+
+def _is_infra(run_id, stamps) -> bool:
+    return bool(run_id) and any(run_id == s or run_id.startswith(s + "-") for s in stamps)
+
+
+def _attempt_outcomes(summary: dict) -> list[dict] | None:
+    """v1 outcome counts per attempt, every attempt kept in order; None when not recorded.
+
+    A recorded but empty `outcome_counts` means no attempt executed and returns [].
+    """
+    counts = summary.get("outcome_counts")
+    if not isinstance(counts, dict):
+        return None
+
+    def number(key):
+        m = re.search(r"/a(\d+)$", key)
+        return int(m.group(1)) if m else 10 ** 6
+
+    return [{"attempt": key.rsplit("/", 1)[-1],
+             **{k: (c or {}).get(k) for k in ("pass", "fail", "refused", "error", "skipped")}}
+            for key, c in sorted(counts.items(), key=lambda kv: number(kv[0]))]
+
+
+def _first(*values):
+    return next((v for v in values if v is not None), None)
+
+
+def expected_target(scenario, expected_root=EXPECTED_VERDICTS) -> dict | None:
+    """The best outcome the manual file lists for a scenario; None when there is no file.
+
+    Same rule as target() in scripts/brev/score_scenarios.py (not on this branch yet;
+    deduplicate once it is): PASS with any listed PASS recommendation when a safe plan exists,
+    else FAIL/reject.
+    """
+    if not isinstance(scenario, str) or not _SCENARIO_ID.fullmatch(scenario):
+        return None
+    data = _read_json(Path(expected_root) / f"{scenario}.json")
+    plans = data.get("plans") if isinstance(data, dict) else None
+    if not isinstance(plans, dict) or not plans:
+        return None
+    passing = sorted({p["recommendation"] for p in plans.values() if isinstance(p, dict)
+                      and p.get("verdict") == "PASS" and isinstance(p.get("recommendation"), str)})
+    if passing:
+        return {"verdict": "PASS", "recommendations": passing}
+    return {"verdict": "FAIL", "recommendations": ["reject"]}
+
+
+def _matches(target: dict | None, summary: dict):
+    """score_scenarios.py's match: the runner's verdict and recommendation for the final plan."""
+    if target is None:
+        return None
+    return (summary.get("verdict") == target["verdict"]
+            and summary.get("runner_recommendation") in target["recommendations"])
+
+
+def supervisor_progress(path: Path, batch_date: str | None = None) -> dict | None:
+    """Runs the supervisor started and whether it logged DONE; None without supervisor.log.
+
+    Log times are HH:MM:SS (local time of the supervisor). The date comes from the batch name
+    and advances by one day when the time goes back by more than 12 hours (midnight).
+    """
+    text = _read_text(Path(path) / "supervisor.log")
+    if text is None:
+        return None
+    try:
+        day = datetime.strptime(batch_date, "%Y%m%d") if batch_date else None
+    except ValueError:
+        day = None
+    started, done, planned, last, prev = {}, False, None, None, None
+    for line in text.splitlines():
+        m = _LOG_LINE.match(line)
+        if not m:
+            continue
+        t = timedelta(hours=int(m.group(1)), minutes=int(m.group(2)), seconds=int(m.group(3)))
+        if prev is not None and prev - t > timedelta(hours=12) and day is not None:
+            day += timedelta(days=1)
+        prev = t
+        at = day + t if day is not None else None
+        last = at
+        if m.group(4) == "DONE":
+            done = True
+        elif m.group(4) == "RUN" and (s := _LOG_START.match(m.group(5))):
+            words = s.group(3).split()
+            started[int(s.group(1))] = {
+                "n": int(s.group(1)), "scenario": " ".join(words[:-1]) or None,
+                "topology": words[-1], "worker": int(s.group(4)) if s.group(4) else None,
+                "started_at": at}
+            planned = int(s.group(2))
+    return {"finished": done, "started": started, "planned": planned, "last_line_at": last}
+
+
+def _iso(at):
+    return at.isoformat(timespec="seconds") if at else None
+
+
+def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str],
+               target_of, shared: list[dict]) -> dict:
+    run_id = rec.get("run_id") if isinstance(rec.get("run_id"), str) else None
+    run_dir = runs_root / run_id if run_id and _RUN_ID.fullmatch(run_id) else None
+    summary = _read_json(run_dir / "summary.json") if run_dir else None
+    s = summary if isinstance(summary, dict) else {}
+    # Two runs started in the same second share a run directory; the later summary.json
+    # replaces the earlier one. A summary that contradicts the supervisor's row is not this run's.
+    conflict = [k for k in ("scenario", "topology") if rec.get(k) and s.get(k) and rec[k] != s[k]]
+    if rec.get("verdict") in BATCH_VERDICTS and s.get("verdict") not in (None, rec["verdict"]):
+        conflict.append("verdict")
+    if conflict:
+        s = {}
+    totals = s.get("agent_totals") or {}
+    trace = _read_json(run_dir / "agents" / "trace.json") if run_dir and not conflict else None
+    url = trace.get("url") if isinstance(trace, dict) else None
+    if not (isinstance(url, str) and url.startswith(("https://", "http://"))):
+        url = None
+    scenario = _first(rec.get("scenario"), s.get("scenario"))
+    infra = _is_infra(run_id, stamps)
+    target = None if infra else target_of(scenario)
+    return {
+        "status": "finished",
+        "n": rec.get("n"),
+        "run_id": run_id,
+        "scenario": scenario,
+        "topology": _first(s.get("topology"), rec.get("topology")),
+        "verdict": _first(s.get("verdict"), rec.get("verdict")),
+        "verdict_source": "summary.json" if s.get("verdict") else "runs.jsonl",
+        "recommendation": s.get("recommendation"),
+        "recommendation_recorded": "recommendation" in s,  # absent (older runs) = unknown
+        "runner_recommendation": s.get("runner_recommendation"),
+        "recommendation_agrees": s.get("recommendation_agrees"),
+        "attempts": _attempt_outcomes(s),
+        "total_tokens": _first(totals.get("total_tokens"), rec.get("total_tokens")),
+        "model_calls": _first(totals.get("model_calls"), rec.get("model_calls")),
+        "wall_seconds": _first(totals.get("wall_seconds"), s.get("elapsed_s"), rec.get("seconds")),
+        "stopped": _first(totals.get("exhausted_reason"), s.get("reason"), rec.get("reason")),
+        "model": s.get("model"),
+        "has_summary": bool(s),
+        "in_store": run_id in stored,
+        "trace_url": url,
+        "infrastructure_failure": infra,
+        "summary_conflict": conflict,
+        "shared_with": shared,
+        "expected": target,
+        "matches_expected": None if conflict or shared else _matches(target, s),
+    }
+
+
+def _stored_run_ids(conn) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT run_id FROM runs")} if conn is not None else set()
+
+
+def _in_progress(progress: dict | None, runs: list[dict], now: datetime) -> list[dict]:
+    """Runs the log says started but runs.jsonl has no row for.
+
+    "running" while the batch has no DONE line; after DONE they are "no_result" (the
+    supervisor ended without recording them).
+    """
+    if not progress:
+        return []
+    recorded = {r["n"] for r in runs if isinstance(r["n"], int)}
+    out = []
+    for n, s in sorted(progress["started"].items()):
+        if n in recorded:
+            continue
+        at = s["started_at"]
+        out.append({**s, "started_at": _iso(at),
+                    "status": "no_result" if progress["finished"] else "running",
+                    "elapsed_seconds": None if progress["finished"] or at is None
+                    else max(0, round((now - at).total_seconds()))})
+    return out
+
+
+def _run_id_rows(runs_root: Path) -> dict[str, list[dict]]:
+    """Every runs.jsonl row naming each run ID, across all batches under runs_root."""
+    rows = {}
+    for p in _batch_dirs(runs_root):
+        for rec in _read_jsonl(p / "runs.jsonl")[0]:
+            if isinstance(rec.get("run_id"), str):
+                rows.setdefault(rec["run_id"], []).append({"batch_id": p.name, "n": rec.get("n")})
+    return rows
+
+
+def _batch(path: Path, runs_root: Path, stored: set[str], now: datetime,
+           expected_root, run_rows: dict[str, list[dict]]) -> dict:
+    batch_id = path.name
+    infra_note = _read_text(path / "INFRA-NOTE")
+    m = re.match(r"brev-batch-(\d{8})-", batch_id)
+    date = m.group(1) if m else None
+    stamps = infra_run_stamps(infra_note, date)
+    targets = {}
+
+    def target_of(scenario):
+        if scenario not in targets:
+            targets[scenario] = expected_target(scenario, expected_root)
+        return targets[scenario]
+
+    def shared(rec):
+        me = {"batch_id": batch_id, "n": rec.get("n")}
+        return [o for o in run_rows.get(rec.get("run_id"), []) if o != me]
+
+    records, bad = _read_jsonl(path / "runs.jsonl")
+    runs = sorted((_batch_run(r, runs_root, stamps, stored, target_of,
+                              shared(r) if isinstance(r.get("run_id"), str) else [])
+                   for r in records),
+                  key=lambda r: (r["n"] if isinstance(r["n"], int) else 10 ** 6, r["run_id"] or ""))
+    progress = supervisor_progress(path, date)
+    in_progress = _in_progress(progress, runs, now)
+    cells = {}
+    for r in runs:
+        if r["infrastructure_failure"]:
+            continue
+        cell = cells.setdefault((r["scenario"], r["topology"]), {
+            "scenario": r["scenario"], "topology": r["topology"],
+            **{v: 0 for v in BATCH_VERDICTS}, "other": {}, "matched": 0, "scored": 0})
+        verdict = str(r["verdict"]).upper() if r["verdict"] else "not recorded"
+        if verdict in BATCH_VERDICTS:
+            cell[verdict] += 1
+        else:
+            cell["other"][verdict] = cell["other"].get(verdict, 0) + 1
+        if r["matches_expected"] is not None:
+            cell["scored"] += 1
+            cell["matched"] += r["matches_expected"]
+    counts = sorted(cells.values(), key=lambda c: (c["scenario"] is None, c["scenario"] or "",
+                                                   c["topology"] or ""))
+    return {
+        "batch_id": batch_id,
+        # "finished" only on a DONE line; "unknown" without supervisor.log.
+        "status": ("unknown" if progress is None
+                   else "finished" if progress["finished"] else "running"),
+        "planned_runs": progress["planned"] if progress else None,
+        "log_last_line_at": _iso(progress["last_line_at"]) if progress else None,
+        "checked_at": _iso(now),
+        "in_progress": in_progress,
+        "running_count": sum(r["status"] == "running" for r in in_progress),
+        "scenario_score": {"matched": sum(c["matched"] for c in counts),
+                           "scored": sum(c["scored"] for c in counts)},
+        "config_note": _read_text(path / "CONFIG-NOTE"),
+        "infra_note": infra_note,
+        "has_runs_jsonl": (path / "runs.jsonl").is_file(),
+        "unreadable_lines": bad,
+        "stop_file": (path / "STOP").exists(),
+        "models": sorted({r["model"] for r in runs if r["model"]}),
+        "run_count": len(runs),
+        "model_result_count": sum(not r["infrastructure_failure"] for r in runs),
+        "counts": counts,
+        "infrastructure_failures": [r for r in runs if r["infrastructure_failure"]],
+        "runs": runs,
+    }
+
+
+def _batch_dirs(runs_root: Path) -> list[Path]:
+    if not runs_root.is_dir():
+        return []
+    return sorted((p for p in runs_root.glob(BATCH_PREFIX + "*")
+                   if p.is_dir() and _BATCH_ID.fullmatch(p.name)),
+                  key=lambda p: p.name, reverse=True)
+
+
+def list_batches(runs_root, conn=None, *, now=None,
+                 expected_root=EXPECTED_VERDICTS) -> list[dict]:
+    """Every batch under runs_root, newest first, with counts but without the run list."""
+    runs_root, stored, now = Path(runs_root), _stored_run_ids(conn), now or datetime.now()
+    run_rows = _run_id_rows(runs_root)
+    return [{k: v for k, v in _batch(p, runs_root, stored, now, expected_root, run_rows).items()
+             if k != "runs"}
+            for p in _batch_dirs(runs_root)]
+
+
+def batch_detail(runs_root, batch_id, conn=None, *, now=None,
+                 expected_root=EXPECTED_VERDICTS) -> dict | None:
+    if not isinstance(batch_id, str) or not _BATCH_ID.fullmatch(batch_id):
+        return None
+    path = Path(runs_root) / batch_id
+    if not path.is_dir():
+        return None
+    return _batch(path, Path(runs_root), _stored_run_ids(conn), now or datetime.now(),
+                  expected_root, _run_id_rows(Path(runs_root)))

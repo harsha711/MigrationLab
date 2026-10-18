@@ -63,15 +63,26 @@ def ensure_worktrees(log: RunLog) -> None:
     if not WORKTREES["old"].exists():
         sh(log, ["git", "worktree", "add", "-q", "--detach", str(WORKTREES["old"]), "pinned"],
            cwd=SALEOR_CLONE)
-    for version, branch in BRANCHES.items():
+    from . import scenarios  # registers scenario variant worktrees in WORKTREES
+
+    branches = dict(BRANCHES)
+    for version in scenarios.variant_versions():
+        branches.setdefault(version, f"exp/{scenarios.file_safe(version)}")
+    for version, branch in branches.items():
         path = WORKTREES[version]
         if path.exists():
             continue
-        sh(log, ["git", "worktree", "add", "-q", "-b", branch, str(path), "pinned"], cwd=SALEOR_CLONE)
         patches = sorted((PATCHES / version).glob("*.patch"))
+        if not patches:
+            log.event("patch_missing", provenance=MANUAL, name=version,
+                      msg=f"no patches in patches/{version}/; scenario variant not built")
+            continue
+        sh(log, ["git", "worktree", "add", "-q", "-b", branch, str(path), "pinned"], cwd=SALEOR_CLONE)
         sh(log, ["git", "am", "-q", *map(str, patches)], cwd=path)
         log.event("patch", provenance=MANUAL, name=version, patches=[p.name for p in patches])
     for version, path in WORKTREES.items():
+        if not path.exists():
+            continue
         rev = sh(log, ["git", "log", "--oneline", "-1"], cwd=path).stdout.strip()
         log.event("worktree", name=version, path=str(path), head=rev)
 

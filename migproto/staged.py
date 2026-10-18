@@ -1,17 +1,17 @@
 """Execute a staged migration plan against two live app versions; decide pass/fail here.
 
 Callers outside the runner use `runner_api.execute_plan`, which wraps `run`.
+Which schema change is under review comes from a scenario (migproto/scenarios.py); the
+default, `rename-note`, keeps the original rename-specific checks unchanged.
 """
 
 import time
 
-from . import checks, db, plans, scope
+from . import checks, db, plans, scenarios, scope
 from .config import PORTS, SEED_DB
 from .runlog import MANUAL, SCOPE_KEYS, RunLog
 from .saleor_app import AppServer, manage, port_open
 
-NEW_VERSION = "new-staged"
-STATE_MIGRATION = "0107_rename_user_note_customer_note"
 FAILED_OUTCOMES = ("fail", "refused", "error")
 
 
@@ -56,11 +56,19 @@ def feedback_view(record: dict) -> dict:
     return {k: v for k, v in record.items() if k not in SCOPE_KEYS}
 
 
-def _start_state(log: RunLog, dbname: str) -> str | None:
+def recommendation(ok: bool, plan: dict) -> str:
+    """Runner-side reading of a result: accept as-is, staged rollout, or reject."""
+    if not ok:
+        return "reject"
+    return "staged_rollout" if any(st["kind"] == "sql" for st in plan["stages"]) else "accept_as_is"
+
+
+def _start_state(log: RunLog, dbname: str, new_version: str,
+                 old_version: str = "old") -> str | None:
     """Record app identity and the starting snapshot. Returns an error message if this
     attempt does not start from the same snapshot as earlier attempts in the run."""
-    log.scope["app_commits"] = {"old": scope.worktree_head("old"),
-                                "new": scope.worktree_head(NEW_VERSION)}
+    log.scope["app_commits"] = {"old": scope.worktree_head(old_version),
+                                "new": scope.worktree_head(new_version)}
     state = _introspect(log, dbname)
     snap = scope.snapshot_id(dbname, state)
     log.scope["database_snapshot_id"] = snap
@@ -68,7 +76,7 @@ def _start_state(log: RunLog, dbname: str) -> str | None:
     log.start_states[log.attempt_id] = snap
     log.event("start_state", template_db=SEED_DB, run_db=dbname, database_snapshot_id=snap,
               schema_state=state,
-              apps={"old": scope.app_identity("old"), "new": scope.app_identity(NEW_VERSION)})
+              apps={"old": scope.app_identity(old_version), "new": scope.app_identity(new_version)})
     differing = sorted(a for a, s in earlier.items() if s != snap)
     log.check("start_state.equivalent", not differing, app_version="database",
               check_type="execution",
@@ -79,13 +87,74 @@ def _start_state(log: RunLog, dbname: str) -> str | None:
     return None
 
 
+def _after_sql_stage_rename(log, ctx, dbname, st, sid, cols, old, new) -> None:
+    """Original rename-note checks after a SQL stage (unchanged)."""
+    both = "note" in cols and "customer_note" in cols
+    if st["phase"] == "expand":
+        if old.alive():
+            checks.app_smoke(ctx, "old", sid)
+        checks.preservation(ctx, "note", sid)
+        if both and new.alive():
+            checks.columns_agree(ctx, sid)
+    elif st["phase"] == "backfill":
+        if both:
+            checks.columns_agree(ctx, sid)
+            checks.preservation(ctx, "customer_note", sid)
+        else:
+            log.check(f"{sid}.both_columns_present", False, columns=cols,
+                      app_version="database",
+                      expected={"columns": ["note", "customer_note"]},
+                      observed={"columns": [c for c in cols if "note" in c]})
+    elif st["phase"] == "contract":
+        note_cols = [c for c in cols if "note" in c]
+        log.check(f"{sid}.old_column_removed", "note" not in cols,
+                  note_columns=note_cols, app_version="database",
+                  expected={"note_present": False},
+                  observed={"note_present": "note" in cols})
+        if "customer_note" in cols:
+            checks.preservation(ctx, "customer_note", sid)
+        if new.alive():
+            checks.app_smoke(ctx, "new", sid)
+
+
+def _data_checks(ctx, sc: scenarios.Scenario, sid: str, cols: list[str], phase: str) -> None:
+    """Scenario data invariants for every column that exists at this point."""
+    for col in sc.preserve:
+        if col in cols:
+            checks.preservation(ctx, col, sid)
+    if phase in sc.not_null_phases:
+        for col in sc.not_null:
+            if col in cols:
+                checks.not_null(ctx, sid, col)
+    for col in sc.unchanged:
+        if col in cols:
+            checks.unchanged(ctx, sid, col)
+
+
+def _after_sql_stage(ctx, sc, st, sid, cols, old, new) -> None:
+    if st["phase"] == "expand" and old.alive():
+        checks.app_smoke(ctx, "old", sid)
+    _data_checks(ctx, sc, sid, cols, st["phase"])
+    if st["phase"] == "contract":
+        checks.columns_after_contract(ctx, sid, sc.present_after_contract,
+                                      sc.absent_after_contract)
+        if new.alive():
+            checks.app_smoke(ctx, "new", sid)
+
+
 def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted",
-        keep_db: bool = False) -> dict:
+        keep_db: bool = False, scenario: scenarios.Scenario | str | None = None) -> dict:
+    sc = scenario if isinstance(scenario, scenarios.Scenario) else scenarios.get(scenario)
     start = len(log.checks)
     log.set_step("validate")
     try:
         plans.validate_plan(plan)
         plans.validate_tests(tests)
+        migration = plans.deploy_migration(plan)
+        try:
+            variant = sc.variant(plans.deploy_variant(plan))
+        except KeyError as exc:
+            raise plans.PlanError(str(exc)) from exc
     except plans.PlanError as exc:
         log.check("plan.schema_valid", False, provenance=provenance, error=str(exc),
                   check_type="safety_gate", expected={"valid": True},
@@ -95,7 +164,11 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 "completed_all_stages": False, "stages": [],
                 "failed_checks": [feedback_view(c) for c in log.checks[start:]
                                   if c["outcome"] in FAILED_OUTCOMES],
-                "run_db": None, "db_dropped": None}
+                "run_db": None, "db_dropped": None, "scenario": sc.id,
+                "recommendation": "reject"}
+    new_version = variant.version
+    log.event("scenario", provenance=MANUAL, scenario=sc.id, title=sc.title,
+              deploy_migration=migration, new_version=new_version, old_version=sc.old_version)
     log.check("plan.schema_valid", True, provenance=provenance, plan_id=plan["plan_id"],
               check_type="safety_gate", expected={"valid": True}, observed={"valid": True})
     log.write_json(f"plan-{plan['plan_id']}.json", plan)
@@ -109,19 +182,28 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
 
     log.set_step("S0")
     dbname = db.new_run_db(f"staged_{plan['plan_id']}".lower()[:30])
-    old = AppServer("old", "old", PORTS["old"], dbname, log.dir / f"server-old-{plan['plan_id']}.log")
-    new = AppServer("new", NEW_VERSION, PORTS["new"], dbname,
+    tag = scenarios.file_safe(new_version)
+    old = AppServer("old", sc.old_version, PORTS["old"], dbname,
+                    log.dir / f"server-old-{plan['plan_id']}.log")
+    new = AppServer("new", new_version, PORTS["new"], dbname,
                     log.dir / f"server-new-{plan['plan_id']}.log")
     servers = {"old": old, "new": new}
     stage_log = []
     halted = halted_step = None
     try:
-        halted = _start_state(log, dbname)
+        halted = _start_state(log, dbname, new_version, sc.old_version)
         if halted:
             halted_step = "S0"
         else:
+            if sc.prepare_sql:
+                # Scenario legacy data (manual SQL, guarded), created in this run database only.
+                db.run_guarded(dbname, list(sc.prepare_sql))
+                log.event("scenario_prepare", provenance=MANUAL, sql=list(sc.prepare_sql),
+                          msg="legacy data for this scenario, created before the old app starts")
             old.start()
-            ctx = checks.Context.create(log, dbname, servers)
+            ctx = checks.Context.create(log, dbname, servers,
+                                        new_app_note_ops=sc.new_app_note_ops)
+            checks.snapshot_columns(ctx, sc.unchanged)
             checks.app_smoke(ctx, "old", "S0")
             checks.preservation(ctx, "note", "S0")
 
@@ -162,48 +244,33 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 cols = db.columns(dbname, "account_user")
                 log.event("schema", stage=sid, note_columns=state["note_columns"],
                           triggers=state["triggers"], schema_state=state)
-                both = "note" in cols and "customer_note" in cols
-                if st["phase"] == "expand":
-                    if old.alive():
-                        checks.app_smoke(ctx, "old", sid)
-                    checks.preservation(ctx, "note", sid)
-                    if both and new.alive():
-                        checks.columns_agree(ctx, sid)
-                elif st["phase"] == "backfill":
-                    if both:
-                        checks.columns_agree(ctx, sid)
-                        checks.preservation(ctx, "customer_note", sid)
-                    else:
-                        log.check(f"{sid}.both_columns_present", False, columns=cols,
-                                  app_version="database",
-                                  expected={"columns": ["note", "customer_note"]},
-                                  observed={"columns": [c for c in cols if "note" in c]})
-                elif st["phase"] == "contract":
-                    note_cols = [c for c in cols if "note" in c]
-                    log.check(f"{sid}.old_column_removed", "note" not in cols,
-                              note_columns=note_cols, app_version="database",
-                              expected={"note_present": False},
-                              observed={"note_present": "note" in cols})
-                    if "customer_note" in cols:
-                        checks.preservation(ctx, "customer_note", sid)
-                    if new.alive():
-                        checks.app_smoke(ctx, "new", sid)
+                if sc.rename_hooks:
+                    _after_sql_stage_rename(log, ctx, dbname, st, sid, cols, old, new)
+                else:
+                    _after_sql_stage(ctx, sc, st, sid, cols, old, new)
 
             elif kind == "deploy_new":
-                sqlm = manage(NEW_VERSION, ["sqlmigrate", "account", STATE_MIGRATION], dbname)
-                log.write("sql/new-staged-0107-sqlmigrate.sql", sqlm.stdout)
-                state_only = "ALTER" not in sqlm.stdout.upper()
-                log.check(f"{sid}.django_migration_is_state_only", state_only,
-                          provenance=MANUAL, sqlmigrate=sqlm.stdout.strip(), app_version="new",
-                          expected={"alters_schema": False},
-                          observed={"alters_schema": not state_only})
-                mig = manage(NEW_VERSION, ["migrate", "account", STATE_MIGRATION], dbname,
-                             log.dir / f"migrate-new-staged-{plan['plan_id']}.log")
+                sqlm = manage(new_version, ["sqlmigrate", scenarios.APP_LABEL, variant.migration],
+                              dbname)
+                log.write(f"sql/{tag}-{variant.migration[:4]}-sqlmigrate.sql", sqlm.stdout)
+                if migration == "state_only":
+                    state_only = "ALTER" not in sqlm.stdout.upper()
+                    log.check(f"{sid}.django_migration_is_state_only", state_only,
+                              provenance=MANUAL, sqlmigrate=sqlm.stdout.strip(), app_version="new",
+                              expected={"alters_schema": False},
+                              observed={"alters_schema": not state_only})
+                else:
+                    log.event("observation", name=f"{sid}.migration_sql", provenance=MANUAL,
+                              sqlmigrate=sqlm.stdout.strip(),
+                              msg="deploy applies the new version's own migration SQL")
+                mig = manage(new_version, ["migrate", scenarios.APP_LABEL, variant.migration],
+                             dbname, log.dir / f"migrate-{tag}-{plan['plan_id']}.log")
                 migrated = mig.returncode == 0
                 _introspect(log, dbname)
                 if not log.check(f"{sid}.django_migrate", migrated, exit=mig.returncode,
                                  app_version="new", check_type="execution",
-                                 expected={"exit": 0}, observed={"exit": mig.returncode}):
+                                 expected={"exit": 0}, observed={"exit": mig.returncode},
+                                 error=None if migrated else (mig.stderr or "")[-1500:]):
                     halted = "django migrate failed"
                     halted_step = sid
                     break
@@ -211,7 +278,7 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 checks.app_smoke(ctx, "new", sid)
                 if old.alive():
                     checks.app_smoke(ctx, "old", sid)
-                selected = list(dict.fromkeys(checks.MANDATORY_AFTER_DEPLOY))
+                selected = list(dict.fromkeys(sc.cases))
                 for cid in selected:
                     checks.run_case(ctx, cid, checks.CATALOGUE[cid], provenance=MANUAL)
                 tester_prov = (tests or {}).get("provenance", provenance)
@@ -223,10 +290,46 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 for case in (tests or {}).get("custom_cases", []):
                     checks.run_case(ctx, f"tester.{case['id']}", case["steps"],
                                     provenance=tester_prov)
-                if "customer_note" in db.columns(dbname, "account_user"):
-                    checks.columns_agree(ctx, sid)
-                    checks.preservation(ctx, "customer_note", sid)
-                checks.preservation(ctx, "note", sid)
+                cols = db.columns(dbname, "account_user")
+                if sc.rename_hooks:
+                    # Staged rename plans have both columns here; an immediate rename (apply
+                    # plan) has already dropped `note`, so only compare columns that exist.
+                    if "customer_note" in cols:
+                        if "note" in cols:
+                            checks.columns_agree(ctx, sid)
+                        checks.preservation(ctx, "customer_note", sid)
+                    if "note" in cols:
+                        checks.preservation(ctx, "note", sid)
+                else:
+                    _data_checks(ctx, sc, sid, cols, "deploy")
+
+            elif kind == "rollback_check":
+                # Can the deployment be rolled back to the old version's schema and data?
+                new.stop()
+                back = manage(new_version, ["migrate", scenarios.APP_LABEL,
+                                            scenarios.PREVIOUS_MIGRATION], dbname,
+                              log.dir / f"rollback-{tag}-{plan['plan_id']}.log")
+                reversible = back.returncode == 0
+                _introspect(log, dbname)
+                log.check(f"{sid}.migration_reversible", reversible, exit=back.returncode,
+                          app_version="new", check_type="execution",
+                          expected={"exit": 0}, observed={"exit": back.returncode},
+                          error=None if reversible else (back.stderr or "")[-1500:])
+                if reversible:
+                    checks.preservation(ctx, "note", sid)
+                    if old.alive():
+                        checks.app_smoke(ctx, "old", sid)
+                # Roll forward again so the rest of the plan runs against the deployed version.
+                fwd = manage(new_version, ["migrate", scenarios.APP_LABEL, variant.migration],
+                             dbname, log.dir / f"reapply-{tag}-{plan['plan_id']}.log")
+                if not log.check(f"{sid}.migration_reapplied", fwd.returncode == 0,
+                                 exit=fwd.returncode, app_version="new", check_type="execution",
+                                 expected={"exit": 0}, observed={"exit": fwd.returncode}):
+                    halted = "re-applying the migration after rollback failed"
+                    halted_step = sid
+                    break
+                new.start()
+                checks.app_smoke(ctx, "new", sid)
 
             elif kind == "retire_old":
                 old.stop()
@@ -254,17 +357,20 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
         completed = halted is None and len(stage_log) == len(plan["stages"])
         if completed:
             log.set_step("post_contract")
-            demo = AppServer("old", "old", PORTS["old"], dbname,
+            demo = AppServer("old", sc.old_version, PORTS["old"], dbname,
                              log.dir / f"server-old-after-contract-{plan['plan_id']}.log")
             demo.start()
             pk = next(iter(k for k in ctx.expected if ctx.expected[k]))
             r = demo.read_note(pk)
             log.event("observation", name="retired_old_after_contract", ok=r.ok, error=r.error,
-                      msg="expected failure: old code cannot run after contract (why the gate exists)")
+                      msg="expected failure: old code cannot run after contract (why the gate exists)"
+                      if sc.rename_hooks else
+                      "old code started again after the rollout (informational, not a check)")
             demo.stop()
         failed = [c for c in log.checks[start:] if c["outcome"] in FAILED_OUTCOMES]
+        ok = completed and not failed
         return {
-            "ok": completed and not failed,
+            "ok": ok,
             "plan_id": plan["plan_id"],
             "completed_all_stages": completed,
             "halted": halted,
@@ -273,6 +379,9 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
             "failed_checks": [feedback_view(c) for c in failed],
             "run_db": dbname,
             "db_dropped": not keep_db,
+            "scenario": sc.id,
+            "new_version": new_version,
+            "recommendation": recommendation(ok, plan),
         }
     finally:
         old.stop()

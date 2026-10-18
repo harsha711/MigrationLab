@@ -1,0 +1,3 @@
+Tunnel dropped (about 10:02-10:06). Run 3 (20260101-100300) ended ERROR with "connection
+refused"; an earlier attempt (-100350) never wrote runs.jsonl. Infrastructure failures, not
+model results. Same configuration as brev-batch-20260101-100100.
