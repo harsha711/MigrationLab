@@ -18,6 +18,7 @@ from typing import Callable
 
 from . import lock, staged
 from .profile import render as render_profile, scenario_profile  # noqa: F401  (read-only S0 profile)
+from .preflight import dry_run  # noqa: F401  (pre-execution dry run and write probe, no verdict)
 from .config import SEED_DB
 from .runlog import CONTRACT_VERSION, OUTCOMES, RunLog
 

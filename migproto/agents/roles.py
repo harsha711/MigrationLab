@@ -327,7 +327,8 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
          feedback: dict | None = None, previous: dict | None = None,
          scenario: str = SCENARIO, history: list | None = None,
          system: str = PLANNER_SYSTEM, contract: str = PLAN_CONTRACT,
-         validator=plans.validate_plan, schema: dict = PLAN_SCHEMA) -> dict:
+         validator=plans.validate_plan, schema: dict = PLAN_SCHEMA,
+         preflight: dict | None = None) -> dict:
     if source == "scripted":
         name = "plan_v2.json" if feedback else "plan_v1.json"
         return json.loads((PROPOSALS / "scripted" / name).read_text())
@@ -337,7 +338,21 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
         f"Investigator findings (affected app code, already handled by the new app version):\n"
         f"{json.dumps(affected, indent=1)[:4000]}\n\n"
     )
-    if feedback:
+    if preflight:
+        user += (
+            "Before the runner executes it, your plan below was DRY-RUN on a throwaway copy of "
+            "the starting database: its SQL stages in order and the deploy_new Django "
+            "migration, without application servers. At two points, scripted single-column "
+            "UPDATEs were run on one existing row (rolled back afterwards) and every named "
+            "column was read back. This is not the runner's verdict and covers none of its "
+            "checks. Fix any stage error, and check that the probe values are what your plan "
+            "intends while old and new application versions coexist. Return the complete "
+            "plan; if it is already correct, return it unchanged. Explain changes in "
+            "revision_notes.\n"
+            f"Plan:\n{json.dumps(previous, indent=1)}\n\n"
+            f"Dry run:\n{json.dumps(preflight, indent=1, ensure_ascii=False)[:EVIDENCE_CHARS]}\n"
+        )
+    elif feedback:
         user += (
             "Your previous plan was EXECUTED and FAILED these deterministic checks. Revise the "
             "plan. Explain the root cause in revision_notes.\n"

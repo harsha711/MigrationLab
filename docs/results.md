@@ -545,6 +545,53 @@ verdicts.
   configurations and topologies differ.
 - **Exclusions:** as in H (only runs recorded in the batch's `INFRA-NOTE`).
 
+### Configuration J: cancelled (06:50)
+
+Cancelled about 12 minutes after it started (batch `brev-batch-20261018-103841`), before any
+review finished, so it has no results. It was replaced by K (J plus the pre-execution dry run
+and write probe below), on the same instance.
+
+## Configuration K: `roles` versus `single`, J plus a pre-execution dry run (pre-registered 06:50)
+
+Written and committed before the batch started; the results will be added below this paragraph
+without changing it. A new experiment, decided after H, part of I, and the failure counts
+below. It never changes their verdicts.
+
+- **Why:** of H's 241 failed runner attempts, 37 halted because a plan SQL stage failed to
+  execute and 36 because the deploy_new Django migration failed. A dry run of the plan
+  surfaces both kinds of failure in seconds. Another 116 failed cross-version cases, mostly
+  write sync between the two columns, which a scripted-write probe of the plan's triggers
+  shows directly.
+- **Arms:** `roles` and `single`, exactly as in J (D6, schema/data profile, repeated-failure
+  notice), plus:
+  - **Pre-execution dry run** (`MIGPROTO_PREFLIGHT=1`, `migproto/preflight.py`). Before every
+    runner execution, the controller runs the plan on a throwaway clone of S0 (seed template
+    plus `prepare_sql`). It executes the SQL stages in order and the deploy_new stage's
+    Django migration, without application servers, and records per stage whether it executed
+    and the first error.
+  - **Write probe:** just before deploy_new, and again just after its migration, it runs one
+    scripted single-column `UPDATE` on one existing row for each named text column. Each
+    write is rolled back. It then reads back every named column. The values are reported
+    with no judgement. INSERTs, ORM writes (which also write unchanged fields), concurrency
+    and every runner check are not covered.
+  - **One planner fix per attempt:** if the dry run hit an error, or the probe ran any
+    write, the planner (or `single`) gets the report with its plan. It returns the plan
+    unchanged or fixed, and the runner executes the result. An invalid fix falls back to the
+    unfixed plan. The report is in `agents/preflight-<attempt>.json`. The extra calls count
+    against the same budget, and the dry run's time (about 7-15 s per attempt) counts
+    against the wall cap.
+- **Everything else as in J:** model, server reused on `human-brown-mollusk`, sampling,
+  prompts, pre-checks, budget (`max_revisions` 5, 40 calls, 450,000 tokens, 3,000 s), 8
+  workers, H's 9 scenarios, 2 runs per scenario per topology (36 reviews), run index
+  outermost. If the batch is stopped early, only completed run indexes are used.
+- **Primary metric and decision rule:** as in H. `roles` is reported as better only with more
+  matches and two-sided Fisher exact p < 0.05. With 18 reviews per arm, a null result says
+  little.
+- **Secondary:** per-scenario matches, attempts per review, how often the dry run found an
+  error, and whether the fixed plan then passed the matching runner stage. A comparison with
+  H/I is descriptive only.
+- **Exclusions:** as in H.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts

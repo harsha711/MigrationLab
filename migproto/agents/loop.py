@@ -32,6 +32,9 @@ SCHEMA_PROFILE = os.environ.get("MIGPROTO_SCHEMA_PROFILE", "") == "1"
 # Configuration J: say which failures (check name or identical error text) the latest attempt
 # repeated from the attempt before it.
 REPEAT_NOTICE = os.environ.get("MIGPROTO_REPEAT_NOTICE", "") == "1"
+# Configuration K: before each runner execution, dry-run the plan on a throwaway S0 copy (SQL
+# stages, deploy migration, scripted-write probe) and give the planner one chance to fix it.
+PREFLIGHT = os.environ.get("MIGPROTO_PREFLIGHT", "") == "1"
 
 
 def _repeated(latest: dict, previous: dict) -> dict | None:
@@ -284,6 +287,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "revision_base": REVISION_BASE,
             "schema_profile": SCHEMA_PROFILE if llm else None,
             "repeat_notice": REPEAT_NOTICE if llm else None,
+            "preflight": PREFLIGHT if llm and topology != "parallel" else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -385,8 +389,37 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
 
+        def preflight(plan_obj: dict, attempt: int) -> dict:
+            # One dry run and at most one planner fix per attempt, before the runner executes.
+            report = runner_api.dry_run(scenario_id, scenario_facts.runner_plan(plan_obj))
+            log.write_json(f"agents/preflight-{attempt}.json", report)
+            log.event("tool", name="preflight", attempt=attempt, plan_id=plan_obj["plan_id"],
+                      first_error=report["first_error"],
+                      msg="dry run of the plan on a throwaway S0 copy with a scripted-write "
+                          "probe (runner tool, not a verdict)")
+            if not report["first_error"] and not any(
+                    p.get("writes") for p in report["probes"]):
+                return plan_obj
+            try:
+                fixed = _tag(call(f"planner-{attempt}-preflight", roles.plan, investigation,
+                                  previous=plan_obj, preflight=report, **plan_kwargs), attempt)
+                if isinstance(fixed, dict) and fixed.get("plan_id") == plan_obj["plan_id"]:
+                    fixed["plan_id"] = plan_obj["plan_id"][:26] + "-pf"
+                _validate_plan(fixed, sfacts, log, prov, attempt)
+            except (LLMError, plans.PlanError) as exc:
+                log.event("preflight_fix_invalid", provenance=prov, attempt=attempt,
+                          plan_id=plan_obj["plan_id"], error=str(exc)[:500])
+                return plan_obj
+            log.event("proposal", provenance=prov, role="planner", attempt=attempt,
+                      plan_id=fixed["plan_id"], solution_origin=solution_origin,
+                      parent_plan_id=plan_obj["plan_id"], preflight_fix=True,
+                      recommendation=fixed.get("recommendation"))
+            return fixed
+
         history: list[dict] = []   # every executed attempt: record, plan, result, failures
         for attempt in range(1, budget.max_revisions + 2):
+            if llm and PREFLIGHT:
+                plan_obj = preflight(plan_obj, attempt)
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
                          **test_kwargs)
             plans.validate_tests(tests)
