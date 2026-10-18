@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from . import lock, staged
+from .profile import render as render_profile, scenario_profile  # noqa: F401  (read-only S0 profile)
 from .config import SEED_DB
 from .runlog import CONTRACT_VERSION, OUTCOMES, RunLog
 

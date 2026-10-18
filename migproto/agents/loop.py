@@ -3,6 +3,7 @@
 import contextvars
 import copy
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -25,6 +26,9 @@ REVISION_BASE = "best"
 REVISION_RULE = ("Keep every stage of the previous plan that no failed check implicates exactly "
                  "as it is. Change only what the failed checks (step_id, expected, observed, "
                  "error) point to, and say which stage you changed and why in revision_notes.")
+
+# Configuration J: the planner and tester prompts carry a read-only S0 schema/data profile.
+SCHEMA_PROFILE = os.environ.get("MIGPROTO_SCHEMA_PROFILE", "") == "1"
 
 
 def _tag(obj: dict, attempt: int) -> dict:
@@ -251,6 +255,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "history_compaction": single.POLICY if topology == "single" and llm else None,
             "parallel_planners": PARALLEL_PLANNERS if topology == "parallel" else None,
             "revision_base": REVISION_BASE,
+            "schema_profile": SCHEMA_PROFILE if llm else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -290,6 +295,15 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
         transcripts: dict[str, list] = {}
         memory = single.Memory(single.SYSTEM) if topology == "single" and llm else None
         scenario = scenario_text(review)
+        if llm and SCHEMA_PROFILE:
+            # Same generic S0 profile for every scenario and topology (read-only, throwaway clone).
+            profile = runner_api.scenario_profile(scenario_id, review["change"])
+            log.write_json("agents/schema_profile.json", profile)
+            log.event("tool", name="schema_profile", table=profile["table"],
+                      columns=[c["column"] for c in profile["columns"]],
+                      msg="read-only S0 schema and data profile of the named columns "
+                          "(runner tool)")
+            scenario += runner_api.render_profile(profile)
         plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
         def call(role: str, fn, *args, client: LLM | None = None, **kwargs):
