@@ -23,7 +23,10 @@ BATCH_RE = re.compile(r"(?<![\w-])(brev-batch-\d{8}-\d{6})(?![\w-])")
 OBS_RE = re.compile(r"[\w.-]+/a\d+/[^\s,;?]+#\d+")
 TOPOLOGIES = ("roles", "single", "parallel")
 RESTRICTED = ("proposals/manual", "proposals/scripted", "patches/")
-RECENT_RUN_RE = re.compile(r"\b(?:recent|latest|last|newest)\s+(?:finished\s+)?run\b", re.I)
+RECENT_RUN_RE = re.compile(
+    r"\b(?:most\s+)?(?:recent|latest|last|newest)\s+(?:finished\s+)?(?:run|review|execution)\b",
+    re.I,
+)
 
 
 def _sanitize(value):
@@ -95,14 +98,21 @@ def _compact_batch(batch: dict | None, scenario=None, topologies=()) -> dict | N
     topology_summary = {}
     for row in runs:
         cell = topology_summary.setdefault(row.get("topology") or "not recorded",
-                                           {"finished_runs": 0, "matches": 0, "scored": 0})
+                                           {"finished_runs": 0, "matches": 0, "scored": 0,
+                                            "verdicts": {}, "stop_reasons": {}})
         cell["finished_runs"] += 1
+        verdict = row.get("verdict") or "not recorded"
+        cell["verdicts"][verdict] = cell["verdicts"].get(verdict, 0) + 1
+        if row.get("stopped"):
+            reason = row["stopped"]
+            cell["stop_reasons"][reason] = cell["stop_reasons"].get(reason, 0) + 1
         if row.get("matches_expected") is not None:
             cell["scored"] += 1
             cell["matches"] += bool(row["matches_expected"])
     for row in batch.get("in_progress", []):
         topology_summary.setdefault(row.get("topology") or "not recorded",
-                                    {"finished_runs": 0, "matches": 0, "scored": 0})
+                                    {"finished_runs": 0, "matches": 0, "scored": 0,
+                                     "verdicts": {}, "stop_reasons": {}})
     compact = {k: batch.get(k) for k in ("batch_id", "status", "planned_runs", "running_count",
                                        "scenario_score", "config_note", "run_count", "counts")} | {
         "topology_summary": topology_summary,
@@ -169,7 +179,10 @@ def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dic
     batches = refs["batches"]
     implicit_run = None
     recent_run_question = bool(RECENT_RUN_RE.search(question)) and not refs["runs"]
-    if not batches and not refs["runs"] and not refs["observations"] and not refs["checks"]:
+    scenario_check_question = bool(refs["scenarios"] and re.search(
+        r"\b(?:which|what) check\b.*\b(?:failed most|most failures|fails most)\b", question, re.I))
+    if (not scenario_check_question and not batches and not refs["runs"]
+            and not refs["observations"] and not refs["checks"]):
         listed = query.list_batches(runs_root, conn)
         if listed:
             batches = [listed[0]["batch_id"]]
@@ -179,7 +192,9 @@ def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dic
         if finished:
             implicit_run = max(finished, key=lambda r: r["run_id"])
             refs["runs"] = [implicit_run["run_id"]]
+    histories = {name: query.check_history(conn, name) for name in refs["checks"]}
     facts = {
+        "question": question,
         "question_refs": refs,
         "runs": [_compact_run(query.run_detail(conn, rid)) for rid in refs["runs"]],
         # A singular "recent run" question uses the latest batch only to resolve the run.
@@ -190,10 +205,15 @@ def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dic
         "recent_run": (None if not implicit_run or query.run_detail(conn, implicit_run["run_id"])
                        else implicit_run),
         "observations": [query.get_observation(conn, oid) for oid in refs["observations"]],
-        "check_history": {name: query.check_history(conn, name) for name in refs["checks"]},
+        "check_summary": {name: {"recorded": len(rows),
+                                  "failed": sum(r.get("status") == "FAIL" for r in rows)}
+                          for name, rows in histories.items()},
+        "check_history": histories,
         "scenario_failed_checks": _scenario_failed_checks(conn, refs["scenarios"]),
     }
     facts = {k: v for k, v in facts.items() if v not in (None, [], {})}
+    for name, rows in list(facts.get("check_history", {}).items()):
+        facts["check_history"][name] = rows[:5]
     # Drop the bulkiest material first, then oldest batch runs.  Never cut JSON text midway.
     for run in facts.get("runs", []):
         if run and len(json.dumps(facts, default=str)) > limit:
@@ -206,14 +226,36 @@ def build_facts(question: str, conn, runs_root, limit: int = FACTS_LIMIT) -> dic
         if not candidates:
             break
         max(candidates, key=lambda b: len(b["runs"]))["runs"].pop(0)
+    # Scenario histories can contain hundreds of observations. Keep exact aggregate counts,
+    # but shed individual examples before violating the prompt-size contract.
+    while len(json.dumps(facts, default=str)) > limit:
+        rows = facts.get("scenario_failed_checks") or []
+        candidates = [r for r in rows if r.get("observations")]
+        if candidates:
+            max(candidates, key=lambda r: len(r["observations"]))["observations"].pop()
+            continue
+        if len(rows) > 1:
+            rows.pop()
+            continue
+        break
     facts = _sanitize(facts)
     facts["record_ids"] = _ids_in(facts)
     # The ID index itself consumes space; trim again if necessary.
     while len(json.dumps(facts, default=str)) > limit:
         candidates = [b for b in facts.get("batches", []) if b and b.get("runs")]
-        if not candidates:
+        scenario_rows = facts.get("scenario_failed_checks") or []
+        observation_rows = [r for r in scenario_rows if r.get("observations")]
+        if candidates:
+            max(candidates, key=lambda b: len(b["runs"]))["runs"].pop(0)
+        elif observation_rows:
+            max(observation_rows, key=lambda r: len(r["observations"]))["observations"].pop()
+        elif len(scenario_rows) > 1:
+            scenario_rows.pop()
+        elif any(facts.get("check_history", {}).values()):
+            name = next(n for n, rows in facts["check_history"].items() if rows)
+            facts["check_history"][name].pop()
+        else:
             break
-        max(candidates, key=lambda b: len(b["runs"]))["runs"].pop(0)
         facts["record_ids"] = _ids_in({k: v for k, v in facts.items() if k != "record_ids"})
     return facts
 
@@ -258,6 +300,9 @@ def validate_reply(reply: dict, allowed: set[str]) -> dict:
 def facts_answer(facts: dict) -> tuple[str, list[str]]:
     citations: list[str] = []
     parts: list[str] = []
+    question = str(facts.get("question") or "").lower()
+    if "zero downtime" in question or "concurrency safe" in question or "concurrency safety" in question:
+        return ("No. The recorded runs cover only their saved checks, data, versions, and sequential interleavings on the tested machine. They do not establish zero downtime or concurrency safety.", [])
     for run in facts.get("runs", []):
         if not run:
             continue
@@ -275,11 +320,37 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
                     failed_names.append(name)
                 if isinstance(name, str):
                     this_attempt.add(name)
-            if this_attempt:
-                failed_sets.append(this_attempt)
+            failed_sets.append(this_attempt)
         persistent = set.intersection(*failed_sets) if failed_sets else set()
         verdict = results.get("verdict") or "not recorded"
         reason = results.get("reason")
+        if re.search(r"\b(?:how many|number of)\s+(?:model\s+)?tokens\b", question):
+            tokens = results.get("total_tokens")
+            calls = results.get("model_call_count")
+            parts.append(f"Run {rid} used {tokens:,} recorded tokens"
+                         + (f" across {calls} model calls" if calls is not None else "")
+                         + "." if isinstance(tokens, int) else
+                         f"Token usage for run {rid} was not recorded.")
+            continue
+        if re.search(r"\bhow many attempts\b|\bnumber of attempts\b", question):
+            parts.append(f"Run {rid} made {len(attempts)} attempts. Their failed-check counts were "
+                         f"{' → '.join(failed) if failed else 'not recorded'}, and the final runner verdict was {verdict}.")
+            continue
+        if re.search(r"\bdid\b.*\bpass\b", question):
+            if verdict == "PASS":
+                parts.append(f"Yes. The runner recorded PASS for {rid}. It took {len(attempts)} attempts; "
+                             f"the failed-check trajectory was {' → '.join(failed)}, so the earlier failure remains part of the record.")
+            else:
+                parts.append(f"No. The runner recorded {verdict} for {rid}"
+                             + (f" because {reason}" if reason else "") + ".")
+            continue
+        if "what checks" in question or "which checks" in question:
+            if persistent:
+                named = ", ".join(sorted(persistent))
+                parts.append(f"Across all {len(attempts)} attempts of {rid}, these {len(persistent)} checks kept failing: {named}.")
+            else:
+                parts.append(f"No single check failed in every attempt of {rid}; failures changed between revisions.")
+            continue
         if verdict == "INCOMPLETE" and reason:
             explanation = (f"Run {rid} did not reach a completed verdict because {reason}. "
                            f"That was the immediate reason it stopped after {len(attempts)} "
@@ -307,6 +378,21 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
             if problems:
                 explanation += (" The underlying problem was persistent, not a one-off timeout: "
                                 + ", ".join(problems) + " failed on every attempt.")
+        elif failed_sets and failed_sets[-1]:
+            final = failed_sets[-1]
+            cross_version = sum(name.startswith("case.") for name in final)
+            final_problems = []
+            if cross_version:
+                final_problems.append(f"{cross_version} cross-version behavior checks")
+            if any(name.endswith("columns_agree") for name in final):
+                final_problems.append("column agreement")
+            preservation = sum(".preservation." in name for name in final)
+            if preservation:
+                final_problems.append(f"{preservation} preservation checks")
+            if any(name.endswith(".preconditions") for name in final):
+                final_problems.append("contract preconditions")
+            if final_problems:
+                explanation += " The final revision still failed " + ", ".join(final_problems) + "."
         if any(a.get("halted") and "contract stage" in a["halted"] for a in attempts):
             explanation += " Because those earlier checks were still failing, the runner did not allow the contract stage to execute."
         recommendation = (run.get("summary") or {}).get("runner_recommendation")
@@ -328,8 +414,18 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
         for row in rows:
             if row.get("run_id"):
                 citations.append(row["run_id"])
-        score = ", ".join(f"{k}: {v['matches']}/{v['scored']} matches across {v['finished_runs']} finished runs"
-                          for k, v in sorted(grouped.items())) or "no finished runs"
+        def topology_text(name, values):
+            verdicts = ", ".join(f"{n} {verdict}" for verdict, n in sorted(values.get("verdicts", {}).items()))
+            scored = (f"; {values['matches']}/{values['scored']} matched expected outcomes"
+                      if values.get("scored") else "; expected-outcome scoring was not recorded")
+            stops = values.get("stop_reasons") or {}
+            grouped_stops = {}
+            for reason, n in stops.items():
+                label = "token budget exhausted" if "token budget exhausted" in reason else reason
+                grouped_stops[label] = grouped_stops.get(label, 0) + n
+            stopped = ("; stops: " + ", ".join(f"{n} × {reason}" for reason, n in grouped_stops.items())) if grouped_stops else ""
+            return f"{name}: {values['finished_runs']} finished ({verdicts or 'no verdicts'}){scored}{stopped}"
+        score = "; ".join(topology_text(k, v) for k, v in sorted(grouped.items())) or "no finished runs"
         progress = f", {batch.get('running_count')} still in progress" if batch.get("running_count") else ""
         parts.append(f"Batch {batch['batch_id']} is {batch.get('status')}; {score}{progress}.")
         assessment = batch.get("parallel_assessment")
@@ -341,10 +437,17 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
                              + ("parallel is better by the registered rule."
                                 if assessment["parallel_better"] else
                                 "parallel superiority is not established by the registered rule."))
-    for name, rows in facts.get("check_history", {}).items():
+        requested = (facts.get("question_refs") or {}).get("topologies") or []
+        missing = [name for name in requested if name not in grouped]
+        if missing:
+            parts.append(f"No finished {'/'.join(missing)} runs are recorded in that batch, so the requested comparison cannot be made.")
+        elif any(word in question for word in ("better", "superior", "best")) and not assessment:
+            parts.append("These descriptive outcomes do not establish that one topology is better than the other.")
+    for name, summary in facts.get("check_summary", {}).items():
+        rows = facts.get("check_history", {}).get(name, [])
         failed = [r for r in rows if r.get("status") == "FAIL"]
         citations.extend(r["observation_id"] for r in failed if r.get("observation_id"))
-        parts.append(f"Check {name} failed in {len(failed)} of {len(rows)} recorded observations.")
+        parts.append(f"Check {name} failed in {summary['failed']} of {summary['recorded']} recorded observations.")
     failures = facts.get("scenario_failed_checks") or []
     if failures:
         top = failures[0]
@@ -356,6 +459,11 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
             citations.append(obs["observation_id"])
             parts.append(f"Observation {obs['observation_id']} recorded {obs.get('status')}: "
                          f"{obs.get('check_name')}.")
+    requested_observations = (facts.get("question_refs") or {}).get("observations") or []
+    found_observations = {o["observation_id"] for o in facts.get("observations", []) if o}
+    missing_observations = [oid for oid in requested_observations if oid not in found_observations]
+    if missing_observations:
+        parts.insert(0, f"The exact observation {missing_observations[0]} is not recorded. Any check history below refers to other observations with the same check name.")
     return (" ".join(parts) if parts else "The requested information is not recorded in the available facts.",
             list(dict.fromkeys(citations)))
 

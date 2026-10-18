@@ -79,9 +79,14 @@ def test_scenario_failure_frequency_is_from_observations(conn, tmp_path):
     assert result["facts"]["scenario_failed_checks"][0]["failed"] > 0
 
 
-def test_recent_run_resolves_from_latest_batch(conn, tmp_path):
+@pytest.mark.parametrize("question", [
+    "why did the recent run fail?",
+    "why was the latest review unsuccessful?",
+    "explain the most recent execution in plain English",
+])
+def test_recent_run_resolves_from_latest_batch(conn, tmp_path, question):
     batch_root = Path(__file__).parent / "fixtures" / "batches"
-    result = chat.answer("why did the recent run fail?", conn, batch_root)
+    result = chat.answer(question, conn, batch_root)
     assert result["mode"] == "facts"
     assert result["facts"]["question_refs"]["runs"]
     assert "Batch " not in result["answer"]
@@ -91,6 +96,37 @@ def test_facts_answer_explains_cause_not_just_counts(conn, tmp_path):
     result = chat.answer("why did scripted-sync-failure fail?", conn, tmp_path)
     assert "underlying problem" in result["answer"]
     assert "cross-version" in result["answer"]
+
+
+def test_prompt_level_answers_are_direct_and_bounded(conn, tmp_path):
+    passed = chat.answer("did run live-ordering-revision pass?", conn, tmp_path)
+    assert passed["answer"].startswith("Yes. The runner recorded PASS")
+    assert "persistent" not in passed["answer"]
+
+    attempts = chat.answer("how many attempts did live-ordering-revision make?", conn, tmp_path)
+    assert "made 2 attempts" in attempts["answer"]
+
+    limited = chat.answer("did this prove zero downtime?", conn, tmp_path)
+    assert limited["answer"].startswith("No.")
+    assert "do not establish zero downtime" in limited["answer"]
+
+    for row in conn.execute("SELECT run_id, summary_json FROM runs").fetchall():
+        summary = json.loads(row["summary_json"])
+        summary["scenario"] = "rename-note"
+        conn.execute("UPDATE runs SET summary_json = ? WHERE run_id = ?",
+                     (json.dumps(summary), row["run_id"]))
+    scenario = chat.answer("which check failed most on rename-note?", conn, tmp_path)
+    assert "most frequently failed" in scenario["answer"]
+    assert "Batch " not in scenario["answer"]
+    assert len(json.dumps(scenario["facts"], default=str)) <= chat.FACTS_LIMIT
+
+
+def test_missing_observation_is_explicit_and_history_is_capped(conn, tmp_path):
+    result = chat.answer("show observation live-ordering-revision/a1/retirement_gate#999",
+                         conn, tmp_path)
+    assert result["answer"].startswith("The exact observation")
+    assert "other observations" in result["answer"]
+    assert len(json.dumps(result["facts"], default=str)) <= chat.FACTS_LIMIT
 
 
 class BrokenLLM:
