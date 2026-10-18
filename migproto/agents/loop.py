@@ -4,7 +4,7 @@ import json
 import re
 
 from .. import plans, runner_api
-from ..config import PROPOSALS
+from ..config import PROPOSALS, WORKTREES
 from ..runlog import SCRIPTED, RunLog, agent
 from . import facts as scenario_facts
 from . import roles, single, tracing
@@ -146,6 +146,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "budget": budget.snapshot(),
             "solution_origin": solution_origin,
             "scenario": scenario_id,
+            "history_compaction": single.POLICY if topology == "single" and llm else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -153,17 +154,24 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           thinking_budget=getattr(llm, "thinking_budget", None),
                           reasoning_enabled=llm.reasoning_enabled if llm else None,
                           max_revisions=budget.max_revisions,
-                          request_id=review.get("request_id"))
+                          request_id=review.get("request_id"),
+                          history_compaction=config["history_compaction"])
         log.write_json("agents/review-request.json", review)
 
+        # The scenario's OLD app version is the code under review (deployed before the
+        # change); never a new-version or state-only build.
+        old_version = scenario_facts.old_version(scenario_id)
         if sfacts.is_default:
             hits = roles.gather_hits()
         else:
-            hits = roles.gather_hits(pattern=scenario_facts.search_regex(sfacts.search_terms))
+            hits = roles.gather_hits(WORKTREES[old_version],
+                                     pattern=scenario_facts.search_regex(sfacts.search_terms))
         log.write_json("agents/search_hits.json", hits)
         terms = ", ".join(f"`{t}`" for t in sfacts.search_terms)
         log.event("tool", name="gather_hits", hits=len(hits), terms=list(sfacts.search_terms),
-                  msg=f"deterministic search for {terms} in old worktree (runner tool)")
+                  app_version=old_version,
+                  msg=f"deterministic search for {terms} in old worktree {old_version!r} "
+                      "(runner tool)")
         # Every scenario: agent-side validator (tolerates `recommendation`) and a schema limited
         # to the scenario's builds. Non-default scenarios also get their own facts; rename-note
         # keeps its original prompt text.
@@ -176,20 +184,27 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                                notes=sfacts.tester_notes)
 
         transcripts: dict[str, list] = {}
-        shared_history: list[dict] | None = [] if topology == "single" and llm else None
+        memory = single.Memory(single.SYSTEM) if topology == "single" and llm else None
         scenario = scenario_text(review)
         plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
         def call(role: str, fn, *args, **kwargs):
             if llm:
                 llm.trace_name = role
-            transcript_role = "single" if shared_history is not None else role
+            transcript_role = "single" if memory is not None else role
             tx = transcripts.setdefault(transcript_role, [])
-            if shared_history is not None:
-                kwargs.update(history=shared_history, system=single.SYSTEM)
+            compaction = None
+            if memory is not None:
+                history, compaction = memory.begin()
+                kwargs.update(history=history, system=single.SYSTEM)
+            first = len(tx)
             try:
                 out = fn(source, llm, *args, tx, **kwargs)
             finally:
+                if memory is not None:
+                    memory.end(role)
+                    for record in tx[first:]:   # auditable: which turns this call replaced
+                        record["history_compaction"] = compaction
                 log.write_json(f"agents/transcript-{transcript_role}.json", tx)
             log.write_json(f"agents/{role}.json", out)
             return out
@@ -234,7 +249,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             complete_failures = _failure_records(log, check_start)
             report = call(f"tester-report-{attempt}", roles.report_evidence,
                           _evidence(result, complete_failures))
-            transcript_role = "single" if shared_history is not None else f"tester-report-{attempt}"
+            transcript_role = "single" if memory is not None else f"tester-report-{attempt}"
             last_call = transcripts.get(transcript_role, [])[-1:] or [None]
             _emit_claim(log, prov, attempt, report, complete_failures, last_call[0])
             attempts.append({
@@ -248,6 +263,9 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 "runner_recommendation": result.get("recommendation"),
             })
             tracing.attempt(attempt, result, attempts[-1]["failed_checks"])
+            if memory is not None:
+                memory.note_attempt(attempt, result.get("plan_id"), result["ok"],
+                                    result.get("halted"), attempts[-1]["failed_checks"])
             log.event("attempt_result", provenance="runner", name=f"attempt {attempt}",
                       status="PASS" if result["ok"] else "FAIL",
                       failed=attempts[-1]["failed_checks"])
@@ -261,12 +279,21 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           msg="planner recommended reject and the runner rejected the plan")
                 break
             previous_id = plan_obj["plan_id"]
-            plan_obj = _tag(call(
-                f"planner-{attempt + 1}", roles.plan, investigation,
-                feedback=_feedback(result, report, complete_failures), previous=plan_obj,
-                **plan_kwargs,
-            ), attempt + 1)
-            _validate_plan(plan_obj, sfacts)
+            try:
+                plan_obj = _tag(call(
+                    f"planner-{attempt + 1}", roles.plan, investigation,
+                    feedback=_feedback(result, report, complete_failures), previous=plan_obj,
+                    **plan_kwargs,
+                ), attempt + 1)
+                _validate_plan(plan_obj, sfacts)
+            except (LLMError, plans.PlanError) as exc:
+                # The runner already failed every executed plan; an unusable revision does
+                # not make that an infrastructure error. BudgetExceeded still means INCOMPLETE.
+                log.event("revision_invalid", provenance=prov, attempt=attempt + 1,
+                          parent_plan_id=previous_id, error=str(exc)[:500])
+                return _finish(False, "FAIL", source, topology, model, score, attempts,
+                               budget, reason=f"revision invalid: {exc}",
+                               scenario=scenario_id)
             log.event("proposal", provenance=prov, role="planner", attempt=attempt + 1,
                       plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                       parent_plan_id=previous_id,

@@ -243,6 +243,17 @@ def for_scenario(scenario_id: str | None, roots: list[str]) -> ScenarioFacts:
     )
 
 
+def old_version(scenario_id: str | None) -> str:
+    """Worktree key of the scenario's OLD app version: the code under review, deployed before
+    the change. Refuses any key that is also a new-version (apply or state-only) build."""
+    sc = scenarios.get(scenario_id)
+    new_builds = {v.version for s in scenarios.SCENARIOS.values() for v in s.variants.values()}
+    if sc.old_version in new_builds:
+        raise ValueError(f"scenario {sc.id}: old version {sc.old_version!r} is a new-version "
+                         "build; gather_hits searches only old code")
+    return sc.old_version
+
+
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
