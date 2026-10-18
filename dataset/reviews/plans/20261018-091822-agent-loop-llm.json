@@ -1,0 +1,17 @@
+{
+  "plan_id": "a5-rename-note-to-customer",
+  "summary": "The change cannot be safely staged: the new version writes to customer_note, the old version writes to note, and the GraphQL resolver reads note via raw SQL. Any attempt to keep note synchronized (trigger, backfill) fails under concurrent interleaved writes, causing cross‑version checks to observe stale or seed data. Therefore no plan meets the runner's deterministic checks.",
+  "write_consistency": "N/A",
+  "revision_notes": "The trigger‑based sync (COALESCE) could not guarantee that note reflects the most recent write when both versions write to different columns simultaneously. The cross‑version tests require note to always hold the latest write by either version, which is impossible without modifying the old version's write path or the new version's resolver. Hence the change is rejected.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}

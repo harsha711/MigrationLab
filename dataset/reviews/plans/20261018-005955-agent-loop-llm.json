@@ -1,0 +1,48 @@
+{
+  "plan_id": "a2-marketing-opt-in-migrati",
+  "summary": "Add nullable boolean column marketing_opt_in with default FALSE, backfill rows, deploy the new version with a state-only migration, retire the old version, then set the column NOT NULL. The NOT NULL constraint is safe because all rows have FALSE after backflow, and retiring the old version before the contract stage avoids the retirement gate refusal.",
+  "write_consistency": "The column DEFAULT FALSE ensures old-version INSERTs omit the column and receive FALSE; the new-version ORM writes FALSE explicitly. After backfill all rows contain FALSE. Retiring the old version before the contract stage ensures no concurrent old-version writes interfere with the NOT NULL check.",
+  "revision_notes": "Root cause: in the previous plan the contract_not_null stage was placed before retire_old, causing the retirement gate to refuse because the old version was still running. Revised plan moves the contract stage after retire_old, so the old version is retired before the NOT NULL constraint is applied.",
+  "stages": [
+    {
+      "id": "expand_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with default FALSE to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NULL DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_false",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill existing rows with FALSE for marketing_opt_in.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version so it no longer serves traffic."
+    },
+    {
+      "id": "contract_not_null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL now that the old version is retired and all rows have FALSE.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

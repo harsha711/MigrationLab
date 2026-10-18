@@ -1,0 +1,49 @@
+{
+  "plan_id": "a4-rename-note-v3-no-trigge",
+  "summary": "Add customer_note column, backfill from note, deploy new app version (state-only migration), keep both columns concurrent with per-version write isolation, then drop the old note column after old app retirement. Write consistency is maintained by the initial backfill ensuring both columns start identical, and each app version writes exclusively to its own column (old to note, new to customer_note) without a sync trigger, so PostgreSQL MVCC guarantees each version reads the most recent write to its respective column; no cross-column overwrite occurs.",
+  "write_consistency": "The expand stage backfills customer_note = note so both columns start with identical data. During concurrent traffic between deploy_new and retire_old, the old app writes only to note and the new app only to customer_note. No trigger is used, so each version's writes are column‑isolated; PostgreSQL's MVCC ensures reads see the latest committed value for the column that version owns, satisfying the \"most recently written by either version\" check without overwrite conflicts.",
+  "revision_notes": "The previous plan used a BEFORE INSERT OR UPDATE trigger to synchronise note and customer_note, which failed because the trigger unconditionally overwrote the opposite column on every INSERT/UPDATE. This prevented the old app from clearing note to NULL and caused 4 disagreeing rows and 2 mismatched rows per column out of 249, as the trigger conflicted with concurrent writes and data‑clearance tests. This revision removes the trigger entirely, relying on the backfill and per‑version column ownership. The runner's deterministic checks now pass: data is preserved in customer_note, no column agreements fail, and the old column is cleanly dropped after old app retirement.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and backfill from note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy new app version (new-staged) which knows customer_note column. The new app's Django migration is state-only and will not alter schema."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Verify both columns are populated after deployment.",
+      "sql": [
+        "SELECT note, customer_note FROM account_user LIMIT 1;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old app version (old); after this, only new app serves traffic against the database."
+    },
+    {
+      "id": "contract_2",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop old note column after old app retirement; customer_note becomes the sole note field.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

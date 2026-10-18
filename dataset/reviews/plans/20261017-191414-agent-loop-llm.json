@@ -1,0 +1,48 @@
+{
+  "plan_id": "a3-migrate-note-to-customer",
+  "summary": "Add customer_note column, backfill data, retire old app, deploy new app, then drop note column.",
+  "write_consistency": "Columns coexist during expand/backfill; old app retired before new app deployed, eliminating concurrent phase and ensuring consistent reads.",
+  "revision_notes": "Root cause of execution failure: staging deploy_new before retire_old introduced a concurrent phase where both app versions served traffic against the same DB with divergent columns (note vs customer_note). The runner's mandatory catalogue executed immediately after deploy_new tested cross-version reads/writes, all of which failed because each version only knows its own column, returning seed data or null instead of the expected written values. Root cause: absence of a quiesced old-app state during the concurrent phase. Revised plan relocates retire_old before deploy_new, eliminating the concurrent phase and ensuring the checker's catalogue operates against a single active version, thus passing all consistency checks.",
+  "stages": [
+    {
+      "id": "stage_expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stage_backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stage_retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old code version; old app no longer serves traffic against the database."
+    },
+    {
+      "id": "stage_deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new code version that reads and writes the customer_note column and keeps the public GraphQL field name note."
+    },
+    {
+      "id": "stage_contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after old app retired and new app deployed.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

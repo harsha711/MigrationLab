@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-mko-staged-001",
+  "summary": "The change adds a NOT NULL boolean column marketing_opt_in to account_user. A staged rollout uses a SQL expand stage to add the column with DEFAULT False before deploy_new, ensuring old version inserts receive False and no NULLs appear. deploy_new uses state-only migration; retire_old follows.",
+  "write_consistency": "Old version Django ORM omits the column in INSERT, receiving database DEFAULT False. New version ORM includes the column, explicitly or via default. Both versions write False, guaranteeing no NULLs in marketing_opt_in during concurrent traffic.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column to account_user with NOT NULL DEFAULT false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version, ending its traffic."
+    }
+  ]
+}

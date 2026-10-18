@@ -1,0 +1,51 @@
+{
+  "plan_id": "a6-rename-note-v2",
+  "summary": "Zero-downtime rename of account_user.note to customer_note using column addition, backfill, a bidirectional sync trigger with independent IF statements, state-only deploy, and column contraction.",
+  "write_consistency": "A row-level AFTER INSERT OR UPDATE trigger on account_user uses two independent IF statements: if the note column changed, its new value is copied to customer_note; if the customer_note column changed, its new value is copied to note. This ensures writes from either the old or new app version are reflected in the other column, keeping both columns consistent during concurrent traffic.",
+  "revision_notes": "The previous plan used an IF/ELSIF trigger that prioritized one column over the other, causing writes from one version to be overwritten when the other version had previously written, leading to data loss and column disagreement. This revision replaces it with two independent IF statements, allowing each column change to sync independently without priority conflicts, which satisfies the runner's concurrent-read/write checks.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger; old app continues writing note, trigger copies to customer_note, and new-app writes sync to note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from existing note values for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new (new-staged) version with state-only Django migration; both old and new versions serve traffic against the same database.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this only the new version operates on the database."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column from account_user.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

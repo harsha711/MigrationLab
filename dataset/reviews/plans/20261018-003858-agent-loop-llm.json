@@ -1,0 +1,31 @@
+{
+  "plan_id": "a2-user-note-migration",
+  "summary": "Deploy the new version (its Django migration adds the customer_note column), then backfill customer_note from note and create a PostgreSQL trigger that copies any updated customer_note value into note, ensuring the runner’s consistency check stays satisfied. Finally retire the old version.",
+  "write_consistency": "The trigger fires on UPDATE of customer_note and sets note to the new value, so note always reflects the most recent write from either version. The backfill initialises customer_note with existing note values.",
+  "revision_notes": "Removed the pre‑deploy SQL expand stage that previously created the customer_note column; the column is now added by the new version's own Django migration (migration: apply). A post‑deploy SQL stage backfills the column and adds a trigger to keep note in sync.",
+  "stages": [
+    {
+      "id": "stg1_deploy",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "stg2_backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note and create a sync trigger.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION copy_note_trigger() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER copy_note_trigger AFTER UPDATE ON account_user FOR EACH ROW WHEN (NEW.customer_note IS DISTINCT FROM OLD.customer_note) EXECUTE FUNCTION copy_note_trigger();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stg3_retire",
+      "kind": "retire_old",
+      "description": "Retire the old version after confirming both versions are stable."
+    }
+  ]
+}

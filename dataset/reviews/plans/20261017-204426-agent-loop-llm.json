@@ -1,0 +1,19 @@
+{
+  "plan_id": "a1-migrate-nickname-001",
+  "summary": "Add an optional nickname column to account_user; the old version does not know the column so it will be omitted from INSERT/UPDATE and default to NULL, while the new version's migration adds the column with a NULL default; no data loss or inconsistency occurs. Deploy the new version with its migration, then retire the old version.",
+  "write_consistency": "Old version omits nickname from its SQL statements, so the column receives the database default NULL; new version's migration creates the column with NULL default, and subsequent writes from the new version may set it. Since nickname is optional and never read by old code, concurrent reads and writes remain consistent.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is running and serving traffic."
+    }
+  ]
+}

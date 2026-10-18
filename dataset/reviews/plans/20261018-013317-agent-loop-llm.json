@@ -1,0 +1,50 @@
+{
+  "plan_id": "a6-rename-note-to-customer",
+  "summary": "Add customer_note column, backfill from note, create a PostgreSQL BEFORE INSERT OR UPDATE trigger that synchronizes note and customer_note on every write from either version, deploy the new version with a state-only migration, retire the old version, and drop the note column. The trigger ensures both columns always hold identical values, preventing the cross-version divergence that caused the previous plan's 15 check failures.",
+  "write_consistency": "A database trigger on account_user keeps note and customer_note synchronized: on INSERT or UPDATE, if one column is written by a version, the other column is set to the same value. This guarantees that the GraphQL field note always returns the most recently written value regardless of which version performed the write.",
+  "revision_notes": "Root cause: the previous plans performed only a one-time backfill (UPDATE account_user SET customer_note = note) but had no mechanism to keep note and customer_note synchronized during concurrent traffic from both versions. The old version wrote to column note, the new version wrote to column customer_note, causing the columns to diverge. The runner's cross-version checks (old_write_new_read, new_write_old_read, alternating writes, etc.) all failed because reads from the expected column returned stale seed values instead of the most recently written note. This plan adds a BEFORE INSERT OR UPDATE trigger that copies the written value to the other column, maintaining the invariant note = customer_note throughout the zero-downtime overlap.",
+  "stages": [
+    {
+      "id": "expand_add_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and backfill its values from note so both columns start equal.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a BEFORE INSERT OR UPDATE trigger that keeps note and customer_note in sync on every write from either version.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL AND NEW.customer_note IS NULL THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS NOT NULL AND NEW.note IS NULL THEN NEW.note := NEW.customer_note; ELSIF NEW.note IS NOT NULL AND NEW.customer_note IS NOT NULL THEN IF NEW.note != NEW.customer_customer_note THEN NEW.customer_note := NEW.note; END IF; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_customer_sync_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this point only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the old note column; customer_note now the sole note column.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

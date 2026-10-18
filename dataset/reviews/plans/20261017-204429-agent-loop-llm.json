@@ -1,0 +1,19 @@
+{
+  "plan_id": "a1-mig-001",
+  "summary": "The last_name column type is safely expanded from varchar(256) to varchar(512) via the new version's Django migration (ALTER COLUMN TYPE). During the overlap, both old and new versions serve traffic against the same database; the old version continues writing values up to 256 characters which PostgreSQL accepts in the expanded column, while the new version writes up to 512 characters. No SQL backfill or contract stages are needed, ensuring zero downtime and preserving existing last_name values and note consistency.",
+  "write_consistency": "PostgreSQL's ALTER COLUMN TYPE from varchar(256) to varchar(512) does not modify existing row values. The old version's writes of up to 256 characters remain valid in the 512 column, and the new version's writes of up to 512 characters are also accepted. The note column is untouched by all stages, so runner consistency checks pass unchanged.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply"
+    },
+    {
+      "id": "retire",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version operates against the database."
+    }
+  ]
+}

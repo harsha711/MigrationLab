@@ -1,0 +1,54 @@
+{
+  "plan_id": "a9-rename-note-customer-v3",
+  "summary": "Add customer_note column, backfill existing note values, create INSERT and column-specific UPDATE triggers to keep both columns synchronized during concurrent operation, deploy new version state-only, then retire old app and drop the old column.",
+  "write_consistency": "A BEFORE INSERT trigger copies the written column's value to the other column when the target is null, ensuring new rows from either app version get the correct value in the opposite column. Two BEFORE UPDATE OF column triggers fire when note or customer_note is updated and set the other column to the updated value, guaranteeing that writes from both app versions are immediately visible to the other version during the concurrent phase.",
+  "revision_notes": "The previous plan failed because its triggers only fired on UPDATE and lacked an INSERT-capable trigger, causing new rows to have mismatched columns and reads returning null. Additionally, the column-specific UPDATE triggers were missing, leading to disagreeing rows when one version wrote after the other. This revised plan adds a BEFORE INSERT trigger that copies the supplied column value to the other column if it is null, and two BEFORE UPDATE OF column triggers that always set the opposite column to the updated value, providing full write consistency from row creation through concurrent operation. The backfill step ensures all existing rows have customer_note populated before the concurrent phase begins.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note so the new app has data immediately.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "create_triggers",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Create INSERT and column-specific UPDATE triggers to synchronize note and customer_note during concurrent app operation.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_insert_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF NEW.note IS NOT NULL THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS NOT NULL THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_insert_trig BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_insert_note_customer_note();",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := NEW.note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trig BEFORE UPDATE OF note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_customer_trig BEFORE UPDATE OF customer_note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration. New app knows customer_note, old app still knows note; triggers keep columns in sync.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old app version and remove old column and triggers after new version is active and serving traffic exclusively via customer_note column and GraphQL field note (mapped in code). SQL drops the three triggers and the note column from account_user; functions remain but become unused after the column is gone..sql"
+    }
+  ]
+}

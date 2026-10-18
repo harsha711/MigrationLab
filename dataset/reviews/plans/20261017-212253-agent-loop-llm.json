@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-mkt-optin-001",
+  "summary": "Add a nullable marketing_opt_in column with default False, backfill all existing rows to False, deploy the new version with state_only migration, retire the old version, then alter the column to NOT NULL. The column’s DB default False ensures old‑version inserts also receive False, preventing NULLs during the overlap.",
+  "write_consistency": "The column is created with DEFAULT FALSE, so any INSERT from the old version (which does not know the column) receives False instead of NULL. A backfill UPDATE sets every existing row to False before the new version starts. After retire_old only the new version writes, and its code always includes the column, guaranteeing no NULLs remain when the column is finally set NOT NULL.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with default False.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set marketing_opt_in to False for all rows (including those that were NULL after column addition).",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only the new version handles traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL; succeeds because all rows are already False.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

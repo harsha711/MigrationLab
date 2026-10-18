@@ -1,0 +1,48 @@
+{
+  "plan_id": "a4-note-rename-001",
+  "summary": "Plan a3-note-rename-001 passed expand and backfill stages, adding and populating customer_note. However deploy_new_001.django_migrate failed with ProgrammingError: column customer_note already exists, because the column persisted from prior aborted migration attempts (a1/a2). The expand stage re-added the column, and the new-app migration lacked an existence check, causing a duplicate column error. Both note and customer_note columns remained, violating the single-column rename intent.",
+  "revision_notes": "Root cause: Residual customer_note column from earlier aborted plans (a1/a2) was not dropped or checked for existence before plan a3's expand stage re-added it, and the new-app Django migration had no idempotency guard, causing the duplicate column error.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note alongside existing note column to allow both app versions to operate concurrently.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy values from the deprecated note column into customer_note so the new app can read the data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which is already coded to read/write the customer_note column. No code changes are required from this plan; the deployment is performed separately.",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old) that still references the note column. After this stage only the new version runs, which exclusively uses customer_note."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after data has been migrated and old app is retired, leaving only customer_note.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

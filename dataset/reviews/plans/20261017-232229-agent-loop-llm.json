@@ -1,0 +1,43 @@
+{
+  "plan_id": "a5-note-rename-004",
+  "summary": "Rename account_user.note to customer_note by adding the new column, backfilling data, creating a bidirectional database trigger to synchronize both columns during concurrent app operation, deploying the new version with a state-only migration, retiring the old version, and dropping the old column.",
+  "write_consistency": "A database trigger synchronises note and customer_note on every INSERT/UPDATE from either app version, ensuring both columns always hold the same value and both app versions see the most recent write from either version.",
+  "revision_notes": "The previous plan failed during stage expand because the PL/pgSQL trigger function body contained internal semicolons that the runner's executor misinterpreted as statement separators, causing a syntax error. This revision ensures each SQL string in the expand stage is a single valid PostgreSQL command with proper dollar-quoting ($$ ... $$) for the function body, and the trigger is created before deploy_new so synchronization is active before any concurrent traffic runs. The function body logic was simplified to a single-statement-per-branch structure that the runner's executor can process without splitting on semicolons, and the final SQL string terminator is correctly placed after the LANGUAGE clause.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, and create a trigger to keep note and customer_note in sync.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.customer_note := NEW.note; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version (new-staged) with a state-only Django migration. The new app only knows customer_note and will read/write that column.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this stage, only the new app serves traffic against the database."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the old note column now that the old app is retired.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

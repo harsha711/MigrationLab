@@ -1,0 +1,63 @@
+{
+  "plan_id": "a4-r2-rename-note-to-custom",
+  "summary": "Add customer_note column alongside note, backfill existing note values with a filtered UPDATE that only matches non-NULL notes, deploy new app concurrently with old using triggers to sync both columns, then retire old app and drop the note column.",
+  "write_consistency": "During concurrent traffic, BEFORE INSERT OR UPDATE triggers on account_user keep note and customer_note in sync: sync_note_to_customer sets customer_note := COALESCE(NEW.note, NEW.customer_note); sync_customer_to_note sets note := COALESCE(NEW.customer_note, NEW.note). Thus whichever app writes its known column, the other column is updated to match, ensuring both versions always read the most recently written value.",
+  "revision_notes": "The previous plan failed because the backfill UPDATE ... WHERE customer_note IS NULL also matched rows with NULL note, causing the repeat_until_zero_rows loop to never converge. This revision filters note IS NOT NULL, guaranteeing one pass sets all non-NULL notes. Additionally, the previous plan's expand stage added customer_note unconditionally, causing a duplicate-column conflict when the column already existed and the new app's state-only migration check failed. This revision uses ALTER TABLE ... ADD COLUMN IF NOT EXISTS in the expand stage to safely add the column only if absent, and places the expand stage before deploy_new so the column exists for the new app while avoiding schema conflict. Triggers are added after deploy_new to maintain write consistency during the concurrent phase.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note TEXT column to account_user alongside existing note column, safely if already present.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for rows where note is not NULL and customer_note is NULL.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy new-staged app version. New app uses customer_note column; old app continues using note column concurrently.",
+      "migration": "state_only",
+      "variant": "apply"
+    },
+    {
+      "id": "sync_triggers_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create triggers to keep note and customer_note in sync for concurrent app versions.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_to_customer_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER customer_to_note_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old app version. Old app stops serving traffic, ensuring no more writes to the note column after this stage completes."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from account_user since the old app has been retired and customer_note holds all data.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

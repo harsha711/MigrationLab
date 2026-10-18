@@ -1,0 +1,27 @@
+{
+  "plan_id": "a1-note-removal-staged",
+  "summary": "Deploy the new Saleor version with state_only migration to preserve the note column during the overlap phase, retire the old version, then execute a contract SQL stage to drop the note column once only the new version remains active and serving traffic.",
+  "write_consistency": "During the concurrent overlap, the old version continues writing notes through its model (including the note column), while the new version omits the field from INSERT/UPDATE statements, causing the column to receive database DEFAULT (NULL) per Django's behavior. The runner's cross-version consistency checks verify that note values reflect the most recent write from either version. After retire_old, no further writes occur, and the contract stage safely drops the column.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new_state_only",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old"
+    },
+    {
+      "id": "drop_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column from the account_user table. Executed only after retire_old so the old version no longer accesses the database.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

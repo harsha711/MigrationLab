@@ -1,0 +1,28 @@
+{
+  "plan_id": "a2-unique-last-name-revised",
+  "summary": "The rollout cannot succeed because adding a unique constraint on User.last_name would violate the runner's rule that pre-existing last_name values must not change. Duplicate last_name values already exist in the database, and any attempt to enforce uniqueness causes UNIQUE constraint violations during concurrent writes in the overlap phase. Since existing rows cannot be altered, no valid plan can satisfy both the uniqueness goal and the immutability constraint.",
+  "write_consistency": "N/A – the change is rejected.",
+  "revision_notes": "Root cause: the new version's unique=True on last_name creates a DB-level unique constraint. During deploy_new both old and new versions serve traffic; the old version may have written rows with duplicate last_name values. The runner's smoke checks detect UNIQUE violations when the new version attempts to create or update users with those duplicate values. Because pre-existing last_name values cannot be modified (runner rule), the constraint cannot be added safely. The previously attempted staged rollout failed at deploy_new (2 check failures) and the subsequent index stage was refused due to earlier failures.",
+  "stages": [
+    {
+      "id": "unique_deploy",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "unique_retire",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version so that only the new version continues."
+    },
+    {
+      "id": "unique_index",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add a concurrent partial unique index on account_user.last_name to enforce uniqueness on non-null values.",
+      "sql": [
+        "CREATE UNIQUE INDEX CONCURRENTLY idx_account_user_last_name_unique ON account_user (last_name) WHERE last_name IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

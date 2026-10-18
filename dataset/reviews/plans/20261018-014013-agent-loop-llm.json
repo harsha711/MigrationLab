@@ -1,0 +1,38 @@
+{
+  "plan_id": "a3-migrate-user-note-003",
+  "summary": "The change cannot be safely staged because the new version writes notes to customer_note while the old version continues writing to note, causing the runner’s preservation checks on the note column to fail due to divergent values. No SQL‑only plan can synchronize the columns without modifying the new app code.",
+  "write_consistency": "N/A – both versions would write to different columns, and the runner’s note‑column preservation check cannot be satisfied.",
+  "revision_notes": "Root cause: after deploy_new the new version’s Django migration adds customer_note, but the old version still writes to note. The runner checks that note equals the most recent write from either version; since new writes go to customer_note, note becomes stale, triggering 178 mismatches. Attempts to backfill note→customer_note do not prevent subsequent old‑version writes from breaking the check. Because the new app code cannot be altered, no plan using only SQL stages and version rolls can keep both versions correct throughout the overlap.",
+  "stages": [
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old version immediately after deploy_new to end concurrent traffic."
+    },
+    {
+      "id": "backfill_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy remaining note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column after the old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

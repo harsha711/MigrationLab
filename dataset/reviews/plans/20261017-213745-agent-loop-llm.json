@@ -1,0 +1,59 @@
+{
+  "plan_id": "a4-rename-note-to-customer",
+  "summary": "Add customer_note column, backfill existing data, deploy new version state-only, retire old version, synchronize note column from customer_note, then drop note column, ensuring zero downtime and data consistency.",
+  "write_consistency": "Old app writes exclusively to note column; new app exclusively to customer_note. The expand and backfill stages synchronize existing rows. deploy_new and retire_old manage the version switch, with retire_old executed before sync to ensure no concurrent writes to note during synchronization. The sync stage mirrors customer_note into note, and contract drops note, preserving all data.",
+  "revision_notes": "Root cause of previous failure: backfill only updated rows where note was non-null, leaving NULL notes unsynced and causing mismatched rows when old app wrote later. Also, sync stage was placed before retire_old while old app was still alive, triggering retirement_gate expecting old_alive: false. This revised plan moves retire_old before sync, ensures backfill covers all rows (WHERE customer_note IS NULL), and sequences synchronization after old app retirement, guaranteeing consistent reads and zero data loss.",
+  "stages": [
+    {
+      "id": "expand-1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new customer_note column alongside existing note column",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note for all rows where customer_note is null",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new-1",
+      "kind": "deploy_new",
+      "description": "Deploy new version whose Django model only knows customer_note; migration is state-only, schema change already applied by SQL stages",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old-1",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer serves traffic"
+    },
+    {
+      "id": "sync-1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Synchronize note column with customer_note so every row note value matches customer_note",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract-1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove old note column; data preserved in customer_note",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

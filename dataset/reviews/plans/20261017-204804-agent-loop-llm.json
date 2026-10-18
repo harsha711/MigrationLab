@@ -1,0 +1,49 @@
+{
+  "plan_id": "a4-mkt-opt-in-v4",
+  "summary": "Add a nullable boolean column marketing_opt_in with DEFAULT FALSE, backfill existing rows, deploy the new version with a state-only Django migration (no SQL), retire the old version, then make the column NOT NULL, ensuring zero‑downtime and data consistency across both app versions.",
+  "write_consistency": "The column has a database DEFAULT of FALSE, so the old version's INSERT statements (which omit the column) automatically receive FALSE. The new version explicitly sets FALSE on writes, keeping both versions consistent during the overlap window.",
+  "revision_notes": "Root cause of previous failure: the deploy_new stage had migration: \"state_only\" combined with variant: \"apply\", which caused Django's manage.py migrate to attempt adding the column already added by the SQL expand stage, producing a duplicate‑column error. This revised plan uses migration: \"state_only\" without a variant, so Django only records state and issues no SQL, because the schema change is already managed by the plan's SQL stages.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with default False.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill existing rows so marketing_opt_in is False for all rows.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version so it no longer serves traffic."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make the marketing_opt_in column NOT NULL.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

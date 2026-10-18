@@ -1,0 +1,61 @@
+{
+  "plan_id": "a4-rn02-rename-note",
+  "summary": "Add customer_note column, backfill from note, create a bidirectional sync trigger before new version deployment, deploy new version state-only, retire old version, then drop the note column and trigger.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user synchronises the note and customer_note columns. On INSERT, if the written column has a non-NULL value the trigger copies it to the other column; on UPDATE, if either column changes the trigger copies the new value to the other column. Old app writes note only, new app writes customer_note only; the trigger ensures whichever column is written to, the other column receives the same value, so both versions read the most recently written data.",
+  "revision_notes": "Previous plan created the sync function and trigger in contract stage, which the runner refused because the old app was still running. This revised plan moves the trigger creation to the expand stage (before new version deployment) so the trigger is active during concurrent operation, and adds a final stage to drop the trigger and note column after old version retirement.",
+  "stages": [
+    {
+      "id": "stg_expand_add_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable customer_note column alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stg_backfill_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so both columns contain the same data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stg_create_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create PL/pgSQL function and trigger that synchronises note and customer_note on insert/update.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_account_user_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS NOT NULL THEN NEW.note := NEW.customer_note; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_account_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stg_deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; Django model now knows customer_note only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "stg_retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer serves traffic."
+    },
+    {
+      "id": "stg_drop_trigger_and_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the old note column.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "plan_id": "a3-reject-unique-ln-001",
+  "summary": "The target database contains duplicate last_name values (e.g., 'Cook' on multiple rows) that prevent adding a unique index without modifying pre-existing data. Runner checks forbid changing these values, making a zero-downtime staged rollout impossible under the given constraints.",
+  "write_consistency": "N/A; the unique constraint cannot be enforced because existing duplicates would violate it, and modifying pre-existing last_name values is prohibited by the runner checks.",
+  "revision_notes": "Root cause: The disposable PostgreSQL database has duplicate non-NULL last_name values (specifically 'Cook' appears on multiple rows). The previous plan's expand_unique stage failed with 'could not create unique index ... Key (last_name)=(Cook) is duplicated.' Since pre-existing last_name values must not change during the rollout, there is no valid SQL stage to resolve these duplicates or add a covering unique index. A direct deploy (accept_as_is) would also fail when the new version's migration attempts to add the constraint or when both versions serve concurrent traffic with duplicates present. Therefore, no plan can keep both versions correct while satisfying all runner checks.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this the old version never serves traffic again."
+    }
+  ]
+}

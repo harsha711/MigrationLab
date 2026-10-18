@@ -1,0 +1,39 @@
+{
+  "plan_id": "a8-revised-note-migration",
+  "summary": "Deploy the new version first, which adds the customer_note column via its Django migration. Then backfill existing note values into customer_note, synchronise the note column from customer_note so the old version sees consistent values, and finally retire the old version.",
+  "write_consistency": "Old version continues writing to note column; new version writes to customer_note via GraphQL note field. After deploy_new the new column is added. A backfill stage copies note values into customer_note. A sync stage after backfill sets note = customer_note, ensuring note column reflects the migrated data. After retire_old only the new version serves traffic, which writes to customer_note.",
+  "revision_notes": "Root cause of previous failure: after deploy_new the note column retained its original values while the new version began writing to customer_note, causing the runner's preservation.note check to detect 179 mismatched rows because expected values included notes written by the new version or seed notes that had been migrated. This revision adds a sync stage after deploy_new (and after backfill) to keep note column aligned with customer_note, and places the backfill after deploy_new so that the note column is updated before any checks that expect the migrated state.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy every note value from the note column into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Synchronise the note column with customer_note so the old version sees the migrated values.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this stage only the new version serves traffic."
+    }
+  ]
+}

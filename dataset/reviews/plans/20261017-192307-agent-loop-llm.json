@@ -1,0 +1,50 @@
+{
+  "plan_id": "a4-rename-note-v2",
+  "summary": "Add customer_note column, backfill all rows from note, create bidirectional sync trigger, deploy new version, retire old, then drop note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user sets the other column to the newly written value whenever the source column changes (using IS DISTINCT FROM), ensuring both old and new app versions always see the most recent write.",
+  "revision_notes": "The previous plan's backfill only set customer_note = note for rows where customer_note was NULL, leaving pre-existing mismatched values. The trigger also used unconditional COALESCE assignments that retained stale values. This revised plan backfills every row unconditionally and uses an IS DISTINCT FROM trigger that only updates the other column when it actually changes, preventing lost writes and preserving clears.",
+  "stages": [
+    {
+      "id": "expand_add_column_and_backfill",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and backfill existing data from note to customer_note for all rows.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "expand_create_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger function and trigger that synchronise note and customer_note bidirectionally.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_user_note_customer_note() RETURNS TRIGGER AS $$\nBEGIN\n   IF TG_OP = 'INSERT' THEN\n      IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n         NEW.customer_note := NEW.note;\n      END IF;\n      IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n         NEW.note := NEW.customer_note;\n      END IF;\n   ELSIF TG_OP = 'UPDATE' THEN\n      IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n         NEW.customer_note := NEW.note;\n      END IF;\n      IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n         NEW.note := NEW.customer_note;\n      END IF;\n   END IF;\n   RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged Saleor version. The new app uses customer_note; both database columns are now live and in sync via the trigger."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version. After this stage only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the deprecated note column; old app already retired, safe to remove.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

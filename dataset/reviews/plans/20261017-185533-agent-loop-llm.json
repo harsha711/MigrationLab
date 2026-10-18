@@ -1,0 +1,50 @@
+{
+  "plan_id": "a3-m01-rev2",
+  "summary": "Add customer_note column, backfill, deploy new app, retire old app, drop note column, with a plpgsql trigger to synchronize note and customer_note during concurrent traffic.",
+  "write_consistency": "Old app writes to note, new app writes to customer_note; a PostgreSQL trigger bidirectionally syncs the columns so that reads from either version see the most recent write, satisfying the runner’s consistency checks.",
+  "revision_notes": "Root cause: The previous plan’s dual-column schema (note + customer_note) caused the runner’s cross-version read/write checks to fail because writes from one version target a column the other version does not read; backfill only equalized initial values, not ongoing concurrent traffic. Revised plan adds a plpgsql trigger during the expand stage to keep note and customer_note in sync bidirectionally, enabling the runner’s consistency model to pass.",
+  "stages": [
+    {
+      "id": "e1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and bidirectional sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS \\$\\$ BEGIN IF NEW.note IS DISTINCT FROM COALESCE(NEW.customer_note, '') THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM COALESCE(NEW.note, '') THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; \\$\\$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_on_write AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "b1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy all existing note values into customer_note",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new‑staged app version (code already updated to use customer_note)"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version that only knows the note column"
+    },
+    {
+      "id": "d1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column after old app retirement",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

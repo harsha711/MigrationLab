@@ -1,0 +1,61 @@
+{
+  "plan_id": "a6-migrate-user-note-003",
+  "summary": "Plan a5-migrate-user-note-003 completed all stages except contract_001, where 39 prior checks passed. The contract stage failed with error \"cannot drop function sync_note_customer_note() because other objects depend on it\" because the trigger sync_note_trg depended on the function and DROP FUNCTION was called without CASCADE.",
+  "revision_notes": "Root cause: DROP FUNCTION IF EXISTS sync_note_customer_note() was executed without CASCADE while the trigger sync_note_trg depended on it, preventing the function from being dropped and halting the contract stage.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so the new version sees the data immediately.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger that keeps note and customer_note in sync during the concurrent period.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM OLD.note THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trg\n  BEFORE INSERT OR UPDATE ON account_user\n  FOR EACH ROW\n  EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "description": "Deploy the new (new-staged) version with a state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this stage only the new version is active."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove obsolete note column and cleanup trigger.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_trg ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_customer_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

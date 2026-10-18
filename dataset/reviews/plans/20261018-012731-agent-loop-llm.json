@@ -1,0 +1,38 @@
+{
+  "plan_id": "a6-note-type-change-v3",
+  "summary": "Truncate existing long notes, deploy the new version with a state-only migration (keeping the note column as TEXT to avoid concurrent-overlap conflicts), retire the old version, then alter the note column from TEXT to VARCHAR(255) in a contract stage after retire_old to enforce the 255-character limit at the database level for the new version only.",
+  "write_consistency": "During the overlap between deploy_new and retire_old, the note column remains TEXT, allowing both versions to write notes without DataError. After retire_old, the column is changed to VARCHAR(255), and the new version's CharField(max_length=255) enforces the limit at both application and database levels.",
+  "revision_notes": "The previous plan changed the column type to VARCHAR(255) before deploy_new, which caused the old unmodified Saleor version (TextField, no max_length) to raise DataError 'value too long for type character varying(255)' when writing notes exceeding 255 characters during the concurrent-overlap phase. This revision delays the column type change to a contract stage after retire_old, ensuring the overlap period has a TEXT column where both versions can safely persist notes, and the type change occurs only after the old version is retired.",
+  "stages": [
+    {
+      "id": "truncate_notes",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Truncate all existing note values exceeding 255 characters to 255.",
+      "sql": [
+        "UPDATE account_user SET note = left(note, 255) WHERE char_length(note) > 255"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version is confirmed healthy."
+    },
+    {
+      "id": "change_column_type",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Change the note column on account_user from TEXT to VARCHAR(255).",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255)"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

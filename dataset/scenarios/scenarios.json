@@ -1,0 +1,700 @@
+[
+ {
+  "id": "rename-note",
+  "title": "A1: rename a column (User.note -> customer_note)",
+  "change": {
+   "description": "Rename Django field User.note (account_user.note, text NULL) to customer_note. Keep the public GraphQL field name note.",
+   "table": "account_user",
+   "old_column": "note",
+   "new_column": "customer_note"
+  },
+  "variants": {
+   "apply": {
+    "version": "new-unsafe",
+    "migration": "0107_rename_user_note_customer_note"
+   },
+   "state_only": {
+    "version": "new-staged",
+    "migration": "0107_rename_user_note_customer_note"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note",
+   "customer_note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": true,
+  "tags": [
+   "A1"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "add-optional-column",
+  "title": "D1: add an optional column the old app ignores",
+  "change": {
+   "description": "Add an optional field User.nickname (varchar, NULL allowed). Old code never reads or writes it.",
+   "table": "account_user",
+   "new_column": "nickname"
+  },
+  "variants": {
+   "apply": {
+    "version": "add-optional-column/apply",
+    "migration": "0107_user_nickname"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "D1",
+   "safe-control"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "rename-db-column",
+  "title": "D3: rename in code only, keep the database column (db_column)",
+  "change": {
+   "description": "Rename the Django attribute User.note to customer_note while keeping the database column name note via db_column. Keep GraphQL field note.",
+   "table": "account_user",
+   "old_column": "note",
+   "new_attribute": "customer_note"
+  },
+  "variants": {
+   "apply": {
+    "version": "rename-db-column/apply",
+    "migration": "0107_user_note_db_column"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [
+   "note"
+  ],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "D3",
+   "safe-control"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "add-required-column",
+  "title": "A4: add a required (NOT NULL) column with a default",
+  "change": {
+   "description": "Add a required field User.marketing_opt_in (boolean NOT NULL, Django default False).",
+   "table": "account_user",
+   "new_column": "marketing_opt_in"
+  },
+  "variants": {
+   "apply": {
+    "version": "add-required-column/apply",
+    "migration": "0107_user_marketing_opt_in"
+   },
+   "state_only": {
+    "version": "add-required-column/state-only",
+    "migration": "0107_user_marketing_opt_in"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [
+   "marketing_opt_in"
+  ],
+  "absent_after_contract": [],
+  "present_after_contract": [
+   "marketing_opt_in"
+  ],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "A4"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "drop-column",
+  "title": "A3: drop a column the new code no longer uses (User.note)",
+  "change": {
+   "description": "Remove the Django field User.note and its GraphQL field and inputs; the new code no longer reads or writes customer notes.",
+   "table": "account_user",
+   "old_column": "note"
+  },
+  "variants": {
+   "apply": {
+    "version": "drop-column/apply",
+    "migration": "0107_remove_user_note"
+   },
+   "state_only": {
+    "version": "drop-column/state-only",
+    "migration": "0107_remove_user_note"
+   }
+  },
+  "cases": [
+   "old_write_old_read",
+   "old_create_old_read",
+   "new_create_plain_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [
+   "note"
+  ],
+  "present_after_contract": [],
+  "new_app_note_ops": false,
+  "rename_hooks": false,
+  "tags": [
+   "A3"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "shorten-note",
+  "title": "B1: shorten a text column (User.note -> varchar(255))",
+  "change": {
+   "description": "Change User.note from text to CharField(max_length=255).",
+   "table": "account_user",
+   "old_column": "note"
+  },
+  "variants": {
+   "apply": {
+    "version": "shorten-note/apply",
+    "migration": "0107_alter_user_note_max_length"
+   },
+   "state_only": {
+    "version": "shorten-note/state-only",
+    "migration": "0107_alter_user_note_max_length"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read",
+   "old_write_long_note"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [
+   "note"
+  ],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "B1"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "backfill-then-required",
+  "title": "A5: backfill a new column, then make it required while old writers still insert",
+  "change": {
+   "description": "Add User.marketing_opt_in (boolean, Django default False) by adding a nullable column, backfilling it, and making it NOT NULL.",
+   "table": "account_user",
+   "new_column": "marketing_opt_in"
+  },
+  "variants": {
+   "apply": {
+    "version": "add-required-column/apply",
+    "migration": "0107_user_marketing_opt_in"
+   },
+   "state_only": {
+    "version": "add-required-column/state-only",
+    "migration": "0107_user_marketing_opt_in"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [
+   "marketing_opt_in"
+  ],
+  "absent_after_contract": [],
+  "present_after_contract": [
+   "marketing_opt_in"
+  ],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "A5"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "add-table",
+  "title": "D2: add a new table",
+  "change": {
+   "description": "Add a new model LoyaltyTier (table account_loyaltytier).",
+   "table": "account_user",
+   "new_table": "account_loyaltytier"
+  },
+  "variants": {
+   "apply": {
+    "version": "add-table/apply",
+    "migration": "0107_loyaltytier"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "D2",
+   "safe-control"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "add-index-concurrently",
+  "title": "D4: add an index concurrently",
+  "change": {
+   "description": "Add a B-tree index on User.last_name, built with CREATE INDEX CONCURRENTLY (non-atomic migration).",
+   "table": "account_user",
+   "indexed_column": "last_name"
+  },
+  "variants": {
+   "apply": {
+    "version": "add-index-concurrently/apply",
+    "migration": "0107_user_last_name_btree"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "D4",
+   "safe-control"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [
+   "last_name"
+  ],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "lengthen-varchar",
+  "title": "D5: lengthen a varchar column (last_name 256 -> 512)",
+  "change": {
+   "description": "Change User.last_name from varchar(256) to varchar(512).",
+   "table": "account_user",
+   "old_column": "last_name"
+  },
+  "variants": {
+   "apply": {
+    "version": "lengthen-varchar/apply",
+    "migration": "0107_alter_user_last_name_512"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "D5",
+   "safe-control"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [
+   "last_name"
+  ],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "unique-last-name",
+  "title": "B2: add a unique constraint to a column with duplicates",
+  "change": {
+   "description": "Make User.last_name unique.",
+   "table": "account_user",
+   "old_column": "last_name"
+  },
+  "variants": {
+   "apply": {
+    "version": "unique-last-name/apply",
+    "migration": "0107_alter_user_last_name_unique"
+   },
+   "state_only": {
+    "version": "unique-last-name/state-only",
+    "migration": "0107_alter_user_last_name_unique"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "B2"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [
+   "last_name"
+  ],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "foreign-key-orphans",
+  "title": "B3: add a foreign key over a legacy column that has orphan values",
+  "change": {
+   "description": "Turn the legacy integer column account_user.referrer_id into ForeignKey(User) (self-reference).",
+   "table": "account_user",
+   "old_column": "referrer_id"
+  },
+  "variants": {
+   "apply": {
+    "version": "foreign-key-orphans/apply",
+    "migration": "0107_user_referrer"
+   },
+   "state_only": {
+    "version": "foreign-key-orphans/state-only",
+    "migration": "0107_user_referrer"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [
+   "referrer_id"
+  ],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "B3"
+  ],
+  "old_version": "old",
+  "prepare_sql": [
+   "ALTER TABLE account_user ADD COLUMN referrer_id integer",
+   "UPDATE account_user SET referrer_id = id - 1 WHERE id % 10 = 0 AND id > 1",
+   "UPDATE account_user SET referrer_id = id + 1000000 WHERE id % 97 = 0"
+  ],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "irreversible-data-migration",
+  "title": "B4: irreversible data migration (move notes into a new column)",
+  "change": {
+   "description": "Add User.customer_note and move every note into it with a data migration.",
+   "table": "account_user",
+   "old_column": "note",
+   "new_column": "customer_note"
+  },
+  "variants": {
+   "apply": {
+    "version": "irreversible-data-migration/apply",
+    "migration": "0107_move_note"
+   },
+   "apply-reversible": {
+    "version": "irreversible-data-migration/reversible",
+    "migration": "0107_move_note"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": false,
+  "tags": [
+   "B4"
+  ],
+  "old_version": "old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ },
+ {
+  "id": "raw-sql-rename",
+  "title": "A8: rename a column that app code reads through raw SQL",
+  "change": {
+   "description": "Rename User.note to customer_note. The GraphQL resolver for User.note reads the column with a raw SQL query.",
+   "table": "account_user",
+   "old_column": "note",
+   "new_column": "customer_note"
+  },
+  "variants": {
+   "apply": {
+    "version": "raw-sql-rename/apply",
+    "migration": "0107_rename_user_note_customer_note"
+   },
+   "state_only": {
+    "version": "raw-sql-rename/state-only",
+    "migration": "0107_rename_user_note_customer_note"
+   }
+  },
+  "cases": [
+   "old_write_new_read",
+   "new_write_old_read",
+   "old_create_new_read",
+   "new_create_old_read",
+   "alternating_same_user",
+   "clear_from_old",
+   "clear_from_new",
+   "unicode_new_write_old_read"
+  ],
+  "preserve": [
+   "note",
+   "customer_note"
+  ],
+  "not_null": [],
+  "absent_after_contract": [],
+  "present_after_contract": [],
+  "new_app_note_ops": true,
+  "rename_hooks": true,
+  "tags": [
+   "A8"
+  ],
+  "old_version": "raw-sql-rename/old",
+  "prepare_sql": [],
+  "unchanged": [],
+  "not_null_phases": [
+   "expand",
+   "backfill",
+   "deploy",
+   "contract"
+  ]
+ }
+]

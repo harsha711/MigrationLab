@@ -1,0 +1,37 @@
+{
+  "plan_id": "a1-m01",
+  "summary": "Add NOT NULL DEFAULT FALSE boolean column marketing_opt_in to account_user via expand SQL stage before deploy_new, backfill any NULLs to FALSE, deploy_new with state_only to own the schema change without running the new version's migration, retire_old after which only the new version serves traffic. Old version inserts receive DB default False; new version sets field explicitly, ensuring no NULLs during concurrent operation.",
+  "write_consistency": "Old version INSERT/UPDATE omits marketing_opt_in, PostgreSQL assigns DB default False; new version explicitly sets the field. NOT NULL constraint and DEFAULT False ensure no NULLs persist across both versions' concurrent traffic.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL DEFAULT FALSE to account_user",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE;"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set marketing_opt_in to FALSE for any rows that may have NULL",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only new version serves traffic"
+    }
+  ]
+}

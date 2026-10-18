@@ -1,0 +1,52 @@
+{
+  "plan_id": "a6-b3-rename-note-to-custom",
+  "summary": "Rename User.note to customer_note by adding the new column, copying existing data, creating a bidirectional sync trigger that works on both INSERT and UPDATE for both application versions, deploying the new version with a state‑only migration, retiring the old version, performing a final backfill to guarantee column equality, and finally dropping the old note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user ensures that any write from the old version to note automatically mirrors the value to customer_note, and any write from the new version to customer_note mirrors to note. This keeps both columns consistent during the overlap, so reads by either version return the most recently written value.",
+  "revision_notes": "The previous plan’s triggers only fired on UPDATE and used WHEN conditions that excluded INSERT statements, so newly created rows by either version resulted in NULL for the column not explicitly written, causing the runner’s read checks to fail. This revision introduces a single BEFORE INSERT OR UPDATE trigger that examines TG_OP and sets the complementary column accordingly, handling both INSERT and UPDATE correctly.",
+  "stages": [
+    {
+      "id": "expand_rename_note",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, copy existing note values, and create a sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.note IS NOT NULL AND NEW.customer_note IS NULL THEN\n      NEW.customer_note := NEW.note;\n    ELSIF NEW.customer_note IS NOT NULL AND NEW.note IS NULL THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  ELSE\n    IF NEW.note IS DISTINCT FROM OLD.note THEN\n      NEW.customer_note := NEW.note;\n    END IF;\n    IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  END IF;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old application version. After this stage only the new version runs against the database."
+    },
+    {
+      "id": "backfill_sync_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Ensure customer_note equals note for all rows before the old column is dropped.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_rename_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the old note column so that only customer_note remains.",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note_trig ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

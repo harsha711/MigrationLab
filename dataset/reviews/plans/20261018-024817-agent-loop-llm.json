@@ -1,0 +1,46 @@
+{
+  "plan_id": "a1-marketing-opt-in-staged",
+  "summary": "Add marketing_opt_in column to account_user by first adding a nullable BOOLEAN column with database default False (ensuring old version inserts receive False), backfilling existing rows to False, then after retiring the old version, setting the column NOT NULL. deploy_new uses state_only migration as SQL stages own the schema change.",
+  "write_consistency": "Old version inserts omit the column and receive DB DEFAULT False; new version sets the field explicitly to False. Backfill stage updates all existing rows to False before deploy_new. After deploy_new, both versions' writes result in False, satisfying the no-NULL check during overlap. Contract stage after retire_old ensures no NULLs when making NOT NULL.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with database default False.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT FALSE;"
+      ]
+    },
+    {
+      "id": "backfill_col",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill all existing rows with False, clearing NULLs from column addition.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = False WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this only new version serves traffic."
+    },
+    {
+      "id": "contract_col",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Set marketing_opt_in to NOT NULL, finalizing the schema change.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ]
+    }
+  ]
+}

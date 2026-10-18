@@ -1,0 +1,49 @@
+{
+  "plan_id": "a4-ren-004",
+  "summary": "Add customer_note column, backfill note values to customer_note using a single UPDATE, deploy new version state-only, retire old version, then drop note column for zero-downtime rename with consistent reads.",
+  "write_consistency": "Old app continues writing to note column; new app writes to customer_note column. The note column is retained during overlap until retirement. Backfill copies existing note values to customer_note before deploy_new so both apps see consistent data for existing rows; after deploy_new, new app writes customer_note, old app writes note. No data loss because all rows with note values are copied prior to retire_old.",
+  "revision_notes": "The previous plan's backfill stage used a PL/pgSQL DO block with LIMIT inside UPDATE and EXIT WHEN NOT FOUND, which caused a PostgreSQL syntax error near 'LIMIT' because the runner executes each sql string as a single statement and the LOOP construct was not compatible with the runner's execution model. The revised plan uses a plain UPDATE statement without LIMIT, relying on repeat_until_zero_rows to re-run the stage until 0 rows are affected, guaranteeing convergence and avoiding syntax errors.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill note values into customer_note column.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy new version (new-staged) with state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old version (old)."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove old note column; customer_note is now the sole column.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

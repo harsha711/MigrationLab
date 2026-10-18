@@ -1,0 +1,27 @@
+{
+  "plan_id": "a1-note-removal-001",
+  "summary": "Deploy the new version with a state‑only Django migration so the model no longer contains the note field, keep the column while the old version still serves traffic, retire the old version, then drop the note column in a contract SQL stage.",
+  "write_consistency": "The old version continues to read and write customer notes to the \"note\" column; the new version omits note from all GraphQL inputs/outputs and does not touch the column. During the overlap the column stays unchanged, preserving data. After retire_old the column is safely removed.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from the account_user table after the old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

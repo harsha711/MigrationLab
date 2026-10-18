@@ -1,0 +1,47 @@
+{
+  "plan_id": "a3-mig-002",
+  "summary": "Plan a2-mig-002 passed expand-1 but failed at backfill-1 because the UPDATE statement repeated 10000 times without convergence, never affecting 0 rows and hitting the iteration limit.",
+  "revision_notes": "The backfill UPDATE `SET customer_note = note WHERE customer_note IS NULL` repeatedly matches rows where `note` is NULL, setting `customer_note` to NULL each iteration. The WHERE condition stays true for those rows, so `affected_rows` never drops to 0, causing non-convergence. The fix is to change the WHERE clause to `WHERE note IS NOT NULL AND customer_note IS NULL`, which only matches rows that have a non-null note and haven't yet been migrated, ensuring the statement affects 0 rows once all such rows are updated.",
+  "stages": [
+    {
+      "id": "expand-1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column to the account_user table; it is nullable so the old version can continue to write note without errors.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for all existing rows. Only rows with a non-null note and an unset customer_note are updated, so the stage converges when no such rows remain.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new-1",
+      "kind": "deploy_new",
+      "description": "Deploy the new‑staged app version; its code now references the customer_note column. The old version continues to run and still writes to the note column."
+    },
+    {
+      "id": "contract-1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old version has been retired and all data has been migrated to customer_note.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old-1",
+      "kind": "retire_old",
+      "description": "Retire the old app version; only the new version remains, which exclusively uses the customer_note column."
+    }
+  ]
+}

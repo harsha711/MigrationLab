@@ -1,0 +1,62 @@
+{
+  "plan_id": "a6-rename-note-to-customer",
+  "summary": "Adds customer_note column, initializes from note, and creates bidirectional AFTER INSERT OR UPDATE triggers with WHEN clauses on account_user, ensuring writes from either version instantly synchronize the other column; then deploys the new version with state-only migration, backfills data, retires the old version, and drops the note column and triggers.",
+  "write_consistency": "PostgreSQL AFTER INSERT OR UPDATE triggers with WHEN clauses on account_user: when note changes, customer_note is set to note; when customer_note changes, note is set to customer_note. The WHEN clauses restrict each trigger to fire only when its source column is actually modified, preventing unnecessary overwrites and recursion while guaranteeing cross-version write visibility.",
+  "revision_notes": "The previous plan failed all cross-version consistency checks because it relied solely on initial data copy and backfill UPDATE statements, without database-level triggers to propagate writes between note and customer_note during concurrent version operation. When both versions lived and wrote to their respective columns (old to note, new to customer_note), reads from the opposite column observed stale seed values or NULL, causing 14 check failures. This revised plan adds bidirectional AFTER INSERT OR UPDATE triggers with WHEN clauses on account_user, ensuring that any write from either version is instantly reflected in the other column, satisfying all runner consistency checks including old_write_new_read, new_write_old_read, cross-version reads, and column agreement.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, initialize from note, and create bidirectional sync triggers.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS TRIGGER AS $$ BEGIN IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN NEW.customer_note := NEW.note; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_after_note_change AFTER INSERT OR UPDATE ON account_user WHEN NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();",
+        "CREATE OR REPLACE FUNCTION sync_customer_note_to_note() RETURNS TRIGGER AS $$ BEGIN IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_customer_note_after_change AFTER INSERT OR UPDATE ON account_user WHEN NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') FOR EACH ROW EXECUTE FUNCTION sync_customer_note_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Synchronize customer_note with note across all rows after expand and during overlap.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "rollback_check_001",
+      "kind": "rollback_check",
+      "description": "Optional rollback check; validates note consistency and old version functionality before final commitment."
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this stage, only the new version serves traffic."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column and associated triggers/functions.",
+      "sql": [
+        "DROP TRIGGER sync_note_after_note_change ON account_user;",
+        "DROP TRIGGER sync_customer_note_after_change ON account_user;",
+        "DROP FUNCTION sync_note_to_customer_note();",
+        "DROP FUNCTION sync_customer_note_to_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

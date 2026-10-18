@@ -1,0 +1,49 @@
+{
+  "plan_id": "a4-migrate-user-note-rename",
+  "summary": "Add customer_note column via ALTER TABLE, backfill existing note values, deploy new-staged version skipping Django column-creation migration, retire old app, then drop note column.",
+  "write_consistency": "Backfill synchronises note → customer_note for all rows. During concurrent phase old app writes to note and new app writes to customer_note. After retire_old only new app runs, which exclusively uses customer_note. The note column is removed only after old app retirement, guaranteeing no write conflicts and that the old column is gone at the end.",
+  "revision_notes": "The previous plan failed at deploy_new because Django's migration registry was unaware of the customer_note column added by raw ALTER TABLE in the expand stage. When deploy_new ran with `migration: \"apply\"`, Django attempted to CREATE the column again and halted with ProgrammingError. This revision sets `migration: \"skip\"` in the deploy_new stage, avoiding the duplicate column creation since the column already exists from expand/backfill SQL stages. The stage ordering (expand → backfill → deploy_new → retire_old → contract) ensures the old app is retired before the note column is dropped, satisfying the retirement gate and preserving data consistency.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for all existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new‑staged version of Saleor; its code references customer_note instead of note. Django migration is skipped because the column already exists from expand/backfill stages.",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version; after this only the new app runs, which exclusively uses customer_note."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the deprecated note column.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

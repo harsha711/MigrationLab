@@ -1,0 +1,28 @@
+{
+  "plan_id": "a3-note-removal-001",
+  "summary": "Deploy the new version with state_only migration to keep the note column in the database while both versions run concurrently. After retiring the old version, execute a contract SQL stage to drop the note column from account_user, ensuring the old version no longer writes to it and the column is fully removed.",
+  "write_consistency": "The old version continues to write notes via the GraphQL note field and Django ORM during the overlap phase; the new version omits note from its database operations. Note values persist in the column unchanged. After retire_old, the column is dropped, and the new version no longer references it.",
+  "revision_notes": "Previous plan a2 used migration 'apply', which ran the new version's Django migration that dropped the note column while the old version was still serving traffic. This caused ProgrammingError: column account_user.note does not exist for all old version operations, failing the deterministic cross-version checks. This plan switches to 'state_only' to preserve the column during overlap, moving the column removal to a SQL stage after retire_old, which satisfies the runner's requirement that the column exists and is consistent through the overlap and is only removed after the old version is retired.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version."
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

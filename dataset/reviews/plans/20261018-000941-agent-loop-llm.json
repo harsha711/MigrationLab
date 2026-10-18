@@ -1,0 +1,50 @@
+{
+  "plan_id": "a8-b1-rename-note-customer",
+  "summary": "Add customer_note column, backfill existing note values, create a BEFORE INSERT OR UPDATE trigger that synchronises note and customer_note, deploy new app with state-only migration, then retire old version and drop the note column and trigger.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user uses IF/ELSIF logic: if note changes, customer_note is set to the new note; else if customer_note changes, note is set to the new customer_note. This ensures that writes from either version are immediately visible to the other version, so both live versions always read the most recently written note value.",
+  "revision_notes": "The previous plan failed because the trigger function syntax caused a parse error (extra semicolons detected by the runner) and the trigger logic did not synchronise on INSERT, causing read failures for newly inserted rows. This revision simplifies the trigger to an IF/ELSIF construct that fires on both INSERT and UPDATE, setting the opposite column only when its value changes, and avoids the syntax pitfalls that caused the earlier execution error.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new customer_note column to account_user table alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy all existing note values into customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a BEFORE INSERT OR UPDATE trigger that synchronises note and customer_note columns.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER trg_sync_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new app version; Django migration is state-only, recording model state without issuing SQL. New version only knows customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old app version and drop the note column and the sync trigger, completing the rename. After this stage, only customer_note remains on account_user table."
+    }
+  ]
+}

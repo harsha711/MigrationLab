@@ -1,0 +1,48 @@
+{
+  "plan_id": "a3-ref-id-fk-fixed",
+  "summary": "Widens referrer_id to BIGINT, backfills orphan references to NULL, then adds a self-referencing FK with ON DELETE SET NULL, enabling safe concurrent operation of old and new versions before retiring the old version.",
+  "write_consistency": "BIGINT accommodates existing integer referrer_ids. The backfill ensures all non-NULL referrer_id values reference valid account_user rows, so the FK constraint can be added without violation. Old-version inserts of integer values succeed in BIGINT; new-version writes are constrained by the FK. During overlap, setting orphans to NULL preserves data integrity.",
+  "revision_notes": "Addressed the FK constraint failure by adding a backfill stage that sets orphan referrer_id values (those not present in account_user.id) to NULL before attempting to add the self-referencing foreign key. Previously, the constraint add failed because of rows with referrer_id values absent from the user table.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "expand_schema",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Widen referrer_id column to BIGINT",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN referrer_id TYPE BIGINT USING referrer_id::bigint;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_orphans",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set orphan referrer_id values to NULL",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_fk_constraint",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add self-referencing foreign key",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT fk_referrer FOREIGN KEY (referrer_id) REFERENCES account_user(id) ON DELETE SET NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the schema change is in place."
+    }
+  ]
+}

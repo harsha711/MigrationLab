@@ -1,0 +1,61 @@
+{
+  "plan_id": "a3-b3-rename-note-v2",
+  "summary": "Add customer_note column, backfill from note, install a bidirectional BEFORE INSERT OR UPDATE trigger to keep both columns synchronized during concurrent app overlap, deploy new version with state-only migration, retire old app, then drop the note column after removing the trigger, achieving zero-downtime rename with consistent data.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies any written value from note to customer_note and vice‑versa. Old app writes note only, new app writes customer_note only; the trigger ensures each write is reflected in the other column so that reads from either version always see the most recent value.",
+  "revision_notes": "The previous plan's trigger function referenced NEW.note IS DISTINCT FROM OLD.note but the test environment had already dropped the note column before the smoke test ran, causing a ProgrammingError. The revised plan adds the trigger after backfill and before deployment, keeps the trigger active throughout the overlap (deploy_new → retire_old), and drops it just before the final ALTER TABLE ... DROP COLUMN note. This prevents the trigger from referencing a column that no longer exists and avoids the column‑name mismatch that caused the earlier failure.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from existing note values",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_trigger_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create trigger to synchronize note and customer_note columns during overlap",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.note IS NOT NULL AND NEW.customer_note IS NULL THEN\n      NEW.customer_note := NEW.note;\n    ELSIF NEW.customer_note IS NOT NULL AND NEW.note IS NULL THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.note IS DISTINCT FROM OLD.note THEN\n      NEW.customer_note := NEW.note;\n    END IF;\n    IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; Django model only knows customer_note",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer writes to the database"
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the synchronization trigger, then drop the old note column",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note_trig ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

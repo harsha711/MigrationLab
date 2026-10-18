@@ -1,0 +1,38 @@
+{
+  "plan_id": "a2-ref-fk-002",
+  "summary": "Deploy the new version with a state-only migration to keep the database schema unchanged during concurrent traffic with the old version. After retiring the old version, a SQL stage sets orphaned referrer_id values to NULL, then another SQL stage adds the ForeignKey constraint, completing the schema change to ForeignKey(User) self-reference.",
+  "write_consistency": "Both old and new versions treat referrer_id as an integer column during overlap (deploy_new to retire_old), allowing unrestricted INSERT/UPDATE. After retire_old, orphaned referrer_id values are cleared to NULL, then a ForeignKey constraint is enforced, ensuring all non-NULL referrer_id values reference valid account_user primary keys.",
+  "revision_notes": "Root cause: After retire_old, the add_fk_constraint stage failed because existing rows contained referrer_id values (e.g., 1000097) that did not reference any valid account_user primary key. The revised plan inserts a data cleanup SQL stage after retire_old and before add_fk_constraint, setting orphaned referrer_id values to NULL before enforcing the ForeignKey constraint.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this, only the new version handles traffic."
+    },
+    {
+      "id": "clean_orphaned_referrer",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set referrer_id to NULL for rows referencing non-existent account_user primary keys to enable ForeignKey constraint.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM account_user u2 WHERE u2.id = account_user.referrer_id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_fk_constraint",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add ForeignKey constraint on account_user.referrer_id referencing account_user(id).",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_id_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

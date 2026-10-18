@@ -1,0 +1,28 @@
+{
+  "plan_id": "a6-note-removal-005",
+  "summary": "Plan a5 deployed migration: state_only to preserve the note DB column for the concurrent old version. However, two cross-version smoke checks failed during deploy_new_state_only: case.tester.case_cross_read_preserve and case.tester.case_new_create_no_note, both yielding GraphQLError: Unknown field 'note' when test inputs included note. The contract stage was then refused due to these earlier check failures. The retire_old stage passed with 0 failures. The root cause is that state_only only synchronizes Django model state and does not update the GraphQL schema; the new code removes note from GraphQL definitions, but the runner's cross-version validation schema still references note, causing Unknown field errors when tests pass note.",
+  "write_consistency": "During the overlap, the new version's Django model omits note, so its INSERT/UPDATE statements exclude the column, leaving it at DB DEFAULT/NULL. The old version continues to read/write note as before. After retire_old, the column is safely removed.",
+  "revision_notes": "The a4/a5 plans with migration: state_only kept the DB column but triggered GraphQL smoke check failures (Unknown field 'note') because state_only does not sync the GraphQL schema. The new code removes note from GraphQL definitions, creating a mismatch with the runner's cross-version validation schema that still references note. This disconnect between Django state sync and GraphQL schema update is the fundamental issue. The revised plan sequences deploy_new_state_only, retire_old, then contract drop column, acknowledging that GraphQL schema coordination may require additional steps beyond SQL stages.",
+  "stages": [
+    {
+      "id": "deploy_new_state_only",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after ensuring it is no longer receiving traffic."
+    },
+    {
+      "id": "contract_drop_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from the account_user table after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "plan_id": "a3-migrate-user-note-rename",
+  "summary": "Revised plan adds the customer_note column idempotently via ADD COLUMN IF NOT EXISTS in the expand stage, ensuring the column exists before the Django migration runs during deploy_new. A backfill step populates existing rows, and the contract stage removes the old note column after the new version is confirmed running. This eliminates the duplicate-column error and maintains concurrent-read/write consistency.",
+  "write_consistency": "During concurrent operation, the old app writes to note, the new app writes to customer_note. The expand stage ensures all existing rows have a customer_note value inherited from note. After deploy_new, only the new app writes to customer_note; after retire_old, the note column is dropped. Reads from either version see the most recent write to their respective column, and the backfill guarantees no note data is lost during the transition.",
+  "revision_notes": "Root cause: the original expand_1 added customer_note, but the subsequent deploy_new Django migration issued ADD COLUMN customer_note, which failed with ProgrammingError: column already exists because the column was already present. Fix: use ADD COLUMN IF NOT EXISTS in the expand SQL stage so the column creation is idempotent, and sequence the stages so the Django migration runs after the column exists. A backfill step ensures existing note values are preserved in the new column.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column idempotently so the Django migration in deploy_new does not fail.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Back-fill existing note values into customer_note so no data is lost before the old app is retired.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged version of Saleor. The Django migration is state-only and expects customer_note to already exist (provided by expand_1).",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Shut down the old version of Saleor. No further writes or reads against the note column will occur from the old code after this point."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column from the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "plan_id": "a5-note-rename-001",
+  "summary": "Add customer_note column, initialise from note, deploy new version with state-only migration, create a PostgreSQL trigger that keeps note and customer_note in sync, retire old version, then drop note column.",
+  "write_consistency": "A database trigger fires after every INSERT or UPDATE on account_user, copying the value from note to customer_note and vice‑versa, ensuring both columns always hold the same note regardless of which version wrote it.",
+  "revision_notes": "Plan a4 failed because interleaved writes left note and customer_note diverging; adding a trigger guarantees synchronous values across versions.",
+  "stages": [
+    {
+      "id": "expand-001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and copy existing note values.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Ensure all rows have matching values in both columns.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL OR customer_note != note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "sync_trigger-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Create a trigger that keeps note and customer_note in sync for all subsequent writes.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM OLD.note THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\nCREATE TRIGGER note_sync_trigger\nAFTER INSERT OR UPDATE ON account_user\nFOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old version so it no longer serves traffic."
+    },
+    {
+      "id": "contract-001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column after the old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

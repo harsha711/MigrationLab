@@ -1,0 +1,59 @@
+{
+  "plan_id": "a4-m03-rev",
+  "summary": "Add customer_note column idempotently, backfill existing note values, deploy the new app version, install a PostgreSQL trigger that propagates any write to note into customer_note for write consistency during concurrent phase, then retire the old version and drop the note column.",
+  "write_consistency": "After backfill, customer_note mirrors note for all rows. A BEFORE INSERT OR UPDATE trigger copies note into customer_note (preserving new writes via COALESCE), ensuring old version’s writes to note are reflected. Reads from both versions see the most recent consistent value until old version is retired and note column is removed.",
+  "revision_notes": "Root cause of previous failure: the backfill UPDATE matched rows where customer_note IS NULL without filtering on note IS NOT NULL, causing the statement to always match rows (including those with note NULL) and never converge within the iteration limit. Revised plan adds note IS NOT NULL condition to ensure convergence, and adds a trigger to maintain write consistency during concurrent traffic.",
+  "stages": [
+    {
+      "id": "expand_schema",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new customer_note column idempotently.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for rows not yet backfilled.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged application version. The new code expects the customer_note column and will read/write that column exclusively. The public GraphQL field name note remains unchanged."
+    },
+    {
+      "id": "sync_writes",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger that keeps customer_note in sync with note for any write from either version.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  NEW.customer_note := COALESCE(NEW.customer_note, NEW.note);\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_before_upsert\n  BEFORE INSERT OR UPDATE ON account_user\n  FOR EACH ROW\n  EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_schema",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the obsolete note column after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old application version that still references the note column. After this stage only the new version runs, which uses customer_note."
+    }
+  ]
+}

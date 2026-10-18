@@ -1,0 +1,51 @@
+{
+  "plan_id": "a4-renote-v4",
+  "summary": "Rename Django/User note field to customer_note by adding new column, backfilling existing notes, deploying new app with concurrent operation, and using bidirectional triggers to keep both columns consistent.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger sync_user_note_cols unconditionally copies the source column's value to the target column on every write, ensuring old-app writes to note populate customer_note and new-app writes to customer_note populate note, so both versions always read the most recently written value.",
+  "revision_notes": "The previous plan's trigger used COALESCE which preserved existing customer_note, causing writes from either app to be ignored when the target column already held a value, leading to read‑misses. This revision replaces the trigger with unconditional assignment and adds reverse sync, so each write propagates to the other column regardless of prior state. The backfill WHERE clause was also tightened to note IS NOT NULL to avoid re‑evaluating null rows.",
+  "stages": [
+    {
+      "id": "expand_schema",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and a bidirectional sync trigger so old‑app writes to note and new‑app writes to customer_note are mirrored between columns.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_user_note_cols() RETURNS TRIGGER AS $$ BEGIN IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note_cols BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note_cols();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for existing rows that have a non‑null note and currently null customer_note; the stage repeats until zero rows are affected.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new app version (new-staged) which knows the customer_note column; the old app version continues running concurrently."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version (old) after confirming that both versions have read the most recent written value and no data is lost."
+    },
+    {
+      "id": "contract_drop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the sync trigger and the original note column; at this point only customer_note remains and holds all data.",
+      "sql": [
+        "DROP TRIGGER sync_user_note_cols ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "plan_id": "a5-migrate-user-note-001-re",
+  "summary": "Rename Django User.note to customer_note via adding column, backfilling, deploying new version with a bidirectional sync trigger to maintain consistency during concurrent traffic, retiring old version, and dropping old column, while keeping the GraphQL public field name note.",
+  "write_consistency": "A PostgreSQL bidirectional trigger automatically synchronizes note and customer_note on every UPDATE, ensuring both columns always reflect the most recent write from either version during the overlap period between deploy_new and retire_old.",
+  "revision_notes": "Previous plans failed during deploy_new with 16 cross-version read/write inconsistencies because the one-time backfill only migrated pre-existing row data before deploy_new and did not reconcile ongoing concurrent writes from old version (writing to note) and new version (writing to customer_note) during mixed-version traffic. This left 15+ disagreeing rows and 7-8 mismatched/missing entries per column, causing read assertions to observe seed data, nulls, or stale values. This revision adds a bidirectional sync trigger during the expand stage that propagates writes between columns, guaranteeing that reads from either version see the most recently written value.",
+  "stages": [
+    {
+      "id": "expand_note_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create bidirectional sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_note_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy values from note to customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; new version expects column customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this, old version no longer serves traffic against the database."
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the old note column after old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

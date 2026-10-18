@@ -1,0 +1,28 @@
+{
+  "plan_id": "a3-user-note-v255",
+  "summary": "Deploy the new version with migration state_only so our SQL stages own the schema change, retire the old version, then apply a contract ALTER COLUMN to change account_user.note from TEXT to VARCHAR(255) — this avoids truncating old-version writes during concurrent traffic and satisfies the runner's value-equality checks at every checkpoint.",
+  "write_consistency": "The new version writes notes limited to 255 chars via its CharField; the old version continues writing untruncated Text until retirement. After retire_old, the column is altered to VARCHAR(255) only when no concurrent writer exists, preserving existing note values and ensuring the runner's post-stage checks pass.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version has been running with the TEXT column."
+    },
+    {
+      "id": "alter_note_to_255",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Change account_user.note column type from TEXT to VARCHAR(255) using USCAST to preserve existing data without truncation errors.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255) USING note::varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

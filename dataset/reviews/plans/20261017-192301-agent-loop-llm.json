@@ -1,0 +1,50 @@
+{
+  "plan_id": "a3-rename-note-fixed",
+  "summary": "Add customer_note column, backfill, deploy new, retire old, drop note, with a sync trigger to maintain cross-version consistency during concurrent traffic.",
+  "write_consistency": "An AFTER UPDATE trigger on account_user synchronizes note and customer_note: when either column changes, the other is updated to match, ensuring reads from either version always see the latest write.",
+  "revision_notes": "The previous plan failed during deploy_new because a single backfill could not maintain consistency when old and new versions concurrently wrote to separate columns (note vs customer_note), causing the runner's interleaved read/write assertions to read stale seed data. Root cause: absence of an ongoing synchronization mechanism between the two columns during concurrent traffic.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and a trigger to sync note and customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so new code sees data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which now references customer_note instead of note."
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old). After this stage, only the new version serves traffic."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old app is retired and customer_note is populated.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

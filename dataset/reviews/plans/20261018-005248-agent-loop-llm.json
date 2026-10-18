@@ -1,0 +1,18 @@
+{
+  "plan_id": "a2-rev-uniq-lname-001",
+  "summary": "Plan rejected because pre-existing duplicate last_name values (e.g., 'Cook') in account_user prevent creating a unique index without data modification, which runner checks forbid. A direct deploy_new with 'apply' would fail Django migration on duplicate rows, making the change unrollable under current constraints.",
+  "write_consistency": "N/A; change cannot be safely rolled over due to immutable duplicate data.",
+  "revision_notes": "Root cause: The executed plan a1-uniq-lname-001 failed at stage add_partial_unique_index with error 'could not create unique index account_user_last_name_uniq_idx Detail: Key (last_name)=(Cook) is duplicated.' Since the runner enforces that pre-existing last_name values must not change, and no batched backfill or data cleanup is permitted, a partial unique index WHERE last_name IS NOT NULL cannot be constructed. Similarly, Django's unique=True migration would abort on duplicate rows. Thus no valid SQL stage exists to enforce uniqueness while preserving existing row values.",
+  "stages": [
+    {
+      "id": "deploy_new_apply",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire old version after deploy_new."
+    }
+  ]
+}

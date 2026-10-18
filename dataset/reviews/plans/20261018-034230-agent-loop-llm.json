@@ -1,0 +1,26 @@
+{
+  "plan_id": "a1-note-removal-001",
+  "summary": "Deploy the new Saleor version with a state‑only migration, keep the note column while the old version continues to run, retire the old version, then drop the note column in a contract SQL stage.",
+  "write_consistency": "The note column remains in the database throughout the overlap. The old Saleor version continues to read and write note as before; the new version ignores the field because its model no longer defines it. No data migration is required because the column persists. After the old version is retired, the column is dropped, leaving the new version without a note field.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version (old); after this stage only the new version runs."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "plan_id": "a6-rename-note-v4",
+  "summary": "Add customer_note column, backfill existing rows, deploy new version with state-only migration while both versions serve traffic synchronized by a row-level trigger, retire old version, then drop the note column and trigger.",
+  "write_consistency": "A PostgreSQL AFTER INSERT OR UPDATE trigger sync_note_customer copies the written value from the column being written (note or customer_note) to the other column using DISTINCT comparisons, ensuring that whichever app version writes to its known column the other column is updated accordingly; reads from either version always see the most recently written value.",
+  "revision_notes": "The previous plan failed because the trigger function had IS NOT NULL guards that prevented propagation of NULL writes, leaving stale seed data and causing column mismatches. This revised plan removes those guards, uses DISTINCT to only act on actual column changes, and adds explicit INSERT vs UPDATE handling to reliably sync values during concurrent operation.",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger function and trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer() RETURNS TRIGGER AS $$\nBEGIN\n    IF TG_OP = 'INSERT' THEN\n        IF NEW.note IS NOT NULL THEN\n            NEW.customer_note := NEW.note;\n        END IF;\n        IF NEW.customer_note IS NOT NULL THEN\n            NEW.note := NEW.customer_note;\n        END IF;\n    ELSIF TG_OP = 'UPDATE' THEN\n        IF NEW.note IS DISTINCT FROM OLD.note THEN\n            NEW.customer_note := NEW.note;\n        END IF;\n        IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n            NEW.note := NEW.customer_note;\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trig AFTER INSERT OR UPDATE ON account_user EXECUTE FUNCTION sync_note_customer();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_01",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note for all existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; both versions now serve traffic with synchronized columns via trigger.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire the old version; the new version continues running."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the note column.",
+      "sql": [
+        "DROP TRIGGER sync_note_trig ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

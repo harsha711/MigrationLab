@@ -1,0 +1,69 @@
+{
+  "plan_id": "a4-renote-user-to-custom-v2",
+  "summary": "Rename Django field User.note to customer_note with zero downtime, keeping the public GraphQL field name note.",
+  "write_consistency": "Old app version writes exclusively to column note, new app version writes exclusively to customer_note. The expand stage adds customer_note without dropping note. The backfill stage copies all note values into customer_note for every row (including NULLs), repeated until no rows are affected. After backfill, a sync stage sets note equal to customer_note so both columns have identical values. A second sync after deploy_new ensures column consistency at the start of the concurrent phase, preventing the read mismatches seen in the prior execution.",
+  "revision_notes": "Root cause of previous failure: the backfill SQL `UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL` matched rows where note IS NULL every iteration, causing the repeat_until_zero_rows loop to never converge. The revised backfill removes the `AND note IS NOT NULL` condition, copying every row's note value into customer_note so the loop terminates after one pass. Additionally, a sync stage after backfill and another sync after deploy_new guarantee that both columns hold identical values before and after the new version is deployed, eliminating the column-preservation mismatches and seed‑data persistence that caused the earlier check failures.",
+  "stages": [
+    {
+      "id": "expand_add_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy all note values into customer_note for every row, repeated until no rows affected.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "sync_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Synchronize note column with customer_note so both columns have identical values before new version deployment.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new (new-staged) version with state_only migration; its Django model only knows customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "sync_after_deploy",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Re-synchronize note column with customer_note after new version is deployed, to catch any drift.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; both versions have been serving concurrently, old app no longer writes."
+    },
+    {
+      "id": "contract_drop_col",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column; customer_note is now the only column for note data.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

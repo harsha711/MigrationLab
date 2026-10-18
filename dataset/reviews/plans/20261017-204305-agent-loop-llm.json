@@ -1,0 +1,60 @@
+{
+  "plan_id": "a4-rename-note-to-customer",
+  "summary": "Add customer_note column, backfill data, create bidirectional sync trigger, deploy new app, retire old app, drop trigger and column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user synchronously sets customer_note from note and note from customer_note whenever either column value changes, ensuring both app versions always read the most recently written value.",
+  "revision_notes": "Root cause of previous failure: the trigger was created after deploy_new, so concurrent writes during deploy_new had no synchronization, causing mismatches. Additionally, without an initial backfill, the trigger could not propagate existing note values to customer_note, leaving rows divergent. This revised plan adds a backfill step after adding the column and places the trigger before deploy_new, guaranteeing that all rows start synchronized and that subsequent writes from either version are immediately reflected in the other column.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values to customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "create_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create BEFORE INSERT OR UPDATE trigger that synchronizes note and customer_note columns.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_user_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM OLD.note THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_cust_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE PROCEDURE sync_user_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new app version (new-staged) which reads/writes customer_note; old app continues on note during concurrent phase."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old app version (old); stop traffic from old version."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the old note column.",
+      "sql": [
+        "DROP TRIGGER sync_note_cust_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

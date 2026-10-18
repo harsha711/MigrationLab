@@ -1,0 +1,38 @@
+{
+  "plan_id": "a1-m01",
+  "summary": "Adds the required boolean column marketing_opt_in to the account_user table via an expand SQL stage adding the column with NOT NULL DEFAULT false, a backfill stage ensuring no NULLs exist, deploy_new with migration state_only to record Django state without SQL execution, and retire_old. The column remains consistent across both versions during concurrent operation.",
+  "write_consistency": "Old version inserts receive the column's database default False since the column is added with NOT NULL DEFAULT false. New version inserts use Django's default False. The column remains NOT NULL and consistent across both versions during the overlap.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand-001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL and DEFAULT false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill False for any rows that may have NULL.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = False WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old version; no longer serves traffic."
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "plan_id": "a3-ren-note-cust-note-v3",
+  "summary": "Adds customer_note column, backfills data, deploys new app with sync trigger, retires old app, then drops old column, preserving GraphQL field name note.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies the written value from note to customer_note and vice versa, using conditional checks so that only the column that changed is propagated. This ensures both columns always reflect the most recent write from either app version.",
+  "revision_notes": "Root cause of previous failure: the old plan used a trigger that unconditionally swapped note and customer_note on every INSERT/UPDATE, causing writes from one version to overwrite the other's value and lose data, which broke the runner's consistency checks. This revised plan replaces that trigger with one that only propagates the changed column's value to the other column when that column's value actually differs, preventing overwrites and ensuring that reads from either version see the latest written value.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger on account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note for all existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy new-staged app version; its Django model and GraphQL resolvers use customer_note, preserving the public field name note."
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old app version; no more writes to the note column."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column and the sync trigger after old app is retired.",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

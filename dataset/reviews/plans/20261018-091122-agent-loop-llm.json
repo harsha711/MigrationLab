@@ -1,0 +1,61 @@
+{
+  "plan_id": "a6-c3-rename-user-note-sync",
+  "summary": "Add customer_note column, backfill existing data, create a bidirectional trigger to keep note and customer_note in sync, deploy new version with state-only migration, retire old version, then drop the note column.",
+  "write_consistency": "A PostgreSQL BEFORE INSERT OR UPDATE trigger synchronizes the note and customer_note columns: when either column is written, the other column is set to the same value, ensuring both app versions always read the most recently written value regardless of which column they write to.",
+  "revision_notes": "The previous plan failed because after deploy_new, old and new versions wrote to separate columns (note and customer_note) with no synchronization, causing data divergence. The revised plan adds a PostgreSQL trigger that copies values between the two columns on every INSERT/UPDATE, so that writes from either version are reflected in both columns. This ensures that reads from either version see the most recent write, and that clearing a column clears the other as well.",
+  "stages": [
+    {
+      "id": "expand_customer_note",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note for existing rows",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "create_sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create trigger that keeps note and customer_note in sync",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION trg_sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); NEW.note := COALESCE(NEW.customer_note, NEW.note); ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER trg_sync_note_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION trg_sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; both versions serve traffic concurrently",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire old version; after this stage only new version operates"
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the old note column and its trigger after the concurrent phase",
+      "sql": [
+        "DROP TRIGGER IF EXISTS trg_sync_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

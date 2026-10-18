@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-saleor-mo-001",
+  "summary": "Adds the required `marketing_opt_in` boolean column with NOT NULL and DEFAULT false to `account_user` via an expand stage, ensuring no NULLs appear after the column is added. The old version, which omits unknown columns in INSERT/UPDATE, receives False via the database default; the new version explicitly sets the field to False. deploy_new uses \"migration\": \"state_only\" so our SQL stages own the entire schema change, avoiding conflicts with the new version's migration. After retire_old the old version is gone, and the column remains. The plan includes expand, deploy_new, and retire_old stages; no backfill or contract stages are needed because the NOT NULL DEFAULT false clause handles all rows instantly.",
+  "write_consistency": "The column is added with `NOT NULL DEFAULT false` during the expand stage. Existing rows are set to False implicitly by PostgreSQL. The old version, which does not know this column, omits it in INSERT/UPDATE statements and therefore receives the column's database default (False). The new version's code sets the field to False explicitly. Consequently, every row—past, present, and future—contains False and no NULLs ever appear, satisfying the runner's NULL checks after expand, deploy_new, and any subsequent stages.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the `marketing_opt_in` boolean column with NOT NULL and DEFAULT false to the `account_user` table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version; it no longer serves traffic against the database."
+    }
+  ]
+}

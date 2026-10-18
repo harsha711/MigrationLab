@@ -1,0 +1,40 @@
+{
+  "plan_id": "a4-note-rm-staged-004",
+  "summary": "Add the note column to account_user before deploying the new version, ensuring the old version can continue to read/write notes while the new version omits the column. Deploy the new version with a state-only migration that records Django state without schema changes. After the old version is retired, drop the note column.",
+  "write_consistency": "During the overlap, the old version continues to read/write the note column; the new version omits the column in its INSERT/UPDATE statements, so existing rows keep their values and new inserts default to NULL thanks to the SET DEFAULT NULL. After the old version is retired, the column is safely removed.",
+  "revision_notes": "The previous plan failed because the note column was absent from account_user before deploy_new_state_only, causing column-does-not-exist errors. This revision explicitly adds the column with ALTER TABLE ... ADD COLUMN IF NOT EXISTS and SET DEFAULT NULL in an expand stage before deploy_new_state_only, guaranteeing the column exists for both versions. The contract stage remains after retire_old.",
+  "stages": [
+    {
+      "id": "expand_add_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the note column to account_user if it does not exist and set default NULL so that new-version inserts default to NULL during overlap.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS note TEXT;",
+        "ALTER TABLE account_user ALTER COLUMN note SET DEFAULT NULL"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_state_only",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from account_user; safe because the old version has been retired and no code references it.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

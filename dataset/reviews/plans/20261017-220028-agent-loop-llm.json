@@ -1,0 +1,42 @@
+{
+  "plan_id": "a4-rn0te-v4",
+  "summary": "Add customer_note column, backfill from note, create a BEFORE INSERT OR UPDATE trigger that synchronises the two columns bidirectionally, deploy new version state-only, retire old version, and drop the old note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies the value of the newly written column to the other column, ensuring that writes from either version are visible to the other version.",
+  "revision_notes": "The previous plan failed because the trigger was created after deploy_new, causing race conditions where writes from the old version during concurrent operation were not synchronised to customer_note, leading to mismatched columns and stale seed data. This revision moves trigger creation before deploy_new, so the sync is active from the start of concurrent operation, and the backfill ensures initial values match. Simple assignment (rather than COALESCE) avoids repeated UPDATE loops.",
+  "stages": [
+    {
+      "id": "stg_expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill existing values, and create sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "stg_deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version (new-staged) with state_only migration",
+      "migration": "state_only"
+    },
+    {
+      "id": "stg_retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version (old)"
+    },
+    {
+      "id": "stg_contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop old note column after old version retired",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "plan_id": "a12-revised-reject-duplicate",
+  "summary": "The unique constraint on User.last_name cannot be added in a zero‑downtime rollout because the seed data contains duplicate non‑NULL last_name values that must not be altered; any attempt to add the constraint causes an integrity error or requires modifying existing data, both disallowed by the rollout rules.",
+  "write_consistency": "N/A",
+  "revision_notes": "Root cause: the existing database contains duplicate last_name values (e.g., 'Cook') that persist through the rollout. Per the rule that pre-existing last_name values must not change, no SQL stage can add a full or partial unique index without either changing those values or causing a duplicate‑key error. Consequently the change is unsafe during the overlap, and the only viable option is to reject the change.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after confirming the new version passes smoke checks."
+    }
+  ]
+}

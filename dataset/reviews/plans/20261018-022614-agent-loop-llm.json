@@ -1,0 +1,49 @@
+{
+  "plan_id": "a2-ref-user-fk-002",
+  "summary": "Add nullable FK column referrer_id_new, backfill only rows where legacy referrer_id references an existing user, deploy new version state-only, retire old version, then contract stage drops old referrer_id and renames referrer_id_new to referrer_id establishing the self-referencing FK.",
+  "write_consistency": "During overlap the old version writes referrer_id (integer, no FK) and the new version writes referrer_id_new (FK, nullable). Backfill copies only valid references; orphan values stay NULL, avoiding FK violations. After contract, referrer_id is the FK column for the new version only.",
+  "revision_notes": "Root cause: the original backfill UPDATE set referrer_id_new to ALL legacy referrer_id values, including orphans (e.g., 1000097) that do not exist in account_user(id). The new FK constraint rejected these writes. Revised backfill filters via WHERE referrer_id IN (SELECT id FROM account_user) AND referrer_id_new IS NULL to only copy valid references, keeping NULL for orphan rows and ensuring repeat_until_zero_rows terminates.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new nullable ForeignKey column referrer_id_new.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN referrer_id_new BIGINT NULL REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy valid referrer_id values into new column, skipping orphan references.",
+      "sql": [
+        "UPDATE account_user SET referrer_id_new = referrer_id WHERE referrer_id IS NOT NULL AND referrer_id IN (SELECT id FROM account_user) AND referrer_id_new IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this the old code no longer serves traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Replace legacy referrer_id with new FK column, ensuring column exists.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN referrer_id;",
+        "ALTER TABLE account_user RENAME COLUMN referrer_id_new TO referrer_id;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

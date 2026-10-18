@@ -1,0 +1,52 @@
+{
+  "plan_id": "a3-migrate-user-note-rename",
+  "summary": "Rename account_user.note to customer_note by adding the new column, backfilling existing data, creating a bidirectional sync trigger for zero-downtime concurrent operation, deploying the new app, retiring the old app, and finally dropping the old column while preserving the public GraphQL note field.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE PL/pgSQL trigger sync_note_customer_note on account_user propagates each app's column write to the other: when old app writes note, the trigger sets customer_note to note; when new app writes customer_note, the trigger sets note to customer_note. This ensures both columns always hold the value from the most recently written app, so both live versions read the same note value. Backfill initializes customer_note from existing note data before deployment, guaranteeing no data loss.",
+  "revision_notes": "The previous plan failed because the PL/pgSQL trigger function definition was split across multiple SQL strings with $$ delimiters, causing an unterminated dollar-quoted string error (one string was just '$$'). This plan consolidates the entire function body into a single SQL string with balanced $$ delimiters. Additionally, the trigger logic was revised from a COALESCE-only approach to using IF/ELSIF with IS DISTINCT FROM to correctly propagate writes bidirectionally without COALESCE order ambiguity, satisfying the deterministic checks for consistent reads across concurrent app versions.",
+  "stages": [
+    {
+      "id": "expand_schema",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger so both old and new app versions see consistent note values.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); NEW.note := COALESCE(NEW.note, NEW.customer_note); ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_bu BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for all rows where customer_note is null; repeat until 0 rows affected to guarantee complete backfill.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new-staged version; its model knows customer_note and GraphQL resolve_note maps to customer_note. The sync trigger ensures backward compatibility with old app writes.",
+      "migration": "apply",
+      "variant": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer serves traffic. After this stage only the new app connects."
+    },
+    {
+      "id": "contract_schema",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column since old app is retired and only new app remains.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "plan_id": "a4-rename-note-to-customer",
+  "summary": "Add a customer_note column, copy existing note values, deploy the new version with a state-only migration, back-fill customer_note from note after the new version is live, retire the old version, and finally drop the note column. No triggers are used to avoid the WHEN‑clause syntax error that caused the prior plan to fail.",
+  "write_consistency": "The old version writes to the note column and the new version writes to the customer_note column. The expand stage initializes customer_note from note for all existing rows. A back‑fill stage after deploy_new guarantees that customer_note matches note at the checked points. After retire_old the note column is removed.",
+  "revision_notes": "The previous plan failed because the trigger WHEN condition attempted to reference OLD.note, which the database rejects as invalid syntax for trigger WHEN clauses. This revision removes all triggers and instead uses an expand stage to copy note → customer_note and a back‑fill stage after deploy_new to re‑synchronise the columns. The remaining stages retire the old version and drop the note column, satisfying the runner's consistency checks.",
+  "stages": [
+    {
+      "id": "expand_init",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and copy existing note values",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "backfill_sync",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Synchronize customer_note from note after new version is live",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire old version; no longer serves traffic"
+    },
+    {
+      "id": "contract_drop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop note column after old version retired",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

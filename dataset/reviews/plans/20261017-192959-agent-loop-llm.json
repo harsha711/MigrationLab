@@ -1,0 +1,48 @@
+{
+  "plan_id": "a2-rename-note-custnote",
+  "summary": "Rename User.note to customer_note by adding the new column, backfilling non-null note values, deploying the new app, retiring the old app, and dropping the old column with zero downtime.",
+  "write_consistency": "The old app continues writing to note while the new app writes to customer_note during the concurrent phase. Backfill copies all non-null note values into customer_note before deployment, ensuring no existing note is lost. After deployment, each version writes to its respective column, and the runner verifies that the most recent write per column is readable.",
+  "revision_notes": "Revised from previous plan: backfill SQL changed from UPDATE ... SET customer_note = note WHERE customer_note IS NULL to WHERE note IS NOT NULL AND customer_note IS NULL to ensure convergence with repeat_until_zero_rows, as the old condition caused infinite loops when note was NULL. All other stages maintained for zero-downtime migration.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy data from note to customer_note for rows where note has a value.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged Saleor version. The new app uses customer_note column. Old app continues running with note column."
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version (old). After this, only the new app serves traffic."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column after old app retirement.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

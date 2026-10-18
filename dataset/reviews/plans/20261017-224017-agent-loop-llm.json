@@ -1,0 +1,60 @@
+{
+  "plan_id": "a4-note-rename-004",
+  "summary": "Add customer_note column, backfill, deploy new version state_only, add trigger that syncs note and customer_note by overwriting the opposite column with the newly written value when either column changes, retire old, drop trigger, drop note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger copies the newly written value to the opposite column, overwriting any prior value, ensuring both columns always reflect the most recent write from either version.",
+  "revision_notes": "The previous trigger using COALESCE failed because it only set the opposite column when null, leaving divergence when both columns already held values. The revised trigger unconditionally overwrites the opposite column on each INSERT/UPDATE, but Django's ORM preserves existing column values when not explicitly updated, causing the trigger to see the old value and not sync. This root cause explains the persistent check failures: reads returned null or stale values because the trigger did not overwrite the old column value.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create trigger to sync note and customer_note on each insert/update.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_value() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); ELSIF TG_OP = 'UPDATE' THEN IF NEW.note != OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note != OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_value();"
+      ]
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged version with its Django migration in state_only mode; the new code expects customer_note column which now exists and is kept in sync by the trigger.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version; old code no longer writes to the database."
+    },
+    {
+      "id": "drop_trigger_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and function, as the note column will be removed.",
+      "sql": [
+        "DROP TRIGGER sync_note_trig ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_value();"
+      ]
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column; customer_note remains the sole note field.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

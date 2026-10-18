@@ -1,0 +1,41 @@
+{
+  "plan_id": "a3-m01-rev2",
+  "summary": "Revised migration: add customer_note column, copy data, deploy new app, retire old app, drop note column, with bidirectional sync trigger to ensure cross-version consistency during overlap.",
+  "write_consistency": "Old app writes to note, new app writes to customer_note; a bidirectional PL/pgSQL trigger syncs both columns on every INSERT/UPDATE, ensuring both versions read the most recently written value.",
+  "revision_notes": "Root cause: the previous plan had no synchronization mechanism between the note and customer_note columns. Since the old app writes to note and the new app writes to customer_note, cross-version reads observed stale seed data or null instead of the expected value, causing all 16 consistency checks to fail during deploy_new. Revised plan adds a bidirectional sync trigger in the expand stage that keeps note and customer_note aligned with the most recent write from either version.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, copy data, and add sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS trigger AS \\$\\$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; \\$\\$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new app version (new-staged) which now reads and writes the customer_note column."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version (old) that still uses the note column; after retirement the note column is removed."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove deprecated note column",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

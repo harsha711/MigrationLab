@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-mig001",
+  "summary": "Add marketing_opt_in column with NOT NULL DEFAULT false via expand stage to ensure zero-downtime compatibility with the unmodified old Saleor version; backfill stage idempotently guarantees no NULLs; deploy_new with state_only records Django state without running the new version's migration on the existing schema; retire_old then contract finalize the change with both versions having served traffic.",
+  "write_consistency": "The expand stage adds marketing_opt_in boolean NOT NULL DEFAULT false; old version INSERTs/UPDATEs omit the column, receiving DB default false; new version explicitly writes the field; no NULLs are introduced during the concurrent overlap.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL DEFAULT false to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Idempotently set any remaining NULLs in marketing_opt_in to false.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; new version serves all traffic."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Finalize the column default confirmation after old version retirement.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

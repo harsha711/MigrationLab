@@ -1,0 +1,29 @@
+{
+  "plan_id": "a4-rev1",
+  "summary": "Add customer_note column via new version's Django migration, backfill existing note values into it after deploy_new, then retire the old version.",
+  "write_consistency": "Old version continues writing to note column; new version writes to customer_note column. A one‑time backfill after deploy_new copies note values into customer_note, keeping note column as the source of truth for the old version during overlap. The note column remains unchanged by the backfill, so the runner’s consistency checks pass both before and after deploy_new.",
+  "revision_notes": "Previous plan failed because expand_column SQL added customer_note before deploy_new, causing django migrate to report column already exists. Revised plan defers column creation to the new version’s own migration and performs the data backfill as a SQL stage after deploy_new, avoiding the conflict and preserving note column consistency.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version."
+    }
+  ]
+}

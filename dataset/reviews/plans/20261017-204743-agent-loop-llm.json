@@ -1,0 +1,46 @@
+{
+  "plan_id": "a1-mig-001",
+  "summary": "Add the required boolean field marketing_opt_in to saleor's account_user table via a staged SQL expand/contract sequence around a state_only deploy_new, ensuring zero-downtime, no NULLs across concurrent old+new versions, and note-column consistency.",
+  "write_consistency": "The old app version omits marketing_opt_in in INSERT/UPDATE, so PostgreSQL assigns the column's DEFAULT false. The new app version includes the column in all writes. The column is defined NOT NULL DEFAULT false, guaranteeing no NULLs arise from either version's writes. During the overlap, reads correctly reflect the most recent write from either version.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL DEFAULT false",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ]
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set marketing_opt_in to False for all existing rows",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false;"
+      ]
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "variant": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; it stops serving traffic"
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Finalize schema change; column remains for future use",
+      "sql": [
+        "SELECT 1;"
+      ]
+    }
+  ]
+}

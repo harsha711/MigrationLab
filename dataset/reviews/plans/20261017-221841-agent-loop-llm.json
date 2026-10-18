@@ -1,0 +1,40 @@
+{
+  "plan_id": "a4-note-rename-04",
+  "summary": "Add customer_note column, backfill all rows from note, create a sync trigger that keeps note and customer_note in sync, deploy the new staged version with state_only migration, retire the old version, then drop the note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user sets both note and customer_note to COALESCE(NEW.note, NEW.customer_note), ensuring that writes from either version are reflected in the other column so concurrent traffic always sees the most recent value.",
+  "revision_notes": "The previous plan's trigger only set customer_note via COALESCE(NEW.note, NEW.customer_note), which did not guarantee that new‑app writes to customer_note were visible to old‑app reads, and the backfill left some rows with only the note column populated, causing mismatches during the concurrent cutover. This revision adds a unified sync that updates both columns on every write, and backfills every row unconditionally so that customer_note is populated from the start.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill all rows, and create a sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_sync_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new staged version; Django migration is state_only so the new version only knows the customer_note column.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; all traffic now goes to the new version which only reads/writes customer_note."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column from the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

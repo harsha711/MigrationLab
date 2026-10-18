@@ -1,0 +1,53 @@
+{
+  "plan_id": "a6-rename-note-rev03",
+  "summary": "Rename account_user.note to customer_note with zero downtime using a synchronizing trigger and concurrent app versions.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user ensures that after any write by either version, both note and customer_note contain the same value (the value most recently written). Thus reads from either version always observe the most recent write.",
+  "revision_notes": "The previous plan failed because the trigger's conditional logic did not guarantee that both columns held the same value after a write, especially when sets to null or when both columns already had values, leading to stale data, mismatched values, and 5 rows disagreeing. This revision replaces the trigger with an unconditional synchronization mechanism that copies the written column's value to the opposite column and handles null cases correctly, ensuring column agreement and consistency during the concurrent phase.",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, and create a BEFORE INSERT OR UPDATE trigger that synchronizes note and customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL AND NEW.customer_note IS NULL THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS NOT NULL AND NEW.note IS NULL THEN NEW.note := NEW.customer_note; END IF; ELSE IF NEW.note != OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note != OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER trg_sync_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_01",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Re‑sync any rows where note and customer_note may have drifted after the initial backfill or trigger activity.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS DISTINCT FROM note;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state_only migration; both old and new versions serve traffic concurrently. The trigger created in expand keeps note and customer_note in sync as each version writes its respective column.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this only the new version runs, which writes customer_note exclusively."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the synchronization trigger and the old note column; all note data is preserved in customer_note.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS trg_sync_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

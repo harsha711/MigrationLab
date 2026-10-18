@@ -124,6 +124,10 @@ review request -> investigator (searches old-version code) -> planner (staged SQ
 
 ## Data and provenance
 
+All data we created is published in [`dataset/`](dataset/README.md): the 245 seed rows, the 14
+scenario definitions, and all 190 recorded Lightning reviews with their final plans. Its
+datasheet explains the method, and `scripts/export_dataset.py` regenerates it.
+
 | Data | Provenance |
 |---|---|
 | Customer rows (245 in `account_user`) | **Synthetic only.** 200 customers from `migproto/seed.py` (deterministic, `random.Random(42)`: word-list notes, NULLs, unicode, quotes, a 2,000-char note) plus Saleor's own `populatedb` sample data (Faker-generated) and its local dev superuser. No real personal data. Snapshot hash recorded per run (`seed:61e4e7a7f3caa544`) |

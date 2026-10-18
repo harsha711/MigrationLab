@@ -1,0 +1,28 @@
+{
+  "plan_id": "a2-sr-001-revised",
+  "summary": "Revised deployment plan: removed the pre-deploy SQL expand stage that created customer_note, which conflicted with the new version's Django migration adding the same column. Reordered stages to deploy_new (runs the new version's migration to add customer_note) first, followed by a SQL backfill stage to copy existing note values into customer_note while the old version continues serving traffic, then retire_old. The note column remains during the overlap to satisfy the runner's note-column consistency check.",
+  "revision_notes": "Root cause: the new version's Django migration includes an AddField operation for customer_note; the SQL expand stage previously created the column, causing PostgreSQL to reject the duplicate definition (ProgrammingError: column customer_note already exists) during deploy_new.migrate. Fix: remove the SQL expand stage and reorder so deploy_new runs first, allowing the migration to add the column, then run the backfill SQL stage after deployment.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version has been verified running and notes backfilled."
+    }
+  ]
+}

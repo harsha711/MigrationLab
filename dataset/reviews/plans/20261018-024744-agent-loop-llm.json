@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-add-marketing-optin",
+  "summary": "Add a nullable boolean column marketing_opt_in with DEFAULT false, backfill existing rows to FALSE, deploy the new version with a state‑only migration, retire the old version, and finally alter the column to NOT NULL, achieving zero‑downtime while keeping both versions consistent.",
+  "write_consistency": "The column is created with DEFAULT false so the old version’s INSERT statements omit the column and receive FALSE. A backfill UPDATE sets any remaining NULLs to FALSE before deploy_new. After retire_old only the new version runs, and the final ALTER COLUMN SET NOT NULL guarantees no NULL values remain.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with default FALSE.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill all rows where marketing_opt_in is NULL with FALSE.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; it will no longer serve traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

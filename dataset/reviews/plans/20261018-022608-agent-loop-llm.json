@@ -1,0 +1,38 @@
+{
+  "plan_id": "a2-ref-mig-01",
+  "summary": "Zero-downtime migration of account_user.referrer_id to ForeignKey(self-reference): the new version is deployed with state-only migration, orphan referrer_id values are backfilled to NULL, a ForeignKey constraint is added, and finally the old version is retired, ensuring both versions stay consistent during the overlap.",
+  "write_consistency": "During the overlap both versions write referrer_id as integer values. A backfill stage sets referrer_id=NULL for rows referencing non-existent account_user ids before the FK constraint is added, preventing integrity errors. The FK constraint then enforces referential integrity for all subsequent writes from either version. The note column is untouched by all SQL stages.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "d_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "s_backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Clean orphan referrer_id values by setting them to NULL before adding the FK constraint.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "s_expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add ForeignKey constraint from account_user.referrer_id to account_user.id (self-reference) to enforce the new schema.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_id_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version serves traffic."
+    }
+  ]
+}

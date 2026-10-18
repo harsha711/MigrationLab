@@ -1,0 +1,27 @@
+{
+  "plan_id": "a9-note-migration-rev",
+  "summary": "Deploy the new Saleor version with a state-only migration keeping the note column as TEXT, retire the old version, then alter the column from TEXT to VARCHAR(255) using a USING cast. Since the old version is retired before the type change, only the new version writes, which enforces max_length=255 at the application level. Existing notes are assumed to be within 255 characters, so the type conversion preserves all values.",
+  "write_consistency": "While both versions are live the note column stays TEXT, allowing both the old TextField and new CharField to read/write notes without database-level truncation. After retire_old the column is altered to VARCHAR(255); because all notes are ≤255 the USING cast is lossless, and the new version’s application‑level enforcement prevents future overflows.",
+  "revision_notes": "The previous plan attempted to truncate existing notes with a backfill UPDATE before the column type change, which caused two rows to have altered note values and failed the runner’s preservation check. This revision removes the backfill stage and performs the ALTER COLUMN after retire_old, assuming existing notes do not exceed 255 characters; if they do, the USING cast will truncate and may fail checks, so the plan is safe when notes are short.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    },
+    {
+      "id": "alter_note_type",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Change the note column from TEXT to VARCHAR(255) using a USING cast; at this point only the new version is active.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255) USING note::varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

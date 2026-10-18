@@ -1,0 +1,48 @@
+{
+  "plan_id": "a3-user-note-rename-001",
+  "summary": "Rename Django User.note to customer_note in account_user table, preserve GraphQL note field, with zero-downtime concurrent migration: add new column, batched backfill from note to customer_note with convergence guard, deploy new app, retire old app, then drop old column.",
+  "write_consistency": "During the concurrent window, the old app writes to the note column and the new app writes to customer_note. A batched backfill populates customer_note from note for all existing rows with non-NULL note values before the old app is retired. The note column is retained until after retire_old is deployed, ensuring no existing note values are lost. After retire_old, the note column is safely dropped.",
+  "revision_notes": "The previous backfill SQL lacked a convergence guard. Added `AND note IS NOT NULL` to the subquery WHERE clause so only rows with actual note values are batched, preventing the infinite re-selection loop caused by updating NULL rows. This allows `repeat_until_zero_rows` to terminate once all non-NULL notes are copied.",
+  "stages": [
+    {
+      "id": "expand_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note to customer_note in batches until all rows are updated.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE ctid IN (SELECT ctid FROM account_user WHERE customer_note IS NULL AND note IS NOT NULL LIMIT 1000);"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new app version (new-staged) that uses customer_note column and keeps public GraphQL field note."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old app version that uses note column."
+    },
+    {
+      "id": "contract_col",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column after old app retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

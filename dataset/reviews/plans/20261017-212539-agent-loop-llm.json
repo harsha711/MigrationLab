@@ -1,0 +1,48 @@
+{
+  "plan_id": "a4-migrate-user-note-02",
+  "summary": "Expand_01 and backfill_01 sql stages completed successfully. deploy_new_01.django_migrate failed with ProgrammingError: column \"customer_note\" already exists, observed alongside schema showing both note and customer_note columns present in account_user.",
+  "revision_notes": "The customer_note column already existed in the database from a prior incomplete migration or previous plan execution, causing Django's migration runner to raise a duplicate-column error during deploy_new.",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new customer_note column if it does not already exist.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_01",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for rows that have not been filled.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "description": "Deploy the new‑staged version of Saleor. Code changes (model field rename, bulk‑mutation field list, staff utils input list, resolver, anonymization dict, test attribute access) are already included; the new version reads and writes customer_note exclusively.",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire the old version of Saleor that only knows the note column. Traffic is now served exclusively by the new version."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the obsolete note column since the old version is no longer running.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

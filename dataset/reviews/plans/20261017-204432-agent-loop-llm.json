@@ -1,0 +1,19 @@
+{
+  "plan_id": "a1-loyaltytier-001",
+  "summary": "The change adds a new LoyaltyTier model/table that neither the old nor new Saleor version interacts with regarding customer notes. deploy_new runs the new version's Django migration (which creates account_loyaltytier) then starts the new version. Both versions continue serving concurrently; the old version ignores the new table, and the note column on account_user is known to both, so write consistency is maintained. After retire_old, only the new version remains.",
+  "write_consistency": "Both versions include the 'note' column in their Django save() operations; the old version's save() only writes known columns, so 'note' is always written explicitly. The new version's migration creates the new LoyaltyTier table without altering account_user or the note column. Concurrent writes to 'note' from both versions remain consistent, with the most recently written value prevailing, matching the runner's cross-version check.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version, ending its traffic against the database."
+    }
+  ]
+}

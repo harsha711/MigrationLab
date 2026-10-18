@@ -1,0 +1,18 @@
+{
+  "plan_id": "a8-revised-reject-unique-la",
+  "summary": "The new Saleor version enforces uniqueness on User.last_name via Django's unique=True. Pre-existing last_name values in the database cannot be altered, and if duplicates exist the new version's create/update operations will raise IntegrityError during the concurrent overlap, causing the deterministic cross-version checks to fail. Since no SQL stage can modify last_name values without violating the 'must not change' rule, and adding a unique constraint before deploy_new is impossible without data alteration, zero‑downtime migration is infeasible.",
+  "write_consistency": "N/A – the change cannot be rolled out without risking UNIQUE violations.",
+  "revision_notes": "Root cause: The new app version adds a uniqueness constraint on last_name. During the overlap between deploy_new and retire_old both versions read/write the same table. The old version does not enforce uniqueness, so it may introduce duplicate last_name values. The new version's model validation will then raise UNIQUE errors when attempting to save users with duplicate last_name. Because pre‑existing last_name values must not be changed, there is no way to pre‑validate or enforce the constraint without altering existing data. Previous attempts to add a NOT VALID constraint failed because PostgreSQL does not support NOT VALID on UNIQUE constraints, and adding a valid constraint requires unique values, which cannot be guaranteed. Therefore no valid rollout sequence exists.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version, stopping its traffic."
+    }
+  ]
+}

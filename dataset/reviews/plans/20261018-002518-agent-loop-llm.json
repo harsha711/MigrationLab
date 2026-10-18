@@ -1,0 +1,29 @@
+{
+  "plan_id": "a6-mig-001",
+  "summary": "Add customer_note column via the new version's Django migration on deploy_new, backfill existing note values into customer_note before retiring the old version, then drop the note column. This avoids the column-already-exists conflict and ensures the note column remains the source of truth for runner checks during the overlap.",
+  "write_consistency": "The old version continues writing to the note column throughout; the new version writes to customer_note. The backfill SQL stage runs after deploy_new (following the migration that adds customer_note), ensuring customer_note is populated from note. Since no SQL stages run during the overlap between deploy_new and retire_old, and the old version is the sole writer to note, the note column always reflects the most recent old-version write, satisfying the runner's column-check. After retire_old, the note column is dropped.",
+  "revision_notes": "The previous plan failed because the SQL expand stage added customer_note before deploy_new, causing the new version's Django migration to fail with 'column customer_note already exists'. This revised plan lets the new version's own migration add the column during deploy_new, then performs the data backfill as a SQL stage after deploy_new. The note column is retained for the old version during the overlap and only dropped after retire_old.",
+  "stages": [
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy every note value into customer_note after the new version's migration has added the column",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this the note column is free to be contracted"
+    }
+  ]
+}

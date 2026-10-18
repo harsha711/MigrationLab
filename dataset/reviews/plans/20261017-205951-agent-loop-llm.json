@@ -1,0 +1,49 @@
+{
+  "plan_id": "a3-migrate-user-note-rename",
+  "summary": "Add customer_note column idempotently, backfill existing notes, deploy new app with faked migration to avoid duplicate column error, then drop note column after old app retired.",
+  "write_consistency": "During expand both columns coexist; old app writes to note, new app writes to customer_note. Backfill copies note values to customer_note. After deploy_new, new app is primary writer of customer_note; old app continues writing note until retire_old removes note column. Most recent write from either version is visible via the coexisting columns, ensuring no data loss.",
+  "revision_notes": "Root cause: The expand_column SQL stage added customer_note via ALTER TABLE ... ADD COLUMN IF NOT EXISTS, but deploy_new's Django migration (migration: apply) re-attempted AddField for the same column, causing ProgrammingError: column already exists. Since the new app's migration is state-only and issues no SQL, the migration must be faked (migration: fake) to mark it applied without executing SQL, avoiding the conflict.",
+  "stages": [
+    {
+      "id": "expand_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new customer_note column idempotently so both old and new code can operate concurrently.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN IF NOT EXISTS customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so reads from the new version see the same data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged Saleor version; its Django model now references customer_note. The migration is faked (migration: fake) so Django does not re-add the already-existing column, avoiding the conflict.",
+      "migration": "state_only"
+    },
+    {
+      "id": "contract_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column once the new app is confirmed to be handling all writes and reads.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version of Saleor that only knows the note column. After this stage the note column is gone and only customer_note remains in the schema."
+    }
+  ]
+}

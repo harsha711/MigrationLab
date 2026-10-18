@@ -1,0 +1,43 @@
+{
+  "plan_id": "a2-migrate-user-note-rev001",
+  "summary": "Rename Django User.note to customer_note while keeping the public GraphQL field note, using bidirectional column sync triggers to guarantee read consistency across old and new app versions during a staged migration.",
+  "write_consistency": "Add customer_note column, backfill data from note, and create two BEFORE INSERT/UPDATE triggers: one copies note → customer_note, the other copies customer_note → note. This ensures whichever version writes a value, the other version can read it from its known column. After retire_old, the note column is dropped and customer_note holds the latest value written by either version.",
+  "revision_notes": "Root cause: the previous plan only added a one‑way trigger (note → customer_note). This caused failures when the new version wrote customer_note (old could not see it), when new created rows (old read null), and when clears were silently restored. Adding a reverse trigger (customer_note → note) makes writes from either direction visible to the other version and propagates clears bidirectionally.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill data from note, and add bidirectional sync triggers.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_to_customer_trg BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_customer_to_note_trg BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which uses the customer_note column exclusively. Code changes (model field, resolvers, bulk mutates, anonymization) have already been applied per investigator findings."
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old) that writes to the note column. Traffic is shifted to the new version only."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column after the old version is retired, leaving only customer_note.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

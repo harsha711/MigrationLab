@@ -1,0 +1,71 @@
+{
+  "plan_id": "a5-rename-note-v5",
+  "summary": "Add customer_note column, backfill data, create unconditional COALESCE PL/pgSQL triggers for cross‑version sync, deploy new version with state‑only migration, retire old version, then drop note column.",
+  "write_consistency": "Unconditional COALESCE PL/pgSQL triggers ensure every write to note or customer_note updates the other column, so both concurrent versions always see the most recent value.",
+  "revision_notes": "Root cause: earlier triggers used IF conditions that only fired when note value changed, failing to sync on inserts/updates when both columns were NULL or when the test harness inserts seed data directly via raw SQL bypassing Django ORM triggers. Revised plan uses unconditional COALESCE assignments guaranteeing every write propagates the non‑NULL value, and adds a one‑time backfill step to sync existing rows so that initial state is consistent before concurrent traffic begins.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ]
+    },
+    {
+      "id": "sync_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "One‑time sync of all rows so that both columns hold the same initial value.",
+      "sql": [
+        "UPDATE account_user SET note = COALESCE(note, customer_note), customer_note = COALESCE(note, customer_note);"
+      ]
+    },
+    {
+      "id": "sync",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Create bidirectional triggers using COALESCE so every write syncs the columns.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_update_sync AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER customer_note_update_sync AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();",
+        "CREATE OR REPLACE FUNCTION sync_note_insert() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_insert_sync AFTER INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_insert();",
+        "CREATE OR REPLACE FUNCTION sync_customer_insert() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER customer_insert_sync AFTER INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_insert();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new staged version with a state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

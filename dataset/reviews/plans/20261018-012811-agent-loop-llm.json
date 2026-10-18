@@ -1,0 +1,29 @@
+{
+  "plan_id": "a4-srl-note-001",
+  "summary": "Add a customer_note column via the new version's Django migration on deploy_new, backfill existing note values into customer_note after deployment while both versions are live, then retire the old version. The note column remains unchanged and continues to be written by the old version, satisfying the runner's note-column checks.",
+  "write_consistency": "During the overlap (deploy_new to retire_old), the old version continues to write notes to the note column via Django save(); the new version writes notes to the customer_note column via GraphQL note mapping. The backfill SQL stage copies initial note values into customer_note without modifying the note column. Because the note column is only altered by the old version and not by our SQL stages, the runner's check that note equals its most recent value (seed plus old‑version writes) passes. After retire_old, only the new version writes to customer_note.",
+  "revision_notes": "Root cause of previous plan failure: the expand stage added the customer_note column before deploy_new, causing the new version's Django migration on deploy_new to fail with \"column already exists\". This revised plan omits any SQL stage that creates the customer_note column; instead it relies on the new version's own migration to add the column on deploy_new. The backfill stage runs after deploy_new, copying note → customer_note, and the note column is left untouched, so the runner's checks continue to pass.",
+  "stages": [
+    {
+      "id": "deploy-new-001",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so the new version has the data immediately.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire-old-001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version (0c0e2697cc72aa999f7786ae8aeda7665bd4285f). After this stage only the new version serves traffic."
+    }
+  ]
+}

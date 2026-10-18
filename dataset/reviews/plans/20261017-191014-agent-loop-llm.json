@@ -1,0 +1,46 @@
+{
+  "plan_id": "a3-mig-001",
+  "summary": "Plan a2-mig-001 progressed through expand and backfill stages, but failed during deploy_new-001 with 17 consistency check failures. All failures demonstrate that reads by one app version fail to see recent writes from the other version, because the old app writes to column `note` while the new app writes to column `customer_note`, and the single pre-deployment backfill cannot synchronize concurrent writes across the isolated columns. The runner’s checks require that both versions read the most recent value written by either version, which the separate-column schema prevents.",
+  "stages": [
+    {
+      "id": "expand-001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note to the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy data from note to customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which expects the customer_note column and does not reference the note column."
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old) that only knows the note column. After retirement the note column can safely be dropped."
+    },
+    {
+      "id": "contract-001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old app version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

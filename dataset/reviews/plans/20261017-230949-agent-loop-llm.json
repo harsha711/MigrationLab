@@ -1,0 +1,44 @@
+{
+  "plan_id": "a4-migrate-note-v3",
+  "summary": "Adds customer_note column, backfills from note, creates a bidirectional sync trigger for concurrent old/new operation, deploys new version state-only, retires old version, then drops the note column and its dependent triggers/function in the contract stage.",
+  "write_consistency": "A BEFORE INSERT/UPDATE trigger on account_user synchronizes note and customer_note by detecting which column was modified and propagating its value to the other, ensuring both versions see the most recently written value. Triggers and the sync function are removed in the contract stage after the old version is retired.",
+  "revision_notes": "The previous contract stage dropped the note column while the sync_note_customer() trigger function still referenced it, causing a ProgrammingError. Revised plan drops the triggers sync_note_before_insert, sync_note_before_update and the function sync_note_customer() before dropping the note column in the contract stage, matching the retired-old state and preventing invalid-function errors.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, and create sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer() RETURNS trigger AS $$\nBEGIN\n    IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n        IF NEW.customer_note IS NULL OR NEW.customer_note = OLD.customer_note THEN\n            NEW.customer_note := NEW.note;\n        END IF;\n    END IF;\n    IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n        IF NEW.note IS NULL OR NEW.note = OLD.note THEN\n            NEW.note := NEW.customer_note;\n        END IF;\n    END IF;\n    RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_before_update BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer();",
+        "CREATE TRIGGER sync_note_before_insert BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version with a state-only migration; the new code knows column customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after it is gone the note column and its triggers can be safely removed."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove note column and its dependent triggers/function since the old version is retired.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_before_insert ON account_user;",
+        "DROP TRIGGER IF EXISTS sync_note_before_update ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_customer();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

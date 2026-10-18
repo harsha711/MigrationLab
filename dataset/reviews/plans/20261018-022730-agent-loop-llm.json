@@ -1,0 +1,47 @@
+{
+  "plan_id": "a1-mkt-optin-staged-rollout",
+  "summary": "Add marketing_opt_in column with DEFAULT FALSE, backfill existing rows to FALSE, deploy new version in state_only mode, retire old version, then apply NOT NULL constraint.",
+  "write_consistency": "The column DEFAULT FALSE ensures old version INSERTs receive False; backfill sets existing rows; after retire_old, NOT NULL is applied.",
+  "revision_notes": "Initial plan.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column with DEFAULT FALSE to account_user",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill marketing_opt_in to FALSE for all existing rows",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old"
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Set NOT NULL constraint on marketing_opt_in",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

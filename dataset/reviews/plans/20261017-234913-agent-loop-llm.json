@@ -1,0 +1,43 @@
+{
+  "plan_id": "a5-rename-note-v5",
+  "summary": "Add customer_note column, backfill from note, create a refined AFTER INSERT OR UPDATE trigger that propagates the newly written value to the other column only when the target column is NULL, deploy new version state-only, retire old, then drop column and trigger.",
+  "write_consistency": "AFTER INSERT OR UPDATE trigger on account_user that copies the newly written value to the opposite column only if that column is currently NULL, preserving any non‑null value already set by the other version.",
+  "revision_notes": "Previous attempts used symmetric COALESCE and conditional IF/ELSIF that failed to fire on INSERT and overwrote existing values, causing stale reads across versions. The revised trigger only propagates when the target column is NULL, preventing unnecessary overwrites and ensuring both columns reflect the most recent write.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, copy existing note values, and create a sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$\nBEGIN\n  -- Propagate old‑version note change to customer_note if it is NULL\n  IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n    IF NEW.customer_note IS NULL THEN\n      NEW.customer_note := NEW.note;\n    ELSE\n      NEW.customer_note := COALESCE(NEW.customer_note, NEW.note);\n    END IF;\n  END IF;\n  -- Propagate new‑version customer_note change to note if it is NULL\n  IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n    IF NEW.note IS NULL THEN\n      NEW.note := NEW.customer_note;\n    ELSE\n      NEW.note := COALESCE(NEW.note, NEW.customer_note);\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new staged version with a state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; old code no longer writes to the database."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the trigger and the old note column.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

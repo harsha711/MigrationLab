@@ -1,0 +1,32 @@
+{
+  "plan_id": "a4-rename-note-customer-v2",
+  "summary": "Add customer_note column, backfill from note, create a sync trigger that always propagates the written value to the other column, deploy the new version with a state-only Django migration, and finally retire the old version dropping the trigger and note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user uses IS DISTINCT FROM to detect column changes and always sets the opposite column to the newly written value, ensuring the most recent write from either app version is immediately visible to the other version. An initial backfill synchronizes existing data before deployment.",
+  "revision_notes": "The previous plan's trigger used COALESCE which only propagated the written value if the target column was NULL; after the new app had already written data, old app writes were not propagated, causing reads to return stale seed data and leading to mismatched column values. This plan changes the trigger to always overwrite the other column with the written value (last writer wins), combined with a backfill that syncs all rows before deployment, so that concurrent writes from either version are immediately visible to the other version and column values remain consistent after deployment.",
+  "stages": [
+    {
+      "id": "expand_schema",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill data from note, and create sync trigger for cross-version consistency.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "description": "Deploy the new version (new-staged) with a state-only Django migration; the new app only knows customer_note and the trigger ensures note stays in sync.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old version and remove the note column after old app shutdown. The trigger is dropped before the column to avoid dependency errors, leaving only customer_note as the sole column on the account_user table, and the GraphQL field note continues to return the value from customer_note via the already-updated app code..sql]: [\"DROP TRIGGER sync_note_trig ON account_user;\", \"ALTER TABLE account_user DROP COLUMN note;\"]"
+    }
+  ]
+}

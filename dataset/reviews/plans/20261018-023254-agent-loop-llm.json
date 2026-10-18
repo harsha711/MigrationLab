@@ -1,0 +1,38 @@
+{
+  "plan_id": "a2-mig-001",
+  "summary": "Add the required marketing_opt_in boolean NOT NULL column via an expand stage with DEFAULT false, ensuring old version inserts receive FALSE through the DB default and new version inserts explicitly set it. A backfill stage guarantees no NULLs exist after expansion. The new version is deployed with a state-only migration, old version retired, leaving the column in place.",
+  "write_consistency": "The column is added with NOT NULL DEFAULT false before deploy_new. Old version save() omits the unknown column, so INSERTs fall back to the DB DEFAULT false. New version explicitly sets marketing_opt_in. The notes column is untouched by all SQL stages, preserving note consistency.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand-column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL and DEFAULT false to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-opt-in",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill any NULLs in marketing_opt_in to false.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy-new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire-old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this, only new version serves traffic."
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "plan_id": "a1-mrg-rename-001",
+  "summary": "Zero-downtime rename of account_user.note to customer_note via adding a column, installing a sync trigger, backfilling, deploying the new app, and dropping the old column, ensuring both app versions stay consistent during concurrent traffic.",
+  "write_consistency": "A PL/pgSQL trigger on account_user synchronizes note and customer_note on every INSERT and UPDATE: when the old app writes note, customer_note is auto-updated, and when the new app writes customer_note, note is auto-updated. This ensures both versions always read the most recent value written by either. A one-time backfill copies existing note values into customer_note before the switch.",
+  "revision_notes": "Initial plan drafted with column add, trigger, backfill, deploy, drop. Revised to place trigger and sync logic for concurrent app safety.",
+  "stages": [
+    {
+      "id": "expand-001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and install sync trigger so both old and new app versions can write their respective column and read the other version's writes.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); NEW.note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_cust_note_trig AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ]
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Populate customer_note with existing note values so no data is lost and the new app can immediately read/write customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which knows only customer_note. The old version continues running concurrently; the trigger ensures writes from either version are visible to the other."
+    },
+    {
+      "id": "contract-001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the original note column after confirming the new app is serving traffic and the trigger has kept both columns in sync.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old). After this stage only the new app version runs, which exclusively uses customer_note."
+    }
+  ]
+}

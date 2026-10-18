@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-saleor-mkt-optin-seq",
+  "summary": "Add marketing_opt_in to account_user via staged rollout: add nullable boolean column with DB DEFAULT False, backfill all rows to False, deploy new version with state-only migration, retire old version, then make column NOT NULL. This ensures old version writes receive False implicitly via the default, no NULLs persist through concurrent traffic, and the final schema enforces NOT NULL after old version retirement.",
+  "write_consistency": "The column marketing_opt_in is created with a database-level DEFAULT False. The old Saleor version does not know this column, so its INSERT/UPDATE statements omit it, causing PostgreSQL to assign False. Existing rows are backfilled to False before the new version starts. The new version's code includes marketing_opt_in in saves, setting it explicitly. During concurrent traffic between deploy_new and retire_old, old version writes set the column to False implicitly, while new version writes set it explicitly, preventing NULLs. After retire_old, the column is made NOT NULL via contract SQL, which succeeds because all rows already contain False.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_marketing_optin",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with DEFAULT False on account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NULL DEFAULT False;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_marketing_optin",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill all rows with False to ensure no NULLs exist before the new version deploys.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = False WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_marketing_optin",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_marketing_optin",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version serves traffic."
+    },
+    {
+      "id": "contract_marketing_optin_not_null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL; the column already contains False for all rows, so the constraint is added successfully.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

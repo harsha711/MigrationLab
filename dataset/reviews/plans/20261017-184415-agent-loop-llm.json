@@ -1,0 +1,45 @@
+{
+  "plan_id": "a4-r4-rename-note",
+  "summary": "Add a customer_note column, backfill from note, and use BEFORE row-level triggers to synchronize note and customer_note on every INSERT/UPDATE, ensuring both app versions stay consistent while the old column is kept until retirement.",
+  "write_consistency": "BEFORE row-level triggers on account_user copy the value of the written column to the other column on every INSERT/UPDATE, ensuring that a write from either version is instantly reflected in the other column, so reads across versions always see the most recently written value.",
+  "revision_notes": "Root cause of the previous failure: the old plan used BEFORE triggers that only set the opposite column when it was NULL, which meant that after the initial backfill the opposite column was already populated and the trigger never synced subsequent writes. This revision makes the triggers unconditionally copy the changed column's value to the other column on every row operation, guaranteeing cross‑version consistency.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill existing note values, and create BEFORE triggers to sync note and customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_before_insert BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();",
+        "CREATE TRIGGER sync_note_before_update BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged app version. Its Django model only knows customer_note and will write to that column. The old app still writes to note, and the BEFORE triggers keep both columns consistent."
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old app version. Traffic stops, but both columns remain in the database while the new app continues to use customer_note."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column and the synchronization triggers, leaving only customer_note for the new app.",
+      "sql": [
+        "DROP TRIGGER sync_note_before_insert ON account_user;",
+        "DROP TRIGGER sync_note_before_update ON account_user;",
+        "DROP FUNCTION sync_user_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

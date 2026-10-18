@@ -1,0 +1,42 @@
+{
+  "plan_id": "a6-rename-note-to-customer",
+  "summary": "Phase-based zero-downtime rename: expand adds customer_note column and backfills note values, then creates a PostgreSQL bidirectional trigger to keep note and customer_note synchronized during the overlap; deploy_new starts new version with state_only migration; retire_old retires old version; contract drops trigger and note column, leaving customer_note as the sole note column.",
+  "write_consistency": "Old version writes to column note, new version writes to customer_note. A PostgreSQL trigger fires after each INSERT and UPDATE on account_user, ensuring that if note changes, customer_note is set to the new note value, and if customer_note changes, note is set to the new customer_note value. This maintains column parity at all times, so reads from either version return the most recently written value.",
+  "revision_notes": "Root cause of previous failures: no mechanism to synchronize note and customer_note columns after deploy_new, causing divergent values and failed cross-version read checks. This plan adds a bidirectional UPDATE trigger in the expand stage to maintain column consistency throughout the overlap.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill initial values, and create sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_trig AFTER UPDATE OR INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer serves traffic"
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop trigger and note column after old version retired",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note_trig;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

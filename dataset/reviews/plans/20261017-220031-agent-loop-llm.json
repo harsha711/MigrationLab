@@ -1,0 +1,58 @@
+{
+  "plan_id": "a4-note-rename-004",
+  "summary": "Add the customer_note column, backfill its values from note, create PostgreSQL BEFORE INSERT OR UPDATE triggers after the backfill to synchronise note and customer_note on every write, deploy the new staged version with a state_only migration, retire the old version, and finally drop the note column.",
+  "write_consistency": "Two bidirectional BEFORE INSERT OR UPDATE triggers (note→customer_note and customer_note→note) ensure that a write from either version is reflected in the other column, so both app versions always read the most recently written value. The triggers are created after the backfill, leaving the initial copy exact and avoiding interference with the backfill step.",
+  "revision_notes": "The prior plan (a3) had no sync mechanism, causing 16 check failures because the two columns diverged when each version wrote exclusively to its own column. The earlier trigger plan (a2) failed 13 checks because the trigger was created before the backfill, causing the backfill UPDATE to fire the trigger and produce unexpected values. This revision creates the trigger only after the backfill, so the initial copy is exact and subsequent writes are synchronised correctly.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new customer_note column to the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note so both columns start equal.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ]
+    },
+    {
+      "id": "sync",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create triggers that synchronise note and customer_note on every write.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer() RETURNS trigger AS $$ BEGIN NEW.customer_note := NEW.note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_to_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER customer_to_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new staged version; the Django migration is state_only, recording the new model state without executing SQL.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this stage only the new version continues to serve traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

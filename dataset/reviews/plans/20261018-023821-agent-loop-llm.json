@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-nr-01",
+  "summary": "Staged rollout using migration state_only to prevent the new version's Django migration from automatically dropping the note column during the overlap. The note column is preserved through the concurrent serving of both versions and dropped via a contract SQL stage after the old version is retired.",
+  "write_consistency": "During the overlap between deploy_new and retire_old, only the old version writes to the note column; the new version has no note field and does not modify it. The runner checks confirm that note values remain consistent with the most recent write from either version. After retire_old, the contract stage drops the column.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this stage, only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from the account_user table after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

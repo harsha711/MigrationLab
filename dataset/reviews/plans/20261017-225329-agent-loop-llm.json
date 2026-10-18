@@ -1,0 +1,43 @@
+{
+  "plan_id": "a4-rnm-004",
+  "summary": "Rename account_user.note to customer_note with zero downtime: add column, backfill, create sync trigger via DO block, deploy new version state-only, retire old, contract drop trigger and note column.",
+  "write_consistency": "Both columns note and customer_note coexist during concurrent operation. A BEFORE INSERT OR UPDATE trigger synchronizes the counterpart column: when old app writes note, trigger sets customer_note; when new app writes customer_note, trigger sets note. The backfill ensures all existing rows have matching values. After retire_old, trigger and note column are removed, leaving customer_note as the sole note column.",
+  "revision_notes": "Previous plan failed because the trigger function was provided as a standalone CREATE FUNCTION string containing ; inside the $$ block, which the runner interpreted as statement separators, causing a syntax error. This revision wraps the function and trigger creation in a single DO $$ ... $$; command, so the ; inside the PL/pgSQL body are treated as part of the block and not as separators, satisfying the runner's execution model.",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, and create sync trigger function and trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "DO $$ CREATE OR REPLACE FUNCTION sync_note_columns() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NULL AND NEW.customer_note IS NULL THEN NEW.note := NULL; NEW.customer_note := NULL; ELSIF NEW.note IS NULL THEN NEW.note := NEW.customer_note; ELSIF NEW.customer_note IS NULL THEN NEW.customer_note := NEW.note; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN NEW.note := NEW.customer_note; END IF; END; $$ LANGUAGE plpgsql; CREATE TRIGGER sync_note_columns BEFORE INSERT OR UPDATE ON account_user EXECUTE PROCEDURE sync_note_columns(); $$;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; new app knows customer_note only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire old version; old app no longer serves traffic."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop sync trigger and function, drop note column, leaving customer_note as the sole note column.",
+      "sql": [
+        "DROP TRIGGER sync_note_columns ON account_user;",
+        "DROP FUNCTION sync_note_columns();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "plan_id": "a2-migration-ref-001",
+  "summary": "Deploy new version with state-only migration to keep referrer_id as integer column while both versions run concurrently. After retiring old version, nullify orphan referrer_id values before adding ForeignKey constraint on referrer_id referencing account_user.id to ensure constraint executability.",
+  "write_consistency": "During the overlap, both versions treat referrer_id as an integer column; old app writes integer referrer IDs, new app's ORM writes user primary keys as integers. No FK constraint is enforced until after retire_old, ensuring write compatibility. After retire_old, orphan referrer_id values are cleared before the ForeignKey constraint is added.",
+  "revision_notes": "Root cause: The add_fk_constraint stage failed because orphan referrer_id values (e.g., referrer_id=1000097) existed in account_user rows that reference non-existent user primary keys, violating the new ForeignKey constraint. Revised plan modifies the add_fk_constraint SQL to include an UPDATE statement that sets orphan referrer_id values to NULL prior to adding the constraint, based on the execution evidence showing FK failure due to orphan data.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version."
+    },
+    {
+      "id": "add_fk_constraint",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add ForeignKey constraint on referrer_id referencing account_user.id.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id NOT IN (SELECT id FROM account_user);",
+        "ALTER TABLE account_user ADD CONSTRAINT fk_referrer FOREIGN KEY (referrer_id) REFERENCES account_user (id);"
+      ]
+    }
+  ]
+}

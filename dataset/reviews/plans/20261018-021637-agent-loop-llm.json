@@ -1,0 +1,39 @@
+{
+  "plan_id": "a7-user-note-migration-v3",
+  "summary": "The new version is deployed via its Django migration that adds the customer_note column; existing note values are backfilled into customer_note, and the note column is synced to stay consistent with the new version's writes during the overlap, after which the old version is retired without dropping the note column.",
+  "write_consistency": "Old version continues writing to note; new version writes to customer_note. After deploy_new a SQL sync stage copies customer_note→note, aligning note with the most recent values from either version. The backfill stage populates customer_note from note for existing rows. Note column remains available for the old version throughout the overlap.",
+  "revision_notes": "Previous plan failed because the contract SQL stage dropped the note column, causing the runner's smoke test to fail with 'column account_user.note does not exist'. This revision omits the contract stage that drops note, keeping note column throughout. The Django migration on deploy_new creates customer_note, and SQL stages handle data transfer and sync without removing note.",
+  "stages": [
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy every note value from note to customer_note for existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_note-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Sync note column to match customer_note after new version is live, ensuring old version reads latest values.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version. After this stage the old version no longer serves traffic."
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "plan_id": "a5-rename-note-v5",
+  "summary": "Add the customer_note column, backfill from note, deploy the new version with a state‑only migration, create a PostgreSQL BEFORE INSERT OR UPDATE trigger that copies the written value to the other column only when that column’s value actually changes, retire the old version, then drop the trigger and the note column.",
+  "write_consistency": "A BEFORE trigger copies the source column’s value to the target column only if the source column’s value is distinct from its old value, preventing unintended overwrites and keeping both columns in sync across concurrent versions.",
+  "revision_notes": "The previous plan’s trigger unconditionally copied values on every row change, causing the non‑written column to be overwritten with its prior value (or NULL), which produced stale reads and column‑agreement failures. The revised trigger only syncs when the source column is actually modified, preserving the written value and reducing divergence.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column to the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version using a state‑only migration; the new Django model only knows customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a BEFORE INSERT OR UPDATE trigger that synchronises note and customer_note only when the source column changes.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;\nCREATE TRIGGER sync_user_note_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this stage only the new version runs, which exclusively uses customer_note."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the note column since the old version is no longer active.",
+      "sql": [
+        "DROP TRIGGER sync_user_note_trigger ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "plan_id": "a6-b1-user-note-type-change",
+  "summary": "A staged rollout first truncates any existing notes longer than 255 characters, then deploys the new Saleor version with a state‑only migration (keeping the database column as TEXT), retires the old version, and finally alters the column to VARCHAR(255). This prevents the old version from hitting a DataError when the column type changes and preserves all note values during the overlap.",
+  "write_consistency": "While both versions are live the note column remains TEXT, so Django's INSERT/UPDATE statements from either version accept any length and no truncation occurs at the database level. The new app version validates and truncates notes to 255 characters before saving, while the old version writes unrestricted text. Existing notes are truncated to ≤255 chars before the column alteration, ensuring the final VARCHAR(255) change incurs no data loss. After retire_old only the new version runs, which enforces the max_length constraint, so no further long notes can be written.",
+  "revision_notes": "The previous plan used a Django \"apply\" migration that immediately altered the column to VARCHAR(255). This caused the old version to raise a DataError when writing notes longer than 255 characters, and the deployment preservation check found a mismatched row because the type change truncated values mid‑flight. The revised plan delays the schema change until after the old version is retired and all existing notes have been explicitly truncated, using a state‑only migration to avoid an premature column‑type change.",
+  "stages": [
+    {
+      "id": "backfill_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Truncate existing note values to 255 characters to ensure compatibility when the column is later altered to VARCHAR(255).",
+      "sql": [
+        "UPDATE account_user SET note = LEFT(note, 255) WHERE char_length(note) > 255;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is confirmed running."
+    },
+    {
+      "id": "contract_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Alter the note column from TEXT to VARCHAR(255). All notes have already been truncated, so the alteration succeeds without data loss.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255) USING note::varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "plan_id": "a5-note-type-change-revised",
+  "summary": "Plan deployed new version (state_only), retired old version, then ran a backfill UPDATE to truncate notes >255 chars to first 255 symbols. However, 2 of 247 rows still failed the preservation check, showing their note value differed from the truncated state. The contract-schema stage was subsequently refused due to this earlier failure. The mismatch indicates that concurrent writes from the old version during the deploy_new–retire_old overlap modified those 2 rows after the truncation UPDATE but before retire_old, so the runner observed the original long note as the most recent value, conflicting with the truncated column.",
+  "revision_notes": "The plan added a backfill-truncate-notes stage before contract-schema, but the preservation check still flagged 2 mismatched rows. Root cause is concurrent old-version writes during the overlap period that modified rows after the backfill truncation but before retire_old, causing the runner to see the original long note as the most recent value.",
+  "stages": [
+    {
+      "id": "deploy-new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire-old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this only new version serves traffic."
+    },
+    {
+      "id": "backfill-truncate-notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Truncate any note values exceeding 255 characters to the first 255 symbols.",
+      "sql": [
+        "UPDATE account_user SET note = LEFT(note, 255);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract-schema",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Alter account_user.note column from TEXT to VARCHAR(255).",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE VARCHAR(255) USING note::VARCHAR(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

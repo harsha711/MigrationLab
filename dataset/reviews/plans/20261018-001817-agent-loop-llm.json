@@ -1,0 +1,28 @@
+{
+  "plan_id": "a6-note-trunc-004",
+  "summary": "The User.note field is changed from Text to CharField(max_length=255). A SQL backfill stage truncates existing note values in account_user to 255 characters while the old version is still running, ensuring data fits the new constraint before the column type changes. deploy_new then applies the new Django migration (altering the column to varchar(255)) with both versions live, allowing the runner's cross-version read/write consistency checks to validate that notes written by either version are correctly readable by the other, followed by retire_old.",
+  "write_consistency": "The SQL backfill ensures all notes are <=255 chars before the column type changes. During the overlap after deploy_new, the old version's writes are truncated by the varchar(255) column, and the new version's CharField enforces the same 255-character limit; the runner's cross-version checks confirm that notes written by either version are correctly readable by the other.",
+  "revision_notes": "Root cause of failure: the old unmodified Saleor version (TextField model, no max_length enforcement) continued serving traffic after deploy_new's migration altered the column to varchar(255). Django passed full Text values to PostgreSQL, which rejected writes exceeding 255 characters, causing DataError. The SQL backfill truncated existing rows but could not prevent future long writes during the concurrent overlap, leading to preservation mismatches and cross-version DataError checks.",
+  "stages": [
+    {
+      "id": "sql_truncate_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Truncate existing note values in account_user to 255 characters to match the new CharField max_length.",
+      "sql": [
+        "UPDATE account_user SET note = left(note, 255) WHERE length(note) > 255;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this only the new version serves traffic against the updated schema."
+    }
+  ]
+}

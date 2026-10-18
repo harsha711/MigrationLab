@@ -1,0 +1,58 @@
+{
+  "plan_id": "a5-note-rename-004",
+  "summary": "The expand, backfill, and trigger-sync stages passed, but deploy_new still failed 16 checks. In every failure the observed row value resided in the column the opposite version was not meant to write (e.g., old writes note but read observed seed data in customer_note, and vice-versa). Column-agreement and preservation checks reported mismatching rows, and contract preconditions were refused because earlier failures persisted. The PostgreSQL trigger intended to keep note and customer_note in sync did not prevent divergence under concurrent writes from the two app versions.",
+  "revision_notes": "The previous trigger used unconditional COALESCE logic that copies values on INSERT/UPDATE, but it does not overwrite the opposite column when a writing version sets a new value while the other column already holds data. This allows concurrent divergent writes (old→note, new→customer_note) to persist, causing read/write mismatches and column-agreement failures. An unconditional sync trigger that always overwrites the opposite column with the written value is needed to guarantee consistency during the overlap phase.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add trigger to keep note and customer_note in sync unconditionally",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; NEW.customer_note := NEW.note; RETURN NEW; END; $$ LANGUAGE plpgsql; CREATE TRIGGER sync_note_customer_note_trig AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new‑staged version with a state‑only Django migration",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version"
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the old note column",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

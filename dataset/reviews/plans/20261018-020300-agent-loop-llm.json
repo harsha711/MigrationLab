@@ -1,0 +1,18 @@
+{
+  "plan_id": "a9-reject-lastname-unique",
+  "summary": "The database contains duplicate non‑NULL last_name values (e.g., 'Cook' appears twice). Enforcing a unique constraint on last_name would require either modifying existing values (which is forbidden because pre‑existing last_name values must not change) or dropping the constraint, which is not allowed. Therefore no zero‑downtime plan can add a unique index without violating the data‑integrity rule; the change is rejected.",
+  "write_consistency": "",
+  "revision_notes": "Root cause: previous attempts to create a partial unique index WHERE last_name IS NOT NULL failed because duplicate non‑NULL last_name values exist. Any plan that sets existing rows to NULL to resolve duplicates would change pre‑existing last_name values, violating the rule that those values must remain unchanged. Since the partial index cannot be created while preserving all original last_name values, the migration cannot succeed. The closest plan is a direct deploy_new with migration apply, which will inevitably fail on the unique constraint, so the change is rejected.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the deploy_new stage."
+    }
+  ]
+}

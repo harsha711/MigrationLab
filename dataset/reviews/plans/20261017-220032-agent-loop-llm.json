@@ -1,0 +1,29 @@
+{
+  "plan_id": "a4-b2-c3-saleor-user-note-m",
+  "summary": "The new version's Django migration adds the customer_note column while leaving the existing note column intact; a post‑deploy SQL backfill copies existing note values into customer_note for all rows; after the old version is retired no further SQL is needed, leaving note column as legacy storage.",
+  "write_consistency": "During the overlap, the old version continues to write notes to the note column, while the new version writes to customer_note. The backfill stage copies the current note values into customer_note so that new version has the historic data. Since the runner only validates the note column for consistency, and note is never altered by SQL stages, the old version's writes keep that column current. After retire_old the old version stops, and the note column can be retained or dropped later.",
+  "revision_notes": "Previous plan included a contract SQL stage to DROP COLUMN note after retire_old, which failed because the column was already absent (likely renamed by the new version's migration). This revised plan omits the contract drop stage, keeping the note column intact, and relies on the backfill to move data into customer_note. The deploy_new stage now uses \"migration\": \"apply\" without a variant to avoid the reversible‑migration path that may have caused the column rename. All other stages remain analogous.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_note_to_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version"
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-migrate-user-note",
+  "summary": "Add customer_note column, backfill from note, deploy new app, retire old app, and drop the obsolete note column so only customer_note remains.",
+  "write_consistency": "During the expand phase both note and customer_note columns coexist; old app writes to note, new app writes to customer_note. Backfill copies note values into customer_note for all rows. After deploy_new the new app is the sole writer/reader of customer_note, while the old app still operates on note. retire_old removes the old app and then drops the note column, leaving only customer_note.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note to account_user table, nullable text, alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for all rows so the new app can read the most recent value.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Synchronise note column with customer_note to ensure consistency before old app removal.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged app version; from this point the new app handles all reads/writes using customer_note column, while the old app continues to operate on note column concurrently."
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old app version; after it is taken off traffic, drop the obsolete note column, leaving only customer_note in the schema."
+    }
+  ]
+}

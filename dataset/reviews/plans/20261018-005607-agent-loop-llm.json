@@ -1,0 +1,27 @@
+{
+  "plan_id": "a1-note-removal-001",
+  "summary": "Deploy the new Saleor version with only Django state changes (migration state_only), retire the old version, then drop the note column from the account_user table to complete removal.",
+  "write_consistency": "The old version continues to read and write the note column until retire_old; the new version does not access the note field. The column is removed only after the old version is retired, ensuring no concurrent writes fail.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new_state_only",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version (old) so that only the new version handles traffic."
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column from the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

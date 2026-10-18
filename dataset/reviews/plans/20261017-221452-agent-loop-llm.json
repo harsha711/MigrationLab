@@ -1,0 +1,17 @@
+{
+  "plan_id": "a1-mig-001",
+  "summary": "The change from Text to CharField(max_length=255) cannot be guaranteed zero-downtime without risk of data truncation or runner-check failure, because existing notes may exceed 255 characters (e.g., anonymized paragraphs). Altering the column type while the old version is still running would cause the old version to reject writes >255, and altering after retirement would truncate existing long notes, breaking the runner's consistency check. Therefore no plan can safely preserve both versions' correctness.",
+  "write_consistency": "none",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}

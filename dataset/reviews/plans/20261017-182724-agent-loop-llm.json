@@ -1,0 +1,48 @@
+{
+  "plan_id": "a2-mig-001-rev",
+  "summary": "Add customer_note column, backfill data, deploy new version, retire old version, then drop note column.",
+  "write_consistency": "During expand both columns exist; old writes to note, new to customer_note. Backfill copies note to customer_note. After retire_old, old is stopped; contract safely drops note column with no concurrent old writes.",
+  "revision_notes": "Root cause: original plan executed contract-001 (DROP COLUMN note) before retire_old-001, triggering the runner's retirement gate which requires the old app to be stopped before schema removal. Revised plan reorders stages to: expand → backfill → deploy_new → retire_old → contract, ensuring old traffic ceases before the note column is dropped.",
+  "stages": [
+    {
+      "id": "expand-001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new customer_note column to account_user table alongside existing note column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so new version can read them.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new-001",
+      "kind": "deploy_new",
+      "description": "Deploy the new code version that writes and reads customer_note."
+    },
+    {
+      "id": "retire_old-001",
+      "kind": "retire_old",
+      "description": "Retire the old code version that only knows the note column; after retirement no writes to note occur."
+    },
+    {
+      "id": "contract-001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

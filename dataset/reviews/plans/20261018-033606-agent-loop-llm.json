@@ -1,0 +1,18 @@
+{
+  "plan_id": "a2-uniq-002",
+  "summary": "The new version enforces uniqueness on User.last_name via model validation, but the old version continues to create users with duplicate last_name values. During concurrent traffic the new version raises UNIQUE constraint violations, causing the cross‑version smoke checks to fail. Adding a DB‑level UNIQUE constraint before retire_old is blocked because the contract SQL stage is refused while the old version runs, and applying it after retire_old would violate the rule that pre‑existing last_name values must not change. Consequently no plan can keep both versions correct while preserving existing last_name values.",
+  "write_consistency": "N/A – change rejected",
+  "revision_notes": "Root cause: the new app version enforces uniqueness on last_name, but concurrent old‑version writes and test data contain duplicates, triggering UNIQUE violations early in the deploy_new stage. The later contract stage to add the constraint cannot run while the old version is alive, and cannot run after retire_old because the checks would already have failed. Hence the change is unsafe in a staged rollout.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after deployment"
+    }
+  ]
+}

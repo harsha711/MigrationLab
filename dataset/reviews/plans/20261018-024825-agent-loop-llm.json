@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-mkt-opt-in-staged",
+  "summary": "Add boolean marketing_opt_in to account_user via expand stage with NOT NULL DEFAULT false, optional backfill to guarantee no NULLs, then deploy new version with state_only migration, retire old version, and contract stage to lock in the default. Zero downtime with both versions live during overlap.",
+  "write_consistency": "The old version, unaware of the new column, will INSERT rows that receive the column's database DEFAULT (false). The new version explicitly sets marketing_opt_in in its writes, ensuring consistent values. During overlap, reads see the most recently written value from either version, and the NOT NULL DEFAULT false prevents NULLs.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add required boolean column marketing_opt_in with NOT NULL and DEFAULT false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_01",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill any existing rows where marketing_opt_in might be NULL to false (should be 0 rows after expand).",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire the old version; it will no longer serve traffic."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Set the column default explicitly to false for robustness after retire.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

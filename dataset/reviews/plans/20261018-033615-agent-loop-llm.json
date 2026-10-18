@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-mig-001",
+  "summary": "Deploy the new version with a state-only Django migration so the column is untouched by the new code. The old version continues serving traffic and writing customer notes. After the old version is retired, drop the `note` column from `account_user` in a contract SQL stage. This sequence ensures zero downtime, data consistency during overlap, and clean schema removal after the old code is gone.",
+  "write_consistency": "During the overlap between deploy_new and retire_old, both versions share the same database. The old version includes `note` in all INSERT/UPDATE statements via Django's save(), while the new version's model has the field removed, so its writes omit `note` and it receives the column's database DEFAULT (or NULL). No SQL stages modify the `note` column during overlap, so every customer's `note` remains its most recent value written by either version. After retire_old, the old version is gone, and the contract SQL stage removes the column, after which the runner's consistency check no longer applies.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version. After this stage, only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column from account_user now that the old version is retired and no code references it.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

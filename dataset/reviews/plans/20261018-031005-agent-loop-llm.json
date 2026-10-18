@@ -1,0 +1,37 @@
+{
+  "plan_id": "a6-note-migration-001",
+  "summary": "Deploy new version with state_only migration, retire old version, truncate existing notes to 255 characters, then alter the column type to VARCHAR(255).",
+  "write_consistency": "After retire_old only the new version writes; the new model enforces max_length=255. Truncation and ALTER performed after old version retirement avoid concurrent-write conflicts.",
+  "revision_notes": "Root cause of previous failures (a1, a2, a3): executing ALTER COLUMN or TRUNCATE stages during the overlap of both versions caused preservation check mismatches due to concurrent old-version writes. This revised plan moves all schema/data-altering stages after retire_old, eliminating concurrency interference and ensuring the type cast succeeds as all notes are truncated to ≤255 before the ALTER.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    },
+    {
+      "id": "truncate_notes",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Truncate notes longer than 255 characters to 255.",
+      "sql": [
+        "UPDATE account_user SET note = left(note, 255);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "alter_note_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Change account_user.note column from TEXT to VARCHAR(255).",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

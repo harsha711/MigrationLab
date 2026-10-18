@@ -1,0 +1,38 @@
+{
+  "plan_id": "a3-note-rename-plan",
+  "summary": "Plan a2-note-rename-plan halted at deploy_new. Earlier stages (expand_add_col, expand_backfill) passed. Deploy_new failed because the new app's Django migration attempted to add the customer_note column, which already existed from the plan's ALTER TABLE, raising \"column already exists\" error. Root cause: the plan assumed the new app's migration is state-only (per problem statement), but the migration actually issues ALTER TABLE ADD COLUMN, creating a schema conflict. Revision needed: plan must account for migration DDL, either by omitting expand_add_col and relying on migration, or by adjusting the migration to be truly state-only.",
+  "revision_notes": "Root cause: The plan's expand_add_col stage added the customer_note column via ALTER TABLE. When deploy_new executed, the new app's Django migration (intended to be state-only per problem facts) ran and attempted to add the same column, causing a PostgreSQL ProgrammingError. The plan did not anticipate that the migration would issue DDL, conflicting with the pre-existing column. Revised approach: set repeat_until_zero_rows=false for backfill (already done), and restructure stages so that either the plan's ALTER TABLE is omitted and the migration adds the column, or the migration is made state-only via a custom SQL that checks for existence before adding. Given the problem facts state the migration is state-only, the most consistent revision is to remove expand_add_col and allow the migration to create the column during deploy_new, then proceed with backfill and contract_drop.",
+  "stages": [
+    {
+      "id": "expand_backfill",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Backfill customer_note from note for existing rows (only old app active)",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new-staged version; Django migration (state-only) creates customer_note column; code already references customer_note",
+      "variant": "apply"
+    },
+    {
+      "id": "contract_drop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove obsolete note column after old version retired",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; ensures no further writes to note column"
+    }
+  ]
+}

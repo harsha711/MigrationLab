@@ -1,0 +1,58 @@
+{
+  "plan_id": "a2-rename-note-to-customer",
+  "summary": "Add customer_note column, backfill existing data in a single pass, deploy new app with a unidirectional trigger that propagates old-app note writes to customer_note, verify consistency, then retire old column.",
+  "write_consistency": "A PostgreSQL AFTER INSERT OR UPDATE trigger on account_user copies the value from the \"note\" column into \"customer_note\" whenever the old app writes. Since the new app only writes \"customer_note\" and the old app only writes \"note\", the trigger ensures every write from either version is reflected in the other column, so both versions always read the most recent value. Existing rows are backfilled directly before deploy_new starts.",
+  "revision_notes": "The previous plan's backfill stage used UPDATE ... WHERE customer_note IS NULL with repeat_until_zero_rows, which failed to converge because concurrent old-app inserts (with customer_note NULL) kept re-populating the WHERE clause across iterations. Revised plan replaces the iterative backfill with a single SET-based UPDATE that runs once before deploy_new, guaranteeing all existing rows are synchronized in one execution. A unidirectional trigger (note → customer_note) replaces the bidirectional one to avoid trigger-loop non-convergence while still preserving write consistency during the overlap period.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note text NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for all existing rows in a single update.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_trigger_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger that propagates old-app note writes to customer_note so both versions stay in sync during concurrent operation.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS TRIGGER AS \\$\\$ BEGIN NEW.customer_note := NEW.note; RETURN NEW; END; \\$\\$ LANGUAGE plpgsql; CREATE TRIGGER note_to_customer_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which knows only customer_note. The old version continues running; the trigger ensures note values written by the old app are immediately reflected in customer_note."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old). After this stage only the new app runs, which exclusively uses customer_note."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column and its trigger after confirming both apps have been synchronized.",
+      "sql": [
+        "DROP TRIGGER note_to_customer_note ON account_user; DROP FUNCTION sync_note_to_customer_note(); ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

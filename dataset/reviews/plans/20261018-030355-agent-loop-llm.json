@@ -1,0 +1,38 @@
+{
+  "plan_id": "a11-note-type-change-revised",
+  "summary": "Deploy the new Saleor version with a state‑only migration, retire the old version, truncate any existing notes longer than 255 characters while only the new version is active, then alter the column type to VARCHAR(255) using a USING cast. This guarantees that during the overlap the column stays TEXT, the new version enforces max_length=255, and after retirement the schema change succeeds without data loss.",
+  "write_consistency": "During the overlap (deploy_new → retire_old) the note column remains TEXT. The new version enforces note length ≤255 at the Django Python level, so all its writes stay within 255 characters. The old version continues to write to the TEXT column; any notes it writes longer than 255 are tolerated because the column type has not yet been changed. After retire_old only the new version operates. A backfill stage truncates any over‑length notes to 255 chars, after which the column is altered to VARCHAR(255) with a USING cast that is a no‑op because all notes are already ≤255.",
+  "revision_notes": "The previous plan failed because it truncated notes while the old version was still running, causing the preservation.note check to report mismatched rows: the old version could write longer notes after the backfill, making the most recent value the old version's write rather than the truncated one. This revision moves the truncation stage to after retire_old, when only the new version is active, so no concurrent old‑version writes can interfere. The subsequent ALTER COLUMN ... TYPE varchar(255) USING note::varchar(255) then succeeds safely because all notes are already ≤255.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only the new version serves traffic."
+    },
+    {
+      "id": "backfill_note_truncation",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Truncate all account_user.note values to a maximum of 255 characters.",
+      "sql": [
+        "UPDATE account_user SET note = LEFT(note, 255) WHERE LENGTH(note) > 255;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "alter_note_type",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Alter account_user.note column from TEXT to VARCHAR(255).",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255) USING note::varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

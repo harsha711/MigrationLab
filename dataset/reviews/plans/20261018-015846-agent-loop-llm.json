@@ -1,0 +1,38 @@
+{
+  "plan_id": "a2-ref-fk-transition-v2",
+  "summary": "Fix orphan referrer_id values by setting them to NULL, then add the ForeignKey constraint, deploy the new version with state_only migration, and retire the old version, ensuring both versions remain consistent during overlap.",
+  "write_consistency": "The referrer_id column remains nullable integer; orphan rows are nulled before the FK is added, so the old version (which does not write to referrer_id during save) and the new version (which enforces the FK) can coexist without constraint violations.",
+  "revision_notes": "Previous plan failed because adding the FK constraint directly on account_user.referrer_id violated existing rows with referrer_id values not present in account_user.id (orphan references). Root cause: pre-existing data contained invalid FK references. Revised plan first nullifies orphan referrer_id rows, then adds the constraint, preserving compatibility with the old pinned version that ignores the column during save().",
+  "stages": [
+    {
+      "id": "fix_orphans",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Set orphan referrer_id values to NULL so the subsequent FK constraint can be added without violation.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id NOT IN (SELECT id FROM account_user);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_fk",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add ForeignKey constraint on referrer_id referencing account_user id.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT fk_referrer FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version is live and the FK constraint is confirmed."
+    }
+  ]
+}

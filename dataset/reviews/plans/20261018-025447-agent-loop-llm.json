@@ -1,0 +1,60 @@
+{
+  "plan_id": "a6-migrate-user-note-rename",
+  "summary": "The expand_col, backfill_data, and sync_trigger stages passed with 0 failures. deploy_new then failed 22 consistency checks: reads returned seed-level or null data instead of expected values, and 22 rows showed column disagreement between note and customer_note. retire_old succeeded, but contract_col was skipped due to the 22 earlier failures.",
+  "revision_notes": "The note_sync_trigger fails under concurrent interleaved writes from both app versions; its bidirectional sync logic produces incorrect results when OLD is NULL (new-version inserts) or when versions interleave, causing reads to return seed-level/null data and 22 rows to mismatch between note and customer_note columns.",
+  "stages": [
+    {
+      "id": "expand_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note on the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_data",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into the new column.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger that synchronizes note and customer_note on INSERT or UPDATE.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_sync_trigger AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version that only knows the customer_note column. The migration is state_only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "The old version is taken offline; no further writes to the note column will occur."
+    },
+    {
+      "id": "contract_col",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column and its trigger after the old version is retired.",
+      "sql": [
+        "DROP TRIGGER note_sync_trigger ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

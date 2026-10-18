@@ -1,0 +1,39 @@
+{
+  "plan_id": "a4-note-rename-staged-trigg",
+  "summary": "Add customer_note column via expand stage with initializing copy and a PostgreSQL BEFORE INSERT OR UPDATE trigger that synchronizes note and customer_note, deploy new version with state_only migration, retire old version, and drop note column in contract phase. The trigger uses COALESCE to ensure both columns always hold the same value, preventing the column divergence that caused previous check failures.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies the written note/customer_note value to the other column on every write from either version, ensuring note and customer_note are always identical and reads of note return the most recently written value.",
+  "revision_notes": "Root cause: the previous plan's trigger only fired on UPDATE, missing INSERT statements. Django's save() leaves note at DB DEFAULT NULL when the new version inserts (which omits note), so note remained NULL and cross-version reads returned stale/seed values. This plan extends the trigger scope to INSERT and uses COALESCE to sync both columns regardless of which version wrote.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, copy note values, and create sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ]
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire old version; no longer serves traffic against the database."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove note column after old version retired",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

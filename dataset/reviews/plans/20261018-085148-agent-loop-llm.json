@@ -1,0 +1,18 @@
+{
+  "plan_id": "a3-unique-last-name-rejecte",
+  "summary": "Pre-existing duplicate last_name values (e.g., 'Cook') in account_user prevent adding a UNIQUE constraint without violating the rule that existing last_name values must not change. Both migration: apply (causes IntegrityError on deploy_new) and migration: state_only (causes UNIQUE violation checks during overlap) fail the runner's deterministic checks.",
+  "write_consistency": "N/A – change cannot be rolled out safely.",
+  "revision_notes": "Root cause: duplicate last_name values exist in the database; they cannot be altered per rollout rules, making the constraint addition impossible.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version from traffic; after this only the new version operates."
+    }
+  ]
+}

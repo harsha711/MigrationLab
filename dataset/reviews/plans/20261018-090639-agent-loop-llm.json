@@ -1,0 +1,48 @@
+{
+  "plan_id": "a2-mktg-optin-mig",
+  "summary": "Add a nullable boolean column marketing_opt_in with DEFAULT false, backfill existing rows to false, deploy the new version using a state‑only migration, retire the old version, and finally set the column NOT NULL so that all rows have a non‑null value.",
+  "write_consistency": "Both versions write false to marketing_opt_in: the old version gets the column's DEFAULT false on INSERT, the new version sets it explicitly; therefore no NULL values appear while both are live.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with DEFAULT false",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_false",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Set marketing_opt_in to false for any remaining NULL rows",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version so it no longer serves traffic"
+    },
+    {
+      "id": "contract_not_null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

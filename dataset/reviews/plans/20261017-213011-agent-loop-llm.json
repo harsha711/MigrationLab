@@ -1,0 +1,17 @@
+{
+  "plan_id": "a1-saleor-user-note-rename",
+  "summary": "The Django User.note attribute is renamed to customer_note while keeping db_column='note', so the database column note remains unchanged. Both the old and new versions write to the same column note; the old via the note attribute, the new via customer_note resolved to note by Django. With no column rename, no SQL data migration is needed. Deploy the new version with its migration applied, then retire the old version.",
+  "write_consistency": "Both versions write to the identical database column note: the old version includes note in its INSERT/UPDATE statements via its known model attribute, and the new version includes note via customer_note with db_column='note'. Reads through the GraphQL field note return the most recent value written by either version, preserving consistency during the concurrent overlap.",
+  "revision_notes": "Renamed Django attribute User.note to customer_note with db_column='note'; new app version code already maps the attribute and GraphQL field; no SQL stages required because the database column name does not change.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}

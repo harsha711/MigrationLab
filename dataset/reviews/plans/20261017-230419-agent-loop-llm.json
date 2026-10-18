@@ -1,0 +1,51 @@
+{
+  "plan_id": "a2-rename-note",
+  "summary": "Add customer_note column, create bidirectional sync trigger, backfill existing rows, deploy new app with state-only migration, retire old app, then drop trigger and column after migrating remaining note values.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user synchronizes the note and customer_note columns bidirectionally: on INSERT it sets customer_note = note and note = customer_note; on UPDATE it updates the opposite column when its own column changes. This ensures that writes from either app version are reflected in the other column, so both versions always read the most recent value.",
+  "revision_notes": "The previous plan failed because the contract stage dropped the note column while the sync trigger still referenced it, causing a ProgrammingError when the smoke test executed. This revision adds a contract stage that first drops the trigger, then migrates any remaining note values into customer_note via UPDATE, and finally drops the note column. The trigger itself is kept during the concurrent period because the note column remains present until the contract stage removes it.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger between note and customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS NOT NULL THEN NEW.note := NEW.customer_note; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_customer_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ]
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Populate customer_note from note for all existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new app version (new-staged) with a state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version (old). After this, only the new version runs."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger, migrate any remaining note values into customer_note, and drop the old note column.",
+      "sql": [
+        "DROP TRIGGER note_customer_sync ON account_user;",
+        "UPDATE account_user SET customer_note = COALESCE(customer_note, note);",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

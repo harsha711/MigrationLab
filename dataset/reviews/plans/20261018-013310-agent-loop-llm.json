@@ -1,0 +1,51 @@
+{
+  "plan_id": "a6-b3-rename-note-fixed",
+  "summary": "Rename account_user.note to customer_note with zero downtime: add new column, backfill data, deploy new version state-only, create a bidirectional database sync trigger, retire old version, and drop old column, ensuring both apps see consistent data throughout.",
+  "write_consistency": "A PostgreSQL AFTER INSERT OR UPDATE trigger synchronises note and customer_note: on each insert or update, the column not explicitly set by the app is filled from the other column using COALESCE or DISTINCT-aware assignment, so that a write from one version is immediately visible to the other version via a read of the other column. During concurrent traffic both columns hold identical values, guaranteeing consistent reads.",
+  "revision_notes": "The previous plan failed because it relied on separate columns with no synchronisation mechanism while both app versions ran concurrently. Old app writes to note, new app writes to customer_note, but writes from one version were not reflected in the other column, causing the deterministic checks (old_write_new_read, new_write_old_read, column agreement, preservation counts) to fail. This revised plan adds a database trigger that bi-directionally copies the written value to the other column on INSERT/UPDATE, ensuring data parity during concurrent operation. The trigger is created before the new version starts serving traffic (in the expand stage), so sync is in effect from deploy_new onward. Additionally, SQL strings were restructured as single-statement strings with proper dollar-quoting to avoid PostgreSQL syntax errors such as 'syntax error at or near \";\"' and 'syntax error at end of input'.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_user_note_trig() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); NEW.note := COALESCE(NEW.note, NEW.customer_note); ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note_after_insert_update AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note_trig();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for rows that have a note",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new-staged version with state-only Django migration; new app now writes customer_note, old app still writes note",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this stage only the new version serves traffic against the database."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the now-unused note column",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note CASCADE;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

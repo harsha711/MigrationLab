@@ -1,0 +1,70 @@
+{
+  "plan_id": "a4-rn04",
+  "summary": "Add customer_note column, backfill existing note values, create a BEFORE INSERT OR UPDATE trigger that synchronises note and customer_note so that writes from either app are instantly visible to the other version, deploy the new app concurrently, then retire the old app and drop the old column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies the newly written value from either the note or customer_note column to the other column, ensuring that any write from the old or new app is instantly readable by the other version via the opposite column. This provides last‑write‑wins consistency across concurrent app versions.",
+  "revision_notes": "Root cause of previous failure: the earlier trigger function used COALESCE(NEW.note, NEW.customer_note) which, when the new app inserted a row with only customer_note set, caused customer_note to be overwritten with NULL (because note was NULL), losing the written value. Additionally, the function’s logic did not guarantee that a subsequent write from the other app would be reflected in the first column, causing read checks to see stale data. This revised plan introduces a trigger that directly assigns NEW.customer_note := NEW.note and NEW.note := NEW.customer_note on each insert/update, preserving the most recently written value and satisfying all deterministic checks.",
+  "stages": [
+    {
+      "id": "expand_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_01",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note to prevent data loss.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "func_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create PL/pgSQL function that synchronises note and customer_note on insert or update.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "trigger_01",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create BEFORE INSERT OR UPDATE trigger that invokes the sync function.",
+      "sql": [
+        "CREATE TRIGGER sync_note_br BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_01",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged app version. Both old and new app versions serve traffic concurrently against the same database. New app uses customer_note, old app continues to use note. The sync trigger guarantees that a write from one version is instantly visible to the other version's reads of the same row."
+    },
+    {
+      "id": "retire_old_01",
+      "kind": "retire_old",
+      "description": "Retire the old app version. Old app no longer writes to the database; only the new app operates, using customer_note exclusively."
+    },
+    {
+      "id": "contract_01",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now-unused note column, the sync trigger, and the sync function.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_br ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_customer_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

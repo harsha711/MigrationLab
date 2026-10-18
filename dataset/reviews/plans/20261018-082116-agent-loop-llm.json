@@ -1,0 +1,39 @@
+{
+  "plan_id": "a5-rename-user-note-revised",
+  "summary": "Plan a4-rename-user-note-revised executed expand, deploy_new(state_only), and retire_old. 11 checks failed and 1 refused during/after deploy_new. All failures involved reads returning NULL or seed data instead of expected values, note/customer_note column divergence (8+ disagreeing rows, 4 mismatched per preservation check), and retire_old succeeded but contract1 was skipped due to earlier failures. Every observed read returned null or stale seed data, and columns disagreed despite the sync trigger.",
+  "revision_notes": "Changed the sync_after_update trigger from an unconditional bidirectional swap to a conditional implementation checking IF NEW.note != OLD.note and IF NEW.customer_note != OLD.customer_note. The unconditional swap caused value loss and mismatches under concurrent writes because it would overwrite a newly written column with the old value of the other column when only one was updated in a single UPDATE statement. The conditional approach only syncs the column that was actually modified, preserving the integrity of interleaved writes from old and new versions.",
+  "stages": [
+    {
+      "id": "expand1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, copy note values, and install sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF NEW.note != OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note != OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_after_update BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is serving traffic."
+    },
+    {
+      "id": "contract1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column and the sync trigger since the old version no longer runs.",
+      "sql": [
+        "DROP TRIGGER sync_after_update ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    }
+  ]
+}

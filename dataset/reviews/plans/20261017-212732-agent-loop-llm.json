@@ -1,0 +1,17 @@
+{
+  "plan_id": "a1-user-note-migration-acce",
+  "summary": "The change from TextField to CharField(max_length=255) for User.note is deployed by applying the new version's Django migration, which alters the column type, followed by retiring the old version. No separate SQL stages are needed; the migration handles the schema change atomically.",
+  "write_consistency": "After the new version's migration runs, the note column becomes varchar(255). Both versions will then write notes through this column; the old version's notes may be truncated to 255 characters, but the migration is assumed to handle existing data safely, ensuring all notes remain accessible.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}

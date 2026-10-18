@@ -1,0 +1,48 @@
+{
+  "plan_id": "a4-rename-note-to-customer",
+  "summary": "The expand_customer_note and backfill_customer_note stages passed with no failed checks. The contract stage contract_drop_note was refused by the retirement gate because the old app version remained alive (old_alive: true), preventing the note column from being dropped while both app versions served traffic concurrently.",
+  "revision_notes": "The retirement gate enforced old_alive: false before dropping the note column. The old app had not been retired prior to the contract stage, likely because the retire_old stage was not executed or completed beforehand.",
+  "stages": [
+    {
+      "id": "expand_customer_note",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note to account_user table, nullable text, allowing both old and new app versions to operate.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so the new app can read the most recent write.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after data has been migrated and both app versions have been updated to use customer_note.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new app version (new-staged) with state-only Django migration; the new code expects column customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old app version (old) after the new version is serving traffic and the note column has been dropped."
+    }
+  ]
+}

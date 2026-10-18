@@ -1,0 +1,69 @@
+{
+  "plan_id": "a5-rename-note-column-revis",
+  "summary": "Revision of attempt 4: the BEFORE INSERT OR UPDATE trigger with conditional logic only syncs when one column is null, failing when both have data (after backfill) and mishandling NULL clears. The revised trigger uses IS DISTINCT FROM OLD to sync unconditionally on any change, correctly propagating writes from both versions and handling null-clear operations.",
+  "revision_notes": "The previous trigger only copied when one column was NULL, missing INSERTs from old version and new-version writes when both columns already contained values, and did not reliably null-clear the paired column. The revised trigger checks IF NEW.column IS DISTINCT FROM OLD.column on each side, ensuring sync fires on every modification (INSERT or UPDATE) regardless of null state, and correctly null-clears the opposite column when the source is set to NULL.",
+  "stages": [
+    {
+      "id": "expand_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable customer_note column to account_user table",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_values",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for all existing rows",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "create_sync_func",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create PL/pgSQL function that syncs note and customer_note on INSERT or UPDATE",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM OLD.note THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "create_sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create BEFORE INSERT OR UPDATE trigger that invokes the sync function",
+      "sql": [
+        "CREATE TRIGGER note_sync_trigger BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged Saleor version with a state_only Django migration; the new code only knows customer_note and will write to that column.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this only the new version runs against the database."
+    },
+    {
+      "id": "contract_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the obsolete note column and the sync trigger after the old version is gone",
+      "sql": [
+        "DROP TRIGGER note_sync_trigger ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

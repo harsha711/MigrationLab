@@ -1,0 +1,28 @@
+{
+  "plan_id": "a2-add-marketing-opt-in-001",
+  "summary": "Add the marketing_opt_in column with NOT NULL DEFAULT FALSE via an expand SQL stage before deploy_new, then deploy new with state_only migration, then retire old. This ensures old version INSERTs receive FALSE from the default, preventing NULL violations during the overlap.",
+  "write_consistency": "The expand stage adds the column with a database-level NOT NULL DEFAULT FALSE before traffic shifts. Old version INSERT statements omit the column and get FALSE from the default, keeping writes consistent. New version explicitly sets the field; after retire_old the column persists with no NULLs.",
+  "revision_notes": "The previous plan used migration:apply with no SQL stages, assuming the Django migration would safely add the column. Execution failed with IntegrityError: null value in column \"marketing_opt_in\" violates not-null constraint, because the old version's INSERT omits the new column and the database default was not properly set before concurrent traffic began. Revised plan inserts an explicit expand SQL stage (ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT FALSE) before deploy_new and switches migration to state_only, guaranteeing the default is active immediately and no NULLs appear when the old version continues serving requests.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL DEFAULT FALSE to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is live and validated."
+    }
+  ]
+}

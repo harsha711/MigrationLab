@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-marketing-opt-in-staged",
+  "summary": "Adds the marketing_opt_in boolean NOT NULL DEFAULT false column to saleor's account_user table via an expand stage, a backfill stage to ensure no NULLs remain, a state-only deploy_new that records Django state without running SQL, retirement of the old version, and a contract stage after retirement to finalize the NOT NULL constraint, guaranteeing zero-downtime and correct writes from both versions during concurrent traffic.",
+  "write_consistency": "The expand stage adds marketing_opt_in as boolean NOT NULL DEFAULT false, so all existing rows and any INSERTs from the old version default to False. The backfill stage sets any remaining NULLs to false. During the overlap, the new version explicitly sets the column while the old version relies on the DB default, keeping writes consistent. After retire_old, only the new version operates, which always populates the column.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column as boolean NOT NULL DEFAULT false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill any remaining NULLs in marketing_opt_in to false.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; it will no longer serve traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Finalize the NOT NULL constraint after old version retirement.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

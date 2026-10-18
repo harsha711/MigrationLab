@@ -1,0 +1,18 @@
+{
+  "plan_id": "a1-idx-lname-accept",
+  "summary": "The new version's Django migration creates a B-tree index on account_user.last_name using CREATE INDEX CONCURRENTLY, which executes non-blockingly without row modifications. deploy_new runs this migration (migration: 'apply') and starts the new version. retire_old follows after smoke checks. No SQL stages are required because the index creation is concurrent and preserves existing last_name values; the old version's model includes last_name, preventing Django save() from overwriting it with NULL.",
+  "write_consistency": "During the overlap, the old version's saves include last_name (its model knows the column), so values are not lost. The new version's index build via CONCURRENTLY does not rewrite rows, keeping pre-existing last_name values intact. Both versions read/write the same rows interleaved, and the note column checks pass as no data mutations occur beyond the index creation.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version handles traffic."
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "plan_id": "a4-note-rename-004",
+  "summary": "Add the customer_note column, backfill all existing rows from note, create a PostgreSQL BEFORE INSERT/UPDATE trigger that synchronises note and customer_note by copying the most recent non‑null value between them, deploy the new version state_only, retire the old version, then drop the note column and the trigger.",
+  "write_consistency": "A BEFORE INSERT/UPDATE trigger on account_user computes COALESCE(note, customer_note) and sets both columns to that value, ensuring that whichever version (old or new) writes first is immediately visible to the other version for subsequent reads.",
+  "revision_notes": "Previous plan a3‑note‑rename‑003 used a bidirectional trigger but 14 checks failed because seed rows retained original note values and were never updated by the trigger, causing read‑after‑write mismatches and column‑agreement failures. The revised plan adds an explicit backfill of customer_note from note for every row before deployment, and the trigger now runs on every INSERT/UPDATE to keep both columns in sync for all future writes. The root cause was that the trigger only fires on row changes; existing rows that were not subsequently updated kept their initial note, breaking expectations that reads would reflect the most recent write.",
+  "stages": [
+    {
+      "id": "expand_note_column_and_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new column, backfill existing rows from note, and create a bidirectional sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;",
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER user_note_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version (new-staged) which knows the customer_note column. Migration is state_only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version (old) that only knows the note column. No further SQL."
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column and the sync trigger after the old version is retired.",
+      "sql": [
+        "DROP TRIGGER user_note_sync ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

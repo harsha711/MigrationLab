@@ -1,0 +1,38 @@
+{
+  "plan_id": "a2-migrate-referrer-fk",
+  "summary": "A backfill step clears orphan referrer_id values, the new Saleor version is deployed with a state‑only migration, the old version is retired, and finally a foreign‑key constraint from account_user.referrer_id to account_user.id is added, giving the column a proper self‑reference while keeping both versions correct during the overlap.",
+  "write_consistency": "During the overlap a backfill stage sets referrer_id to NULL for any row whose value does not reference an existing account_user id, preventing constraint violations. The foreign‑key constraint is added only after retire_old, when the old version no longer writes to the column, so the new version can safely enforce the FK without breaking the old code.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "backfill_null_referrer",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Set referrer_id to NULL for rows where the value is not a valid account_user primary key.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM account_user u WHERE u.id = account_user.referrer_id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only the new version serves traffic."
+    },
+    {
+      "id": "add_fk_constraint",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add a foreign‑key constraint from account_user.referrer_id referencing account_user.id, completing the schema change.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT fk_referrer FOREIGN KEY (referrer_id) REFERENCES account_user(id) ON DELETE SET NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

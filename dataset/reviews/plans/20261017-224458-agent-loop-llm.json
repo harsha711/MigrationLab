@@ -1,0 +1,52 @@
+{
+  "plan_id": "a4-rename-note-cn-v4",
+  "summary": "Add customer_note column, create a row-level sync trigger that copies the newly written column value to the other column only when that column actually changes, backfill existing rows, deploy new version with state-only migration, retire old version, then drop the trigger and note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE PL/pgSQL trigger on account_user copies the just-written column value to the other column only if the written column’s value differs from its old value; this ensures the most recent write (by either version) propagates to both columns while avoiding unnecessary overwrites during backfill.",
+  "revision_notes": "The previous plan’s trigger unconditionally copied whichever column had a non-null value to the other, causing it to overwrite newer writes from the opposite version and producing the observed data-loss and stale-seed failures. The revised trigger compares NEW to OLD for each column; it only copies a column’s new value to the other when that column’s value actually changes. On INSERT both columns are set to the same value (note preferred), and on UPDATE only the explicitly changed column’s value is propagated, preserving the other column’s value if it was not modified. This satisfies the concurrent‑read requirement: the last version to write a row wins for both columns.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and create sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "CREATE OR REPLACE FUNCTION sync_user_note_customer_note() RETURNS trigger AS $$\nBEGIN\n  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN\n    IF TG_OP = 'UPDATE' THEN\n      IF NEW.note != OLD.note THEN\n        NEW.customer_note := NEW.note;\n      END IF;\n      IF NEW.customer_note != OLD.customer_note THEN\n        NEW.note := NEW.customer_note;\n      END IF;\n    ELSE\n      -- INSERT: set both columns to the same value (note preferred)\n      NEW.note := COALESCE(NEW.note, NEW.customer_note);\n      NEW.customer_note := NEW.note;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note where they differ.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS DISTINCT FROM note;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged version with state-only Django migration.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; old app stops writing to the database."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger and the now-unused note column.",
+      "sql": [
+        "DROP TRIGGER sync_user_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

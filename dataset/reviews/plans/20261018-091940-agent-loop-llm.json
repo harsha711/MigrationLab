@@ -1,0 +1,28 @@
+{
+  "plan_id": "a3-mig01",
+  "summary": "The column type of account_user.note is changed from TEXT to VARCHAR(255) using a single ALTER COLUMN statement after the old version has been running; the new version is deployed with a state‑only migration so that our SQL stage owns the schema change. After the type change both versions continue to read/write the same column; because existing notes are assumed to fit within 255 characters the runner’s equality checks pass throughout the overlap.",
+  "write_consistency": "The note column remains VARCHAR(255) for the whole overlap. The old Django version still includes note in its INSERT/UPDATE statements; PostgreSQL accepts the value as long as it does not exceed 255 characters. The new version’s model enforces the same limit, so writes from both versions stay compatible as long as no note longer than 255 is produced.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_type",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Change the note column from TEXT to VARCHAR(255) in the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255) USING note::varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version is confirmed healthy."
+    }
+  ]
+}

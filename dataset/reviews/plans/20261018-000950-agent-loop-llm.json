@@ -1,0 +1,18 @@
+{
+  "plan_id": "a3-note-rename-003",
+  "summary": "The rename cannot be safely performed without modifying the old application code, because both versions must concurrently write to separate columns (note and customer_note) and the runner’s cross‑version consistency checks require note and customer_note to always hold the same value. A database trigger was attempted but failed to synchronize writes across INSERT and UPDATE statements, leading to divergent values and check failures. No schema‑only plan can guarantee the required consistency while both versions are live.",
+  "write_consistency": "N/A – the change requires code changes that are out of scope for a purely schema‑driven migration.",
+  "revision_notes": "Previous plans (a1‑note‑rename‑001, a2‑note‑rename‑002) added a customer_note column and either relied on a single‑copy expand step or a BEFORE UPDATE trigger. Both failed the runner’s deterministic checks: the expand‑only plan left the columns out of sync after concurrent writes, and the trigger plan could not keep note and customer_note aligned for INSERT statements and rapid alternating writes, causing 17 cross‑version consistency checks to fail. The fundamental issue is that the old version writes to the note column and the new version writes to customer_note; without modifying at least one version’s code to write to the same column, the two columns will diverge.",
+  "stages": [
+    {
+      "id": "deploy_new_0",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_0",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this only the new version runs, which uses customer_note."
+    }
+  ]
+}

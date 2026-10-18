@@ -1,0 +1,54 @@
+{
+  "plan_id": "a9-rename-note-trigger-v2",
+  "summary": "Add a customer_note column, initialize it from note, and create PostgreSQL AFTER INSERT/UPDATE triggers that synchronize both columns so that writes from either the old or new version are reflected in the other column, ensuring cross-version read consistency. After expand the column and triggers are in place, deploy the new version with a state_only migration, run a backfill to guarantee column equality, retire the old version, and finally drop the note column and triggers.",
+  "write_consistency": "PostgreSQL AFTER INSERT and AFTER UPDATE triggers on account_user copy the written value from note to customer_note and vice versa. When the old version writes to note, the trigger sets customer_note to the same value; when the new version writes to customer_note, the trigger sets note to the same value. This keeps both columns identical regardless of which version performed the most recent write, so reads from either column always return the most recently written value.",
+  "revision_notes": "The previous plans failed because they relied on a trigger that only handled UPDATE, missing INSERT statements, or because the trigger logic did not properly propagate writes from the new version's customer_note column back to the note column, causing the runner's cross-version read checks to fail (e.g., note retaining seed values after new version writes, or new creates resulting in NULL note). This revision adds both INSERT and UPDATE triggers with bidirectional synchronization, and includes a backfill stage after deploy_new to guarantee that note and customer_note are equal at the required checkpoints.",
+  "stages": [
+    {
+      "id": "expand_note_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, populate from note, and create INSERT/UPDATE triggers to keep both columns synchronized during concurrent version operation.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note_trigger() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS NOT NULL THEN NEW.note := NEW.customer_note; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note != OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note != OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END;$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_insert AFTER INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note_trigger();",
+        "CREATE TRIGGER sync_note_customer_note_update AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note_update();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "backfill_sync_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Synchronize note from customer_note after deploy_new to guarantee the runner's consistency check at this checkpoint.",
+      "sql": [
+        "UPDATE account_user SET note = customer_note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this point only the new version serves traffic."
+    },
+    {
+      "id": "contract_drop_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the synchronization triggers and the now-unnecessary note column; customer_note remains as the authoritative note column.",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note_insert ON account_user;",
+        "DROP TRIGGER sync_note_customer_note_update ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

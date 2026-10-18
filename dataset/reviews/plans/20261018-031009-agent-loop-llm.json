@@ -1,0 +1,40 @@
+{
+  "plan_id": "a6-b1-note-migration-revise",
+  "summary": "Add customer_note column via the new version's Django migration, backfill existing note values into it, create a trigger to keep note in sync with customer_note, and retire the old version.",
+  "write_consistency": "Old version continues writing notes to the note column; new version writes to the customer_note column. An AFTER UPDATE trigger copies the new customer_note value into note whenever customer_note changes, ensuring the note column always reflects the most recent write from either version. Existing note values are backfilled into customer_note before the new version starts writing.",
+  "revision_notes": "Previous plan failed because the SQL expand stage added customer_note column before deploy_new, causing the new version's Django migration to report column already exists and halt. This revision removes the pre‑deployment SQL column add, lets the migration add the column, then backfills data and adds a trigger to maintain note consistency during concurrent operation.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create trigger to keep note column in sync with customer_note when the new version writes",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_trigger() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER trg_sync_note AFTER UPDATE ON account_user WHEN NEW.customer_note IS DISTINCT FROM OLD.customer_note FOR EACH ROW EXECUTE FUNCTION sync_note_trigger();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version"
+    }
+  ]
+}

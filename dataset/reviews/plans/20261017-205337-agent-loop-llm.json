@@ -1,0 +1,40 @@
+{
+  "plan_id": "a2-ref-fk-staged-v2",
+  "summary": "Add ForeignKey constraint on account_user.referrer_id referencing account_user.id using an expand SQL stage to clear orphan values and add the constraint, deploy the new version with apply migration, retire the old version, and run a contract stage after retirement to verify FK integrity. Note column consistency is preserved as no SQL targets the note column.",
+  "write_consistency": "The old version omits referrer_id on INSERT, receiving NULL via database default; the new version includes referrer_id with valid FK references. The FK constraint is added on a nullable column after invalid references are cleared, so both versions' writes are compatible. Note column untouched.",
+  "revision_notes": "Revised from previous plan to use 'apply' migration instead of 'state_only' to avoid django_migration_is_state_only failure caused by the new version's migration adding a note column. Expand stage now clears orphans and adds FK in two statements. Contract stage placed after retire_old as required. No rollback_check needed.",
+  "stages": [
+    {
+      "id": "expand_fk",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Set orphan referrer_id values to NULL and add ForeignKey constraint on account_user.referrer_id referencing account_user.id.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);",
+        "ALTER TABLE account_user ADD CONSTRAINT fk_account_user_referrer FOREIGN KEY (referrer_id) REFERENCES account_user (id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_apply",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; it will no longer serve traffic against the database."
+    },
+    {
+      "id": "contract_final",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Verify the FK constraint is enforced and no invalid referrer references remain after old version retirement.",
+      "sql": [
+        "SELECT referrer_id FROM account_user WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user) LIMIT 1;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

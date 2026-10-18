@@ -1,0 +1,42 @@
+{
+  "plan_id": "a4-migrate-user-note-v4",
+  "summary": "Add customer_note column, backfill from note, install unidirectional sync trigger (note→customer_note), deploy new version state_only, then drop note column and trigger.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger sets customer_note = COALESCE(NEW.customer_note, NEW.note), so old-version writes to note populate customer_note, while new-version writes to customer_note take precedence.",
+  "revision_notes": "Removed the invalid SET DEFAULT note clause that caused PostgreSQL errors; replaced with trigger-only propagation. Previous bidirectional trigger caused cross-column leakage; this plan uses unidirectional note→customer_note sync.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, install unidirectional sync trigger.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS trigger AS $$ BEGIN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_to_customer_note_trg BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new Saleor version with a state-only migration; schema changes from expand are already in place.",
+      "migration": "state_only"
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the sync trigger and the obsolete note column, leaving only customer_note.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_to_customer_note_trg ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_to_customer_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ]
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; traffic now handled exclusively by the new version with customer_note."
+    }
+  ]
+}

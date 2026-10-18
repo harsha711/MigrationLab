@@ -1,0 +1,50 @@
+{
+  "plan_id": "a3-migrate-user-note-sync",
+  "summary": "Add customer_note column, backfill, create PostgreSQL trigger to sync note and customer_note, deploy new code, retire old, then drop note column.",
+  "write_consistency": "Backfill syncs existing data; trigger ensures any write by old to note updates customer_note and any write by new to customer_note updates note, so both versions always see the most recent note value regardless of which column they read.",
+  "revision_notes": "The previous plan failed all 16 runner consistency checks after deploy_new because old version writes to column note and new version writes to column customer_note—separate PostgreSQL columns mean cross-version reads never see each other's writes. Root cause: column‑level isolation with no sync mechanism. Revised plan adds a PostgreSQL trigger in the expand stage that copies each version's write to the other column, guaranteeing both columns always contain the same value and satisfying the runner's expectation that both live versions read the most recently written value.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note and create trigger to sync note and customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); NEW.note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END IF; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so both columns contain the same data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version (new-staged) which expects the model field customer_note and the column customer_note. Code changes from investigator findings are included. After deployment both versions run concurrently; the trigger ensures any write by old to note is reflected in customer_note and any write by new to customer_note is reflected in note, maintaining consistency during the overlapping period."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old application version (old) that still writes to the note column. After retirement the trigger is no longer needed but left in place; note column will be dropped."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

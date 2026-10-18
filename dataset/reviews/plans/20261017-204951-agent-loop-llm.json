@@ -1,0 +1,51 @@
+{
+  "plan_id": "a2-m02",
+  "summary": "Staged rollout: add a temporary VARCHAR(255) column note_new, backfill truncated notes, deploy the new version with a state-only migration, retire the old version, then migrate the note column to VARCHAR(255) by copying truncated values from note_new and dropping the original text column.",
+  "write_consistency": "During the overlap the old version writes full-length notes to the TEXT column note, while the new version truncates notes to 255 characters before writing to the same column; the temporary note_new column holds truncated values from the backfill and is used only in the contract stage to replace note after retire_old, ensuring no data loss beyond the max_length constraint.",
+  "revision_notes": "Previous plan failed because the Django migration (even with state_only flag) unexpectedly altered the schema, causing a value too long error and row mismatches. This revised plan uses migration: 'state_only' to prevent any Django schema change, and performs the type migration entirely through explicit SQL stages with LEFT truncation, keeping both versions operational until the contract stage.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add temporary column note_new with VARCHAR(255) to hold truncated note values.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN note_new VARCHAR(255);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into note_new, truncating to 255 characters when longer.",
+      "sql": [
+        "UPDATE account_user SET note_new = LEFT(note, 255);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "variant": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version so it no longer serves traffic."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Replace note column with truncated note_new and drop original text column.",
+      "sql": [
+        "UPDATE account_user SET note_new = LEFT(note, 255);",
+        "ALTER TABLE account_user DROP COLUMN note;",
+        "ALTER TABLE account_user RENAME COLUMN note_new TO note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

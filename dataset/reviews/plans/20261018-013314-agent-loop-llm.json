@@ -1,0 +1,52 @@
+{
+  "plan_id": "a5-migrate-user-note-fixed",
+  "summary": "The expand_column and add_sync_trigger stages passed, but deploy_new failed 21 checks; reads from both columns show seed data instead of expected writes, and preservation checks report mismatched rows. The trigger only copies the written value one way, so when the new version writes to customer_note the note column retains its original seed value, and vice‑versa.",
+  "revision_notes": "The previous trigger only set customer_note := note (unidirectional), so when the new app wrote to customer_note the note column was not updated, leaving stale seed data visible on reads of note. The revised trigger copies the written value to the opposite column regardless of which column was set, ensuring bidirectional consistency.",
+  "stages": [
+    {
+      "id": "expand_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column and backfill from note to preserve existing data.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger function and trigger that keep note and customer_note in sync by copying the written value to the opposite column.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.note IS NOT NULL THEN\n      NEW.customer_note := NEW.note;\n    ELSIF NEW.customer_note IS NOT NULL THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  ELSIF TG_OP = 'UPDATE' THEN\n    IF NEW.note IS DISTINCT FROM OLD.note THEN\n      NEW.customer_note := NEW.note;\n    END IF;\n    IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN\n      NEW.note := NEW.customer_note;\n    END IF;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_trigger\n  AFTER INSERT OR UPDATE ON account_user\n  FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new (staged) version of Saleor with migration state_only; the new version expects column customer_note and will write to it.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version of Saleor; after this stage only the new version runs, which only writes customer_note."
+    },
+    {
+      "id": "contract_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the now‑unused note column and its trigger.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer_note_trigger ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_note_customer_note();",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

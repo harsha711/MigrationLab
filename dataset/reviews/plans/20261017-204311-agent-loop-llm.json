@@ -1,0 +1,52 @@
+{
+  "plan_id": "a4-user-note-rename-v2",
+  "summary": "Add customer_note column, backfill from note, create two triggers with null-guarding CASE expressions to keep columns in sync for both app versions, deploy new, retire old, then drop note column.",
+  "write_consistency": "Triggers ensure that when the old app writes note, customer_note is updated; when the new app writes customer_note, note is updated. Triggers only set the destination column if the source column is non-null, preventing overwrite of null values.",
+  "revision_notes": "Root cause of previous failure: the trigger function bodies contained multiple IF/ELSIF statements and nested semicolons that caused a PL/pgSQL syntax error when executed as separate statements. This revision simplifies each function body to a single CASE expression with a single semicolon at the end of the assignment statement, and creates triggers after the column expand and backfill, ensuring schema and sync are in place before the new app serves traffic.",
+  "stages": [
+    {
+      "id": "expand_note_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_and_create_triggers",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note and create triggers for cross-version write consistency.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION copy_note_to_customer_note() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := (CASE WHEN TG_OP = 'INSERT' AND NEW.note IS NOT NULL THEN NEW.note WHEN TG_OP = 'UPDATE' AND NEW.note IS DISTINCT FROM OLD.note AND NEW.note IS NOT NULL THEN NEW.note ELSE NEW.customer_note END); RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER note_to_customer_note_trig AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION copy_note_to_customer_note();",
+        "CREATE OR REPLACE FUNCTION copy_customer_note_to_note() RETURNS TRIGGER AS $$ BEGIN NEW.note := (CASE WHEN TG_OP = 'INSERT' AND NEW.customer_note IS NOT NULL THEN NEW.customer_note WHEN TG_OP = 'UPDATE' AND NEW.customer_note IS DISTINCT FROM OLD.customer_note AND NEW.customer_note IS NOT NULL THEN NEW.customer_note ELSE NEW.note END); RETURN NEW; END $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER customer_note_to_note_trig AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION copy_customer_note_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged version of Saleor; old and new versions now serve traffic concurrently against the same database."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version of Saleor; only the new version continues serving traffic against the database."
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the now-unused note column from account_user, as only customer_note remains.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

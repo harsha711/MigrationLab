@@ -1,0 +1,28 @@
+{
+  "plan_id": "a6-unique-last-name-staged",
+  "summary": "Remove duplicate last_name rows from account_user (keeping one row per last_name value) via a SQL backfill stage, then deploy the new Saleor version with its Django migration (apply) that adds the unique constraint, and finally retire the old version. This ordering ensures the constraint can be created without encountering duplicate-key errors.",
+  "write_consistency": "The backfill stage eliminates duplicates before the constraint is introduced; during the overlap both versions write last_name safely because duplicates are gone. After retire_old only the new version runs with the constraint active.",
+  "revision_notes": "Root cause: the earlier plan using migration: apply failed because the database already contained duplicate last_name values (e.g., 'Cook'), causing Django's CREATE UNIQUE INDEX to raise IntegrityError. The revised plan adds a SQL backfill stage that deletes duplicate rows (retaining the earliest id per last_name) before the constraint is added, satisfying both the migration and the runner's pre-existing‑row‑value check.",
+  "stages": [
+    {
+      "id": "backfill_duplicates",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Remove duplicate last_name rows, keeping the row with the smallest id per last_name value",
+      "sql": [
+        "DELETE FROM account_user WHERE id NOT IN (SELECT MIN(id) FROM account_user GROUP BY last_name HAVING COUNT(*) > 1)"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version, stopping its traffic against the database."
+    }
+  ]
+}

@@ -1,0 +1,50 @@
+{
+  "plan_id": "a4-migrate-user-note-v3",
+  "summary": "The plan halted at the expand stage when the SQL statement containing a $$-quoted PL/pgSQL function definition failed to execute. The runner reported a syntax error at the $$ delimiter, indicating the SQL string was not correctly formatted or escaped for PostgreSQL parsing.",
+  "revision_notes": "The previous plan's expand stage failed because the SQL string for the trigger function began with '$$', causing PostgreSQL to misinterpret the dollar-quote syntax. This revision splits the trigger setup into separate single-statement SQL strings starting with CREATE OR REPLACE FUNCTION (not $$), resolving the syntax error.",
+  "stages": [
+    {
+      "id": "expand_note_column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column and create a trigger to sync note to customer_note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS TRIGGER AS $$ BEGIN NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_note_values",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so the new app can read the most recent data.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new application version using a state-only migration (no SQL executed by the new Django migration).",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old application version so only the new version handles database operations."
+    },
+    {
+      "id": "contract_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column now that the old app is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

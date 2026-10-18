@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-saleor-mo-001",
+  "summary": "Adds a required boolean field marketing_opt_in to the account_user table using an expand stage that adds the column with NOT NULL and default false, ensuring no NULL rows; the new version is deployed with a state‑only migration, and the old version is retired after the new version takes over.",
+  "write_consistency": "Old version inserts rely on the column's DEFAULT false, so no NULL appears; new version explicitly sets the field; both versions read/write the same row with consistent false default during overlap.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_marketing_opt_in",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add NOT NULL boolean column marketing_opt_in with default false to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_marketing_opt_in",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_marketing_opt_in",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version is serving traffic."
+    }
+  ]
+}

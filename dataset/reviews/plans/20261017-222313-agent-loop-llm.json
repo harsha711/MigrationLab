@@ -1,0 +1,37 @@
+{
+  "plan_id": "a4-ren-note-003",
+  "stages": [
+    {
+      "id": "expand_note",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state-only migration; old version continues writing note, new version writes customer_note",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this only new version serves traffic, writing customer_note"
+    },
+    {
+      "id": "contract_note",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Backfill customer_note from note and drop note column; old version retired so no concurrent writes to note",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

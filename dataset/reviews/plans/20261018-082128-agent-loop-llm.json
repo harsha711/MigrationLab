@@ -1,0 +1,29 @@
+{
+  "plan_id": "a2-user-note-migration-002",
+  "summary": "Deploy the new version using its Django migration to add the customer_note column, then backfill customer_note from the existing note column with a SQL UPDATE, and finally retire the old version. The note column remains unchanged for the old version throughout the overlap.",
+  "write_consistency": "During the overlap the old version continues to write to the note column; the new version writes to customer_note. The note column values are preserved by the old version, and the runner’s check on note always passes. After the backfill, customer_note is populated and stays in sync with new writes.",
+  "revision_notes": "Changed the order of stages: removed the SQL expansion stage that added customer_note beforehand, to avoid duplicate column creation when the new version's Django migration runs. Instead, the migration (apply) creates the column, then a post‑deploy SQL backfill copies note values into customer_note. This prevents the ProgrammingError: column already exists observed in the failed run.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into the new customer_note column.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version so only the new version handles traffic."
+    }
+  ]
+}

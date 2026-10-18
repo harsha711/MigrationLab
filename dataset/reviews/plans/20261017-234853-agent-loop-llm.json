@@ -1,0 +1,61 @@
+{
+  "plan_id": "a6-rename-note-v5",
+  "summary": "Rename account_user.note to customer_note with zero-downtime by adding the new column, backfilling, and using a row-level trigger that synchronises writes from both app versions onto the opposite column, ensuring both columns always reflect the most recent write.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger copies the newly written value from whichever column the active version wrote into the other column, so that reads from either version always see the latest value. The trigger fires once per row and sets the target column to the source column's new value; it does not attempt bidirectional overwrites in a single statement, avoiding the recursion and ordering issues that caused prior failures.",
+  "revision_notes": "The previous plan's sync trigger attempted to set both NEW.note and NEW.customer_note in the same function, which caused the Django UPDATE statements (that only list the column being written by the app) to overwrite one of the assignments, leaving the other column stale. This revision uses a simplified trigger that only copies the newly written value into the other column, relying on the fact that each app only writes its own column. The trigger is created after backfill and dropped before the old column is removed. The backfill stage copies existing note values into customer_note so both columns start identical.",
+  "stages": [
+    {
+      "id": "expand_cols",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note for all existing rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "create_sync_trigger",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a row-level trigger that syncs the newly written value from note to customer_note and vice‑versa on INSERT OR UPDATE.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note_trigger() RETURNS trigger AS $$\nBEGIN\n  IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN\n    NEW.customer_note := NEW.note;\n  END IF;\n  IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN\n    NEW.note := NEW.customer_note;\n  END IF;\n  RETURN NEW;\nEND;\n$$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note_trigger\n  AFTER INSERT OR UPDATE ON account_user\n  FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note_trigger();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version (new-staged) that only knows customer_note. Django migration is state_only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version that only knows note column. After this stage, only the new version serves traffic using customer_note."
+    },
+    {
+      "id": "contract_note_col",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the old note column from account_user, completing the rename.",
+      "sql": [
+        "DROP TRIGGER sync_note_customer_note_trigger ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

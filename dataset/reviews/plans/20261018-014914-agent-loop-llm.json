@@ -1,0 +1,29 @@
+{
+  "plan_id": "a3-migrate-referrer-fk",
+  "summary": "Convert account_user.referrer_id from legacy integer to ForeignKey(User) by first invalidating non-referencing values, adding the FK constraint while both versions run, then deploying the new version with state_only migration. The old version continues writing referrer_id as integer; all values reference valid users or NULL, so FK enforcement is safe. After deploy_new both versions coexist with the constrained column; retire_old removes the old version.",
+  "write_consistency": "Old version writes referrer_id as integer; new version writes via Django ForeignKey. The pre-deploy SQL stage sets referrer_id to NULL for any value not present in account_user.id, preventing FK violations during concurrent operation. The note column is never modified or touched by any statement.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_fk",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Clear invalid referrer_id references to NULL, then add ForeignKey constraint referencing account_user.id.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);",
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_id_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version."
+    }
+  ]
+}

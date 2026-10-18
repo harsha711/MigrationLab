@@ -1,0 +1,18 @@
+{
+  "plan_id": "a2-rename-note-to-customer",
+  "summary": "The change cannot be deployed without breaking cross‑version consistency because the old version writes to the \"note\" column while the new version writes to \"customer_note\". Without code changes or database triggers (disallowed), the two columns diverge and the runner’s read‑after‑write checks fail.",
+  "write_consistency": "N/A – no plan can keep both versions correct under the given constraints.",
+  "revision_notes": "Root cause: the old build continues to issue INSERT/UPDATE statements referencing the \"note\" column, while the new build’s GraphQL resolver and model now target \"customer_note\". The expand stage can copy initial values, but concurrent writes from both versions populate different columns, causing the 16 cross‑version check failures observed (reads returning seed data, column disagreement, mismatched rows). No SQL‑only schema change can reconcile simultaneous writes to distinct columns without triggers or application‑level coordination, both of which are excluded by the runner rules.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the migration has been applied."
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "plan_id": "a1-mkt-opt-in-001",
+  "summary": "Add the marketing_opt_in column with NOT NULL DEFAULT false via an ALTER TABLE stage, then deploy the new version with state_only migration so both old and new code see the column with a safe default, and finally retire the old version.",
+  "write_consistency": "The column is added with NOT NULL DEFAULT false. The old version inserts rows without the column, receiving the database default false. The new version explicitly sets the field, so all rows always hold a non‑NULL boolean value.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand-col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL and default false so existing and future rows from either version are never NULL.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NOT NULL DEFAULT false;"
+      ]
+    },
+    {
+      "id": "deploy-new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire-old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version has been running and the column is confirmed present."
+    }
+  ]
+}

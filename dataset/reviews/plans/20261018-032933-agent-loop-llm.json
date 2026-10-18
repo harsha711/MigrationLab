@@ -1,0 +1,28 @@
+{
+  "plan_id": "a11-reject-unique-lastname",
+  "summary": "The database contains pre-existing duplicate last_name values that cannot be altered per the no-change rule. Adding a unique constraint would cause UNIQUE violations when the new version (which enforces uniqueness at application level) attempts to write, and no SQL stage can resolve duplicates without modifying existing values. Therefore zero‑downtime enforcement of uniqueness is impossible; the change is rejected.",
+  "write_consistency": "No DB‑level unique constraint on last_name is added; both versions read and write the column freely. A non‑unique index is kept for query support.",
+  "revision_notes": "Root cause: pre-existing duplicate last_name values (e.g., 'Cook') prevent adding a UNIQUE constraint while both versions are live, because the new version’s model has unique=True and will reject duplicate saves. Existing SQL attempts to add the constraint or backfill unique values violate the rule that pre‑existing last_name values must not change. Hence the only viable path is to reject the DB‑level uniqueness requirement.",
+  "stages": [
+    {
+      "id": "index_last_name",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a non‑unique index on account_user.last_name to support application queries without enforcing a constraint.",
+      "sql": [
+        "CREATE INDEX idx_account_user_last_name ON account_user (last_name)"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after confirming stability; after this stage, only the new version operates."
+    }
+  ]
+}

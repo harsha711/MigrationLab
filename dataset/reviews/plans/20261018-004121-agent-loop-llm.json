@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-ref-fk-001",
+  "summary": "Add ForeignKey constraint on account_user.referrer_id by first nullifying orphan references, adding the constraint as NOT VALID to permit concurrent version writes, deploying the new version with state_only, retiring the old version, and finally validating the FK constraint to enforce referential integrity.",
+  "write_consistency": "During the overlap between deploy_new and retire_old, the old version continues writing referrer_id as integer; the new version writes referrer_id via its FK-aware code. The FK constraint is added as NOT VALID, which prevents immediate enforcement on new writes, allowing the old version to keep inserting values without constraint violations. After retire_old, the FK is validated to ensure data integrity. The note column remains untouched as it is separate from referrer_id.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "clean_orphans",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Set referrer_id to NULL for rows referencing non-existent account_user IDs, ensuring no existing data violates the upcoming FK constraint.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "add_fk_not_valid",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add ForeignKey constraint on referrer_id referencing account_user.id as NOT VALID, so it does not block old version writes during concurrent traffic.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_id_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id) NOT VALID;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; old version no longer serves traffic.\\n    "
+    },
+    {
+      "id": "validate_fk",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Validate the FK constraint to enforce referential integrity after the old version has been retired.",
+      "sql": [
+        "ALTER TABLE account_user VALIDATE CONSTRAINT referrer_id_fk;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "plan_id": "a5-migrate-user-note-rev4",
+  "summary": "Add customer_note column, backfill, deploy new version with state_only migration, add unconditional bidirectional PostgreSQL triggers to sync note↔customer_note, then retire old version and drop the note column.",
+  "write_consistency": "During overlap both columns exist; triggers always set the opposite column to the incoming value without checking NULL, ensuring whichever version writes latest is immediately visible to the other version's reads, preventing stale seed data observations.",
+  "revision_notes": "Root cause: earlier triggers used COALESCE which only synced when the target column was NULL, so after backfill the opposite column retained seed data and never reflected newer writes from the other version. This caused all deterministic checks to fail because reads always observed seed values instead of freshly written data. Unconditional sync triggers always overwrite the opposite column, guaranteeing cross-version read consistency.",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add new column customer_note alongside existing note.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_triggers_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create bidirectional triggers that unconditionally sync note and customer_note.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer() RETURNS trigger AS $$ BEGIN NEW.customer_note := NEW.note; RETURN NEW; END; $$ LANGUAGE plpgsql; CREATE TRIGGER note_to_customer_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer();",
+        "CREATE OR REPLACE FUNCTION sync_customer_to_note() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql; CREATE TRIGGER customer_note_to_note AFTER INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "description": "Deploy the new‑staged version; its Django migration is state_only.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old version so that no further writes target the note column."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the obsolete note column.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

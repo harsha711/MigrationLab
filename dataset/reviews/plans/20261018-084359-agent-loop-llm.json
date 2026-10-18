@@ -1,0 +1,29 @@
+{
+  "plan_id": "a2-ref-fk-001-revised",
+  "summary": "Add a FOREIGN KEY constraint on account_user.referrer_id referencing account_user.id after first resolving orphan referrer_id values by setting them to NULL, deployed via SQL expand stages, then state_only deploy_new, then retire_old.",
+  "write_consistency": "The old version continues to write referrer_id as integer; setting orphans to NULL ensures FK constraint can be added without violation. The new version reads/writes via ForeignKey; integer column type maintains compatibility during overlap. After retire_old, FK is fully enforced.",
+  "revision_notes": "Modified expand-fk SQL stage: replaced single ALTER TABLE statement with two sequential statements: first UPDATE orphan referrer_id values to NULL, then ADD FOREIGN KEY constraint. Root cause was orphan referrer_id=1000097 referencing a non-existent account_user row.",
+  "stages": [
+    {
+      "id": "expand-fk",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Clean orphan referrer_id values and add FOREIGN KEY constraint on referrer_id referencing account_user.id.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE NOT EXISTS (SELECT 1 FROM account_user u2 WHERE u2.id = account_user.referrer_id);",
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy-new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire-old",
+      "kind": "retire_old",
+      "description": "Retire the old version after confirming no constraint violations."
+    }
+  ]
+}
