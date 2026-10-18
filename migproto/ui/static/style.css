@@ -348,3 +348,26 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 :root[data-theme="dark"] input {
   accent-color: var(--accent);
 }
+
+/* Brev batches */
+.batch-card { margin-bottom: 18px; }
+.batch-card h2 { margin: 0; font-size: 18px; }
+.batch-note { margin: 10px 0; padding: 10px 12px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--code-bg); white-space: pre-wrap; font-size: 13px; }
+.batch-counts td.count, .batch-counts th.count, .batch-runs td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.batch-counts td.zero { color: var(--muted); }
+.batch-counts td.pass { color: var(--pass); font-weight: 700; }
+.batch-counts td.fail, .batch-counts td.error { color: var(--fail); font-weight: 700; }
+.batch-counts td.incomplete { color: var(--warn); font-weight: 700; }
+.batch-runs td { vertical-align: top; }
+.batch-runs th, .batch-runs td { padding-left: 6px; padding-right: 6px; }
+.batch-runs td code { white-space: nowrap; }
+.batch-runs .rec { display: block; white-space: nowrap; }
+.batch-runs .links a, .batch-runs .links span { display: block; white-space: nowrap; }
+.batch-runs td.attempts { min-width: 250px; }
+.att-chain { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.att-chain i { color: var(--muted); font-style: normal; }
+.att-chip { padding: 1px 7px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.att-chip.bad { background: var(--fail-bg); color: var(--fail); }
+.att-chip.ok { background: var(--pass-bg); color: var(--pass); }
+.att-chip small { margin-left: 3px; font-weight: 500; opacity: .85; }
+.infra-section { margin-top: 26px; padding: 4px 16px 16px; border: 1px dashed var(--warn); border-radius: 10px; background: var(--warn-bg); }

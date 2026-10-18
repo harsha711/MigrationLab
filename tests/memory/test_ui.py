@@ -15,6 +15,7 @@ from migproto.memory import store
 from migproto.ui import server
 
 ROOT = Path(__file__).resolve().parents[2]
+BATCH_FIXTURES = Path(__file__).parent / "fixtures" / "batches"
 
 
 @pytest.fixture(scope="module")
@@ -143,3 +144,30 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
     assert "editorial-layout" in css and "Migration evidence" in js
+
+
+def test_batch_endpoints_over_http():
+    batch = "brev-batch-20260101-100000"
+    handler = server.make_handler(store.connect(":memory:"), threading.Lock(),
+                                  runs_root=BATCH_FIXTURES)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        assert get_json(base + "/api/batches")["batches"][0]["batch_id"] == batch
+        detail = get_json(base + f"/api/batch?id={batch}")
+        assert detail["infrastructure_failures"][0]["run_id"] == "20260101-100300-agent-loop-llm"
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(base + "/api/batch?id=..%2Fexamples")
+        assert e.value.code == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_batches_page_assets():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'href="#/batches"' in html
+    assert "pageBatches" in js and "pageBatch(" in js
+    assert "Infrastructure failures" in js and "not model results" in js
+    assert "Langfuse trace" in js and 'rel="noopener noreferrer"' in js

@@ -521,6 +521,102 @@ async function pageCompare(a, b) {
     <div class="compare">${await col(a)}${await col(b)}</div>`;
 }
 
+// ---------- Brev batches (supervisor records, read-only) ----------
+
+const BATCH_VERDICTS = ["PASS", "FAIL", "INCOMPLETE", "ERROR"];
+
+function batchCounts(counts) {
+  if (!counts.length) return `<p class="muted">No model results in this batch.</p>`;
+  const other = (c) => Object.entries(c.other).map(([k, n]) => `${n} ${esc(k)}`).join(", ");
+  return `<div class="table-wrap"><table class="batch-counts">
+    <tr><th scope="col">scenario</th><th scope="col">topology</th>${BATCH_VERDICTS.map((v) => `<th scope="col" class="count">${v}</th>`).join("")}<th scope="col">other</th></tr>
+    ${counts.map((c) => `<tr><th scope="row">${val(c.scenario, "not recorded")}</th><td>${val(c.topology, "not recorded")}</td>
+      ${BATCH_VERDICTS.map((v) => `<td class="count ${c[v] ? v.toLowerCase() : "zero"}">${c[v]}</td>`).join("")}<td>${other(c) || ""}</td></tr>`).join("")}
+  </table></div>`;
+}
+
+function attemptChain(attempts) {
+  if (!attempts) return unknown("not recorded");
+  if (!attempts.length) return `<span class="muted">no attempt executed</span>`;
+  return `<span class="att-chain">${attempts.map((a) => {
+    const bad = (a.fail || 0) + (a.refused || 0) + (a.error || 0);
+    const title = `${a.attempt}: ${a.fail ?? "?"} fail · ${a.refused ?? "?"} refused · ${a.error ?? "?"} error · ${a.pass ?? "?"} pass · ${a.skipped ?? "?"} skipped`;
+    const extra = `${a.refused ? `<small>+${a.refused}⊘</small>` : ""}${a.error ? `<small>+${a.error}!</small>` : ""}`;
+    return `<span class="att-chip ${bad ? "bad" : "ok"}" title="${esc(title)}">${val(a.fail, "?")}${extra}</span>`;
+  }).join(`<i>→</i>`)}</span>`;
+}
+
+function recommendationCell(r) {
+  const agrees = r.recommendation_agrees === true ? `<span class="badge pass">agree</span>`
+    : r.recommendation_agrees === false ? `<span class="badge fail">disagree</span>` : "";
+  return `<span class="rec">agent: ${val(r.recommendation, r.recommendation_recorded ? "none" : "not recorded")}</span><span class="rec">runner: ${val(r.runner_recommendation, "not recorded")}</span>${agrees}`;
+}
+
+function batchRunRows(runs) {
+  return runs.map((r) => `<tr>
+    <td>${val(r.n, "?")}</td>
+    <td>${r.run_id ? `<code>${esc(r.run_id)}</code>` : unknown("no run directory")}${r.has_summary ? "" : `<small class="cell-sub">no summary.json</small>`}</td>
+    <td>${val(r.scenario, "not recorded")}</td><td>${val(r.topology, "not recorded")}</td>
+    <td>${verdictBadge(r.verdict)}${r.stopped ? `<small class="cell-sub" title="${esc(r.stopped)}">${esc(String(r.stopped).slice(0, 60))}</small>` : ""}</td>
+    <td>${recommendationCell(r)}</td>
+    <td class="attempts">${attemptChain(r.attempts)}</td>
+    <td class="num">${r.total_tokens == null ? nr(null) : fmt(r.total_tokens)}</td>
+    <td class="num">${nr(r.model_calls)}</td>
+    <td class="num">${r.wall_seconds == null ? nr(null) : Number(r.wall_seconds).toFixed(0)}</td>
+    <td class="links">${r.in_store ? `<a href="#/run/${enc(r.run_id)}">Replay</a>` : `<span class="muted" title="Run is not in the evidence store">not ingested</span>`}
+      ${r.trace_url ? `<a href="${esc(r.trace_url)}" target="_blank" rel="noopener noreferrer" title="Langfuse trace (viewer only; summary.json and events.jsonl are the evidence)">Trace &#8599;</a>` : `<span class="muted">no trace</span>`}</td>
+  </tr>`).join("");
+}
+
+function batchRunsTable(runs) {
+  return `<div class="card table-wrap"><table class="batch-runs">
+    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th><th>tokens</th><th>calls</th><th>wall (s)</th><th>links</th></tr>
+    ${batchRunRows(runs)}</table></div>`;
+}
+
+const BATCH_LEGEND = `<p class="legend">Failed checks per attempt, a1 → last: the number counts failed assertions; refusals (⊘) and execution errors (!) are counted separately. Every attempt stays visible, including failed ones. Hover a chip for full outcome counts.</p>`;
+
+function batchBadges(b) {
+  return `${b.models.map((m) => `<span class="badge">model: ${esc(m)}</span>`).join(" ") || `<span class="badge">${unknown("model not recorded")}</span>`}
+    <span class="badge">${b.model_result_count} model result${b.model_result_count === 1 ? "" : "s"}</span>
+    ${b.infrastructure_failures.length ? `<span class="badge warn">${b.infrastructure_failures.length} infrastructure failure${b.infrastructure_failures.length === 1 ? "" : "s"}, not counted</span>` : ""}
+    ${b.stop_file ? `<span class="badge">STOP set</span>` : ""}
+    ${b.unreadable_lines ? `<span class="badge warn">${b.unreadable_lines} unreadable runs.jsonl line(s)</span>` : ""}`;
+}
+
+const configNote = (b) => b.config_note ? `<pre class="batch-note">${esc(b.config_note)}</pre>` : `<p>${unknown("no CONFIG-NOTE")}</p>`;
+
+async function pageBatches() {
+  crumbs([["Runs", "#/"], ["Batches"]]);
+  const { batches } = await api("/api/batches");
+  const withRuns = batches.filter((b) => b.has_runs_jsonl);
+  const empty = batches.filter((b) => !b.has_runs_jsonl);
+  const cards = withRuns.map((b) => `<section class="card batch-card">
+    <div class="row spread"><h2><a href="#/batches/${enc(b.batch_id)}">${esc(b.batch_id)}</a></h2><a class="button ghost" href="#/batches/${enc(b.batch_id)}">Open batch &#8594;</a></div>
+    <div class="row">${batchBadges(b)}</div>
+    ${configNote(b)}
+    ${batchCounts(b.counts)}
+  </section>`).join("");
+  return `<header class="editorial-head"><div><h1>Brev batches</h1><p>Supervisor records from <code>runs/brev-batch-*</code>, newest first. Counts are per scenario and topology. Runs named in a batch's INFRA-NOTE are infrastructure failures and are never counted as model results. A pass applies only to the conditions that batch tested.</p></div></header>
+    ${cards || `<p class="muted">No batch with runs.jsonl under runs/.</p>`}
+    ${empty.length ? `<details class="card"><summary>${empty.length} batch director${empty.length === 1 ? "y" : "ies"} without runs.jsonl (no review completed)</summary><ul>${empty.map((b) => `<li><code>${esc(b.batch_id)}</code>${b.config_note ? `: ${esc(b.config_note)}` : ""}</li>`).join("")}</ul></details>` : ""}`;
+}
+
+async function pageBatch(id) {
+  crumbs([["Runs", "#/"], ["Batches", "#/batches"], [id]]);
+  const b = await api(`/api/batch?id=${enc(id)}`);
+  const modelRuns = b.runs.filter((r) => !r.infrastructure_failure);
+  return `<div class="row"><h1>${esc(b.batch_id)}</h1></div>
+    <div class="row">${batchBadges(b)}</div>
+    <h2>Configuration</h2>${configNote(b)}
+    <h2>Model results by scenario and topology</h2>${batchCounts(b.counts)}
+    <h2>Runs</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}
+    ${b.infrastructure_failures.length ? `<section class="infra-section"><h2>Infrastructure failures</h2>
+      <p class="muted">Listed in INFRA-NOTE. These are not model results and are excluded from the counts above.</p>
+      <pre class="batch-note">${esc(b.infra_note)}</pre>${batchRunsTable(b.infrastructure_failures)}</section>`
+      : b.infra_note ? `<h2>INFRA-NOTE</h2><pre class="batch-note">${esc(b.infra_note)}</pre><p class="muted">No run in runs.jsonl matches a run named in this note.</p>` : ""}`;
+}
+
 async function openEvidence(oid) {
   const drawer = $("#evidence-drawer");
   const backdrop = $("#drawer-backdrop");
@@ -615,6 +711,8 @@ async function route() {
     else if (parts[0] === "run" && parts[2] === "metrics") html = await pageMetrics(parts[1]);
     else if (parts[0] === "obs") html = await pageEvidence(parts.slice(1).join("/"));
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
+    else if (parts[0] === "batches" && parts.length === 1) html = await pageBatches();
+    else if (parts[0] === "batches" && parts.length === 2) html = await pageBatch(parts[1]);
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
