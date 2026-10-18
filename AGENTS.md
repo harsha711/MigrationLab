@@ -23,7 +23,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
   - **Fixtures:** ingesting the four `examples/` fixtures reproduces their `summary.json` facts. For `scripted-sync-failure` at `deploy_new`, every old-writer/new-reader case fails and every new-writer/old-reader case passes.
   - **v1 records and Owner 2's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
   - **Run Review** reports itself available now that the controller and lock exist, but it has been exercised **only with a fake controller and a fake lock**. No real review has been started from the UI.
-  - **`memory.retrieval.prior_evidence`** exists, but the controller does not call it yet. It does not filter by model, so local stand-in runs would be selected for Nemotron runs; add a same-model filter before wiring it.
+  - **`memory.retrieval.prior_evidence`** exists, but the controller does not call it yet. It takes a required `model` and selects only runs whose provenance is exactly `agent:<model>`, plus an optional exact `scenario` filter (unit-tested on synthetic run directories only).
 
 ## Architecture
 
@@ -50,7 +50,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 | `scripts/export_example.py`, `examples/` | sanitized fixture export and frozen fixtures | Harsha |
 | `docs/contracts.md` | shared data contracts and gap register | Harsha (coordinator) |
 | `migproto/memory/adapter.py`, `store.py`, `query.py` | run directory to scoped records (v0 derivation rules, v1 pass-through, Owner 2 claims), append-only SQLite store `data/memory.sqlite`, exact-scope queries and compatibility matrix | Owner 3 |
-| `migproto/memory/retrieval.py` | `prior_evidence(change)` for the controller: earlier agent runs of the same change only, never `examples/` or scripted runs | Owner 3 (Owner 2 wires the call) |
+| `migproto/memory/retrieval.py` | `prior_evidence(change, model=, scenario=)` for the controller: earlier agent runs of the same model and change only, never `examples/` or scripted runs | Owner 3 (Owner 2 wires the call) |
 | `migproto/ui/server.py`, `review.py`, `static/` | `migproto ui`: read-only Replay pages, plus Run Review through `agents.controller.run_review` under `migproto.lock` (lazy, disabled until both exist) | Owner 3 |
 | `gym/` (planned, not created) | NeMo Gym resources server wrapping the runner, frozen tasks, results | Harsha |
 | `docs/serving.md`, `docs/results.md` (planned), `docs/model-inventory.md` | vLLM serving record, measured results, model and parameter inventory | Owner 2 |

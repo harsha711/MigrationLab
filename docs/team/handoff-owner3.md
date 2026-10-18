@@ -76,12 +76,13 @@ This was coded against `origin/feature/aavritti/small-models` (Owner 2) and `ori
 1. **Retrieval hook.** Suggested call in `run_review`, before `planner-1`:
    ```python
    from ..memory import retrieval
-   prior = retrieval.prior_evidence(review["change"], exclude_run_id=log.run_id)
+   prior = retrieval.prior_evidence(review["change"], model=llm.model,
+                                    scenario=review["scenario"], exclude_run_id=log.run_id)
    log.write_json("agents/prior-evidence.json", prior)
    log.event("retrieval", observation_ids=[o["observation_id"] for o in prior["observations"]])
    # then pass prior["observations"] to roles.plan(...) through a new keyword argument
    ```
-   - **Filters are hard-coded:** only finished local runs, only `agent:` provenance (so scripted `plan_v2` content never reaches a prompt), and only the same table, old column and new column. A run without a review request is excluded.
+   - **Filters are hard-coded:** only finished local runs, only `agent:` provenance (so scripted `plan_v2` content never reaches a prompt), only provenance exactly `agent:<model>` for the calling model (so local stand-in runs never reach a Nemotron prompt), and only the same table, old column and new column. With `scenario`, only requests naming that scenario id. A run without a review request, or without a `scenario` field when one is asked for, is excluded.
    - **Prompt wording is yours.** The UI already shows `retrieval` events on the Agents page.
 2. **`serving_metadata()` defaults `serving_backend` to `"vllm"`** even when nothing was configured. Runs on Ollama or a cloud model would then *record* vLLM. Please default it to `None`, so "not recorded" stays honest. The UI labels the field "as recorded".
 3. **Evidence IDs match.** Your `<run_dir>/a<N>/<check>#<line>` matches the store's v0-derived IDs, and Harsha's v1 `observation_id` uses the same format.
