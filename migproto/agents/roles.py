@@ -332,7 +332,10 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
     if source == "scripted":
         name = "plan_v2.json" if feedback else "plan_v1.json"
         return json.loads((PROPOSALS / "scripted" / name).read_text())
-    affected = [f for f in investigation.get("findings", []) if f.get("needs_change")]
+    # A malformed investigator reply (findings as bare strings, K run 20261018-104946) must not
+    # crash the review; only well-formed findings that need a change reach the planner.
+    findings = investigation.get("findings", []) if isinstance(investigation, dict) else []
+    affected = [f for f in findings if isinstance(f, dict) and f.get("needs_change")]
     user = (
         f"{scenario}\n{contract}\n"
         f"Investigator findings (affected app code, already handled by the new app version):\n"

@@ -179,3 +179,21 @@ def test_rename_contract_explains_both_builds_like_other_scenarios():
         assert f'"{key}" (set "migration": "{key}"' in flat
         assert " ".join(text.split()) in flat
     assert '"migration": "state_only" | "apply"' in roles.PLAN_CONTRACT
+
+
+def test_planner_tolerates_malformed_investigator_findings():
+    # K run 20261018-104946: the investigator returned findings as bare strings.
+    from migproto.agents import roles as r
+
+    seen = {}
+
+    class Stub:
+        def chat_json(self, system, user, transcript, validator=None, response_schema=None,
+                      history=None):
+            seen["user"] = user
+            return {"plan_id": "p"}
+
+    r.plan("llm", Stub(), {"findings": ["account/models.py:10 note field",
+                                        {"ref": "a.py:1", "needs_change": True}]}, [],
+           validator=lambda x: x)
+    assert '"a.py:1"' in seen["user"] and "note field" not in seen["user"]

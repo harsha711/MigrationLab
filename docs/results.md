@@ -592,6 +592,15 @@ below. It never changes their verdicts.
   H/I is descriptive only.
 - **Exclusions:** as in H.
 
+### Configuration K: known defect during the batch (07:10)
+
+Run `20261018-104946` (raw-sql-rename, `roles`) ended in ERROR before planner-1. The
+investigator returned its findings as bare strings, and `roles.plan` crashed reading them
+(`'str' object has no attribute 'get'`). The bug was already in the code before K, so H, I
+and K all ran with it. The guard is committed on `feat/schema-profile` but **not** deployed to
+the running batch, so every K review runs the same code. The run stays in K as a recorded
+ERROR (a non-match). This is not an infrastructure exclusion.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
