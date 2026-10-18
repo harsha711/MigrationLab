@@ -85,15 +85,71 @@ def validate_plan(plan: dict) -> dict:
     if "rollback_check" in kinds and not (
             kinds.index("deploy_new") < kinds.index("rollback_check") < kinds.index("retire_old")):
         raise PlanError("rollback_check must come after deploy_new and before retire_old")
+    check_stage_effects(plan)
     if deploy_migration(plan) == "apply":
         # The deployed version's own Django migration changes the schema; SQL stages are optional
         # (e.g. "accept as-is" plans: deploy_new + retire_old). The contract gate still applies.
         return plan
-    phases = {st.get("phase") for st in stages if st["kind"] == "sql"}
-    for required in ("expand", "contract"):
-        if required not in phases:
-            raise PlanError(f"plan must contain a sql stage with phase {required!r}")
+    # state_only: the deployed migration issues no SQL, so the plan's SQL stages own the schema
+    # change. Some changes need only one side (a drop needs only a contract stage, an added
+    # column only an expand stage), so one sql stage in any phase is enough.
+    if "sql" not in kinds:
+        raise PlanError('with "migration": "state_only" the plan needs at least one sql stage')
     return plan
+
+
+# Statements that change nothing in the database: queries (whose results the runner never
+# evaluates), session settings and transaction control.
+_NO_EFFECT_NODES = {"VariableSetStmt", "VariableShowStmt", "TransactionStmt"}
+# Read-only built-ins a verification query typically calls. A SELECT calling any other function
+# (setval, set_config, pg_advisory_lock, a function the plan created) may do real work and is
+# kept.
+_READ_ONLY_FUNCS = {
+    "count", "sum", "min", "max", "avg", "bool_and", "bool_or", "every", "array_agg",
+    "string_agg", "json_agg", "jsonb_agg", "length", "char_length", "octet_length", "lower",
+    "upper", "trim", "btrim", "substr", "substring", "now", "md5", "to_char", "concat",
+    "format", "pg_typeof", "current_setting", "pg_column_size",
+}
+
+
+def _no_effect(stmt) -> bool:
+    from pglast import ast, visitors
+
+    name = type(stmt).__name__
+    if name in _NO_EFFECT_NODES:
+        return True
+    if not isinstance(stmt, ast.SelectStmt) or stmt.intoClause is not None:
+        return False
+    funcs = []
+
+    class Calls(visitors.Visitor):
+        def visit_FuncCall(self, ancestors, node):
+            funcs.append(node.funcname[-1].sval.lower())
+
+    Calls()(stmt)
+    return all(f in _READ_ONLY_FUNCS for f in funcs)
+
+
+def check_stage_effects(plan: dict) -> None:
+    """Reject a sql stage whose every statement changes nothing (SELECT 1, a verification
+    query, SET, SHOW, BEGIN/COMMIT). The runner would log it as an executed stage that did no
+    work; query results are never evaluated, so checks belong in tester cases. Statements
+    PostgreSQL's parser cannot read are left to the runner, which reports the error."""
+    from pglast import parser
+
+    for st in plan.get("stages", []):
+        if st.get("kind") != "sql":
+            continue
+        try:
+            stmts = [raw.stmt for s in st.get("sql") or [] for raw in parser.parse_sql(s)]
+        except parser.ParseError:
+            continue
+        if stmts and all(_no_effect(s) for s in stmts):
+            raise PlanError(
+                f"stage {st.get('id')}: has no effect (only queries, SET/SHOW or transaction "
+                "statements). The runner does not evaluate query results; put checks in tester "
+                "cases and give every sql stage a statement that changes the schema or data, or "
+                "remove the stage")
 
 
 def deploy_migration(plan: dict) -> str:

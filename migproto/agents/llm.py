@@ -139,6 +139,17 @@ class LLM:
                 continue
             except (KeyError, TypeError, ValueError) as exc:
                 elapsed = round(time.monotonic() - t0, 3)
+                if getattr(exc, "advisory", False) and attempt == retries:
+                    # Only an advisory pre-check failed (every hard check passed first) and
+                    # no retry is left: hand the plan to the runner, which decides.
+                    note = f"advisory pre-check not met on the final retry: {exc}"
+                    call_err, budget_err = None, note
+                    _record(transcript, attempt, messages, content, usage, elapsed, note, True,
+                            reasoning)
+                    self.budget.finish_call(usage, elapsed, valid=True)
+                    if history is not None:
+                        history.append({"role": "assistant", "content": content})
+                    return obj
                 last_err = call_err = str(exc)
                 _record(transcript, attempt, messages, content, usage, elapsed, last_err, False,
                         reasoning)

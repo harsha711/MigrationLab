@@ -30,7 +30,7 @@ rebuilds it as follows:
 - **Why the investigator reply is kept:** it is the agent's own findings. Every planner request repeats the affected findings anyway, so the cost is small. (Decision: keep it, rather than dropping it as a strict reading of the brief would.)
 - **On by default:** there is no flag. Every review records `history_compaction: "latest-plan-evidence/v1"` in its `agent_config` event and in its Langfuse trace metadata. Runs before this change have no such field, which is how full-history runs are told apart. Do not mix the two kinds in one results table without labelling them.
 - **Audit:** every `transcript-single.json` call record gains `history_compaction`: `{policy, kept_turns, replaced_turns, messages_sent}`. `messages` in the same record is exactly what was sent.
-- **Information parity:** the note's runner facts (failed check names and halt reasons of earlier attempts) are less than full history gave `single` before. They are still more than a `roles` planner sees, which is only the latest attempt. This was accepted as specified.
+- **Information parity:** the note's runner facts (failed check names and halt reasons of earlier attempts) are less than full history gave `single` before. They are still more than a `roles` planner sees, which is only the latest attempt. This was accepted as specified. Since configuration F, both topologies' planner feedback also carries `earlier_attempts` (runner facts and the plan of every earlier attempt, see D3), so the kept planner exchange grows by one record per attempt, capped by `roles.EVIDENCE_CHARS`.
 - **`roles` is unaffected:** the rename-note `roles` prompts are byte-identical to `b9009bf`. This was checked by hashing all 13 requests of a fake 4-attempt review, with the run ID normalised. `single` requests 1-3 are also identical; compaction starts at request 4.
 - **Replayed effect:** `runs/20261017-191414-agent-loop-llm` was recorded on Lightning and replayed through `Memory`; the estimate uses about 0.24 prompt tokens per character. The last request drops from 142.6k to 55.3k characters. Total prompt volume drops from 958k to 556k characters, which is about 232k to about 135k prompt tokens. This is an estimate from replay, not a measurement. Real runs would get different model replies.
 - **Possible next step (not done):** the latest planner request and the latest report request both carry the same attempt's runner feedback, which is the main remaining cost (about 55k characters at the plateau). Dropping one of the two would need a new decision.
@@ -59,3 +59,42 @@ new-version (`apply`, `state_only`, ...) build. The `gather_hits` tool event rec
 - **Annotation filter:** scenario old builds are generated from `patches/<scenario>/old`, and their `# EXPERIMENT (manual) ...` comments explain the trap. `gather_hits` drops comment blocks that start with `EXPERIMENT` or `not upstream` from both hits and context (`roles._annotation_lines`). Today the raw-sql-rename comment is outside the ±2 context lines anyway; the filter keeps it out if the context widens. (Decision: filter in code rather than edit the patch. Regenerating vendor worktrees would touch the checkout the live batches use.)
 - **Effect:** rename-note hits are identical (35). raw-sql-rename now includes `saleor/graphql/account/types.py:805` (`SELECT note FROM account_user ...`) with no annotation text.
 - **Follow-up for the patch owner:** consider removing the `EXPERIMENT` comment from `patches/raw-sql-rename/old` itself.
+
+## D3. Planner feedback: runner facts first, earlier attempts as facts, no controller ranking
+
+Configuration F (2026-10-17, after configuration E). `loop._feedback` sends, in order: the
+runner evidence of the latest attempt (`ok`, `halted`, `stages`, every failed check compacted),
+then `tester_hypothesis` (the tester's report, labelled as an unverified model claim that loses
+to the runner evidence), then `earlier_attempts` (for each earlier executed attempt: `halted`,
+`halted_step`, `stages_run`, failed check names and the plan). `loop._fit` keeps the JSON under
+`roles.EVIDENCE_CHARS` by dropping earlier plans (oldest first), then earlier attempts, then
+trailing failed checks with a count, so the prompt slice never cuts the JSON.
+
+- **Why not a "best attempt":** configuration E ranked attempts by passed runner checks. In run
+  `20261017-220028` that pointed the planner at attempt 2 (20 passed, 18 failed) instead of
+  attempt 1, which had the trigger in the right order and halted early on a backfill (few
+  checks ran). Passed and failed counts are not comparable across attempts that halt at
+  different stages, so the controller no longer ranks; the planner sees the facts.
+- **Why the tester's report moved:** in the same run it was read ahead of runner evidence
+  that contradicted it (`triggers: []` at `deploy_new`). It is still sent in full.
+- **Backfill pre-check:** `facts.check_backfill_terminates` rejects a `repeat_until_zero_rows`
+  plain column copy (`UPDATE t SET a = b ...`) whose WHERE the update does not make false
+  (`WHERE a IS NULL` without `b IS NOT NULL`, `WHERE b IS NOT NULL`, no WHERE). On all 203
+  recorded Lightning planner replies it flagged all 18 whose backfill hit the runner's
+  10,000-batch stop, none of the 25 whose backfill converged, and 8 whose backfill never ran.
+  It is agent-side, like the SQL quoting check; the runner still executes and judges.
+
+- **SQL syntax pre-check (`fix/next`):** `facts.check_sql_syntax` parses every sql string with
+  PostgreSQL's parser (`pglast` 8.6, libpg_query, PostgreSQL 18 grammar; the runner database is
+  PostgreSQL 15) and every plpgsql function body and DO block with the PL/pgSQL parser. On the
+  203 recorded Lightning planner replies it flagged all 18 whose stage failed with a syntax
+  error, none of the 181 others whose stages ran, and 4 in stages that never ran; no plan under
+  `proposals/` or `examples/` is rejected. It executes nothing and checks no names or types.
+- **Pre-checks are advisory (`fix/next`):** the SQL quoting, syntax and backfill pre-checks raise
+  `facts.PreCheckError` and run after every hard check. `chat_json` sends a miss back for
+  correction while retries remain; if only a pre-check fails on the final retry, the reply is
+  accepted (transcript `error` says "advisory pre-check not met"), the controller logs
+  `precheck_not_met`, and the runner judges the plan. Reason: in configuration F, run
+  `20261017-224014` ended ERROR because planner-1's three replies failed three different
+  validations, the last one the backfill pre-check; that plan would otherwise have reached the
+  runner. Hard errors (schema, variant, recommendation) still fail the call.

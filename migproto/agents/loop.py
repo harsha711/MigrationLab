@@ -53,28 +53,68 @@ def _evidence(result: dict, failed_checks: list[dict]) -> dict:
 
 
 def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
-              best: dict | None = None) -> dict:
-    # Tester summary first, so a prompt-length cap can never drop it. `best` (an earlier
-    # attempt that passed more runner checks than this one) comes next for the same reason.
-    out = {"tester_summary": tester_report}
-    if best is not None:
-        out["best_earlier_attempt"] = {
-            "note": (f"attempt {best['attempt']} passed {best['passed']} runner checks; your "
-                     f"latest plan passed {best['latest_passed']}. Its plan and failed checks "
-                     "are included; you may revise from either plan."),
-            "attempt": best["attempt"],
-            "passed_checks": best["passed"],
-            "failed_checks": best["failed"],
-            "plan": best["plan"],
+              earlier: list[dict] | None = None) -> dict:
+    """Planner feedback: runner facts first, then the tester's model-written diagnosis labelled
+    as unverified, then a factual record of each earlier executed attempt. Run 220028 showed
+    both failure modes this order avoids: a wrong tester diagnosis read ahead of the runner
+    evidence that contradicted it, and a controller-picked "best attempt" (most passed checks)
+    that pointed at a regression instead of the attempt that halted early but was closer."""
+    out = _evidence(result, failed_checks)
+    out["tester_hypothesis"] = {
+        "note": ("Model-written diagnosis of the runner evidence above. It is not verified; "
+                 "where it disagrees with the runner evidence (expected, observed, schema, "
+                 "step_id), the runner evidence is right."),
+        "report": tester_report,
+    }
+    if earlier:
+        out["earlier_attempts"] = {
+            "note": ("Runner facts for each earlier executed attempt (your latest plan is "
+                     "'Previous plan'). An attempt that halted early ran fewer checks, so its "
+                     "failure count is not comparable; you may revise from any of these plans."),
+            "attempts": earlier,
         }
-    return {**out, **_evidence(result, failed_checks)}
+    return _fit(out)
 
 
-def _best_earlier(best: dict | None, attempt: int, passed: int) -> dict | None:
-    """The best earlier attempt, when the latest attempt passed fewer runner checks."""
-    if best is None or best["attempt"] == attempt or best["passed"] <= passed:
-        return None
-    return {**best, "latest_passed": passed}
+def _attempt_record(attempt: int, plan_obj: dict, result: dict,
+                    failed_checks: list[dict]) -> dict:
+    return {
+        "attempt": attempt,
+        "halted": result.get("halted"),
+        "halted_step": result.get("halted_step"),
+        "stages_run": [s.get("stage") for s in result.get("stages") or []],
+        "failed_checks": [c["name"] for c in failed_checks],
+        "plan": plan_obj,
+    }
+
+
+def _fit(feedback: dict, limit: int | None = None) -> dict:
+    """Keep the feedback under the planner prompt's evidence cap by dropping the bulkiest
+    optional parts first (earlier plans, oldest first; then earlier attempts), so the prompt
+    slice never cuts the JSON at an arbitrary point."""
+    limit = roles.EVIDENCE_CHARS if limit is None else limit
+
+    def size() -> int:
+        return len(json.dumps(feedback, indent=1, ensure_ascii=False))
+
+    attempts = (feedback.get("earlier_attempts") or {}).get("attempts") or []
+    for rec in attempts:
+        if size() <= limit:
+            break
+        if "plan" in rec:
+            rec["plan"] = "(omitted to fit the prompt)"
+    while attempts and size() > limit:
+        attempts.pop(0)
+    if "earlier_attempts" in feedback and not attempts:
+        del feedback["earlier_attempts"]
+    failed = feedback.get("failed_checks") or []
+    dropped = 0
+    while failed and size() > limit:
+        failed.pop()
+        dropped += 1
+        feedback["failed_checks_omitted"] = (
+            f"{dropped} more failed checks omitted to fit the prompt; see outcome_counts")
+    return feedback
 
 
 def _failure_records(log: RunLog, start: int) -> list[dict]:
@@ -245,12 +285,12 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                       msg=f"no investigator ground truth for scenario {scenario_id}; not scored")
 
         plan_obj = _tag(call("planner-1", roles.plan, investigation, **plan_kwargs), 1)
-        _validate_plan(plan_obj, sfacts)
+        _validate_plan(plan_obj, sfacts, log, prov, 1)
         log.event("proposal", provenance=prov, role="planner", attempt=1,
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
 
-        best = None   # the executed attempt that passed the most runner checks
+        earlier: list[dict] = []   # runner facts of executed attempts before the latest
         for attempt in range(1, budget.max_revisions + 2):
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
                          **test_kwargs)
@@ -268,10 +308,6 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 extra_tests=tests, scenario=scenario_id).as_dict()
             last_result = result
             complete_failures = _failure_records(log, check_start)
-            passed = sum(c["status"] == "PASS" for c in log.checks[check_start:])
-            if best is None or passed > best["passed"]:
-                best = {"attempt": attempt, "passed": passed, "plan": plan_obj,
-                        "failed": [c["name"] for c in complete_failures]}
             report = call(f"tester-report-{attempt}", roles.report_evidence,
                           _evidence(result, complete_failures))
             transcript_role = "single" if memory is not None else f"tester-report-{attempt}"
@@ -304,15 +340,16 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           msg="planner recommended reject and the runner rejected the plan")
                 break
             previous_id = plan_obj["plan_id"]
+            feedback = _feedback(result, report, complete_failures, [dict(r) for r in earlier])
+            earlier.append(_attempt_record(attempt, plan_obj, result, complete_failures))
             try:
                 plan_obj = _tag(call(
                     f"planner-{attempt + 1}", roles.plan, investigation,
-                    feedback=_feedback(result, report, complete_failures,
-                                       _best_earlier(best, attempt, passed)),
+                    feedback=feedback,
                     previous=plan_obj,
                     **plan_kwargs,
                 ), attempt + 1)
-                _validate_plan(plan_obj, sfacts)
+                _validate_plan(plan_obj, sfacts, log, prov, attempt + 1)
             except (LLMError, plans.PlanError) as exc:
                 # The runner already failed every executed plan; an unusable revision does
                 # not make that an infrastructure error. BudgetExceeded still means INCOMPLETE.
@@ -341,8 +378,16 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                    score, attempts, budget, scenario=scenario_id)
 
 
-def _validate_plan(plan_obj: dict, sfacts) -> None:
-    scenario_facts.plan_validator(sfacts)(plan_obj)
+def _validate_plan(plan_obj: dict, sfacts, log: RunLog | None = None,
+                   prov: str | None = None, attempt: int | None = None) -> None:
+    try:
+        scenario_facts.plan_validator(sfacts)(plan_obj)
+    except scenario_facts.PreCheckError as exc:
+        # chat_json already let this plan through after its last retry; record it and let
+        # the runner judge the plan.
+        if log is not None:
+            log.event("precheck_not_met", provenance=prov, attempt=attempt,
+                      plan_id=plan_obj.get("plan_id"), msg=str(exc)[:500])
 
 
 def _finish(ok: bool, verdict: str, source: str, topology: str, model: str | None,

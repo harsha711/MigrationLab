@@ -48,10 +48,10 @@ def validator_accepts(plan: dict) -> bool:
 
 def _base() -> dict:
     return {"plan_id": "p", "stages": [
-        {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+        {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
         {"id": "d", "kind": "deploy_new"},
         {"id": "r", "kind": "retire_old"},
-        {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]},
+        {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
     ]}
 
 
@@ -117,7 +117,7 @@ def _mutations():
     yield "unknown stage key", stage(1, extra=True)
     yield "unknown phase", stage(0, phase="cleanup")
     p = _base()
-    p["stages"].insert(2, {"id": "rb", "kind": "rollback_check", "sql": ["SELECT 1"]})
+    p["stages"].insert(2, {"id": "rb", "kind": "rollback_check", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]})
     yield "sql on rollback_check", p
     p = _base()
     p["stages"].insert(2, {"id": "rb", "kind": "rollback_check", "migration": "apply"})

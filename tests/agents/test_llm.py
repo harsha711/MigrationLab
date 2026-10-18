@@ -148,3 +148,53 @@ def test_thinking_budget_is_sent_and_recorded(monkeypatch):
     llm.chat_json("system", "user", [])
     assert "thinking_token_budget" not in payloads[0]
     assert llm.serving_metadata()["thinking_token_budget"] is None
+
+
+def test_advisory_precheck_retries_then_lets_the_last_reply_through(monkeypatch):
+    from migproto import plans
+    from migproto.agents.facts import PreCheckError
+
+    def run(replies, retries=2):
+        it = iter(Response(r) for r in replies)
+        monkeypatch.setattr(requests, "post", lambda *a, **k: next(it))
+        llm = LLM(model="nemotron-test", budget=ReviewBudget(max_model_calls=5))
+
+        def validate(obj):
+            if obj.get("hard"):
+                raise plans.PlanError("hard error")
+            if obj.get("pre"):
+                raise PreCheckError("advisory miss")
+            return obj
+
+        transcript = []
+        return llm.chat_json("s", "u", transcript, retries=retries, validator=validate), \
+            transcript
+
+    # Corrected within the retries: the advisory error was sent back like any other.
+    obj, t = run(['{"pre": 1}', '{"ok": 1}'])
+    assert obj == {"ok": 1} and [e["schema_valid"] for e in t] == [False, True]
+    # Still not met on the final retry: the plan goes through, and the miss is recorded.
+    obj, t = run(['{"pre": 1}', '{"pre": 2}', '{"pre": 3}'])
+    assert obj == {"pre": 3} and t[-1]["schema_valid"] and "advisory" in t[-1]["error"]
+    # A hard error on the final retry still fails the call.
+    with pytest.raises(LLMError, match="hard error"):
+        run(['{"pre": 1}', '{"pre": 2}', '{"hard": 1}'])
+
+
+def test_plan_validator_runs_hard_checks_before_prechecks():
+    from migproto import plans
+    from migproto.agents import facts
+    sc = facts.for_scenario(None, [])
+    validate = facts.plan_validator(sc)
+    plan = {"plan_id": "p", "stages": [
+        {"id": "e", "kind": "sql", "phase": "expand",
+         "sql": ["UPDATE account_user SET customer_note = note LIMIT 5"]},
+        {"id": "d", "kind": "deploy_new", "migration": "state_only", "variant": "nope"},
+        {"id": "r", "kind": "retire_old"},
+        {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]}]}
+    with pytest.raises(plans.PlanError) as err:
+        validate(plan)
+    assert not isinstance(err.value, facts.PreCheckError)       # the variant error wins
+    del plan["stages"][1]["variant"]
+    with pytest.raises(facts.PreCheckError, match="syntax"):
+        validate(plan)

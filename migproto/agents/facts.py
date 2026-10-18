@@ -153,12 +153,14 @@ Recommendation:
 - "accept_as_is": the change is safe to deploy directly: deploy_new with "migration": "apply",
   then retire_old, and no SQL stages.
 - "staged_rollout": the change needs your SQL stages around the deploy (at least one sql
-  stage). With "migration": "state_only" the plan needs at least one expand and one contract
-  sql stage; with "apply" SQL stages are optional.
+  stage, in whichever phase the change needs). With "migration": "state_only" the plan needs at
+  least one sql stage; with "apply" SQL stages are optional.
 - "reject": you believe no plan keeps both versions correct. Still submit the plan you consider
   closest (for example the direct deploy) so the runner records evidence, and say why in
   summary.
-Rules: exactly one deploy_new and one retire_old stage, at most one rollback_check; stages run
+Rules: exactly one deploy_new and one retire_old stage, at most one rollback_check; every sql
+stage must change the schema or data (the runner does not evaluate query results, so a stage of
+only SELECT, SET or SHOW is rejected; checks belong in tester cases); stages run
 in the listed order; only sql stages carry "sql", only deploy_new carries "migration" or
 "variant"; each sql string is executed as a single statement (PL/pgSQL function bodies with $$
 quoting are fine); each string is sent to PostgreSQL exactly as written, so write `$$` and
@@ -256,6 +258,14 @@ def old_version(scenario_id: str | None) -> str:
     return sc.old_version
 
 
+class PreCheckError(plans.PlanError):
+    """An agent-side pre-check was not met: a SQL shape that failed on the runner before.
+    `chat_json` sends it back for correction while retries remain; on the final retry the plan
+    goes to the runner anyway (the runner decides), so a pre-check can never turn a plan the
+    runner would have judged into an ERROR."""
+    advisory = True
+
+
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
 
 
@@ -268,25 +278,102 @@ def check_sql_quoting(plan_obj: dict) -> None:
         for i, sql in enumerate(st.get("sql") or []):
             where = f"stage {st.get('id')!r}, sql[{i}]"
             if "\\$" in sql:
-                raise plans.PlanError(f"{where}: write dollar quotes literally as $$, never "
+                raise PreCheckError(f"{where}: write dollar quotes literally as $$, never "
                                       "\\$\\$ (the string is sent to PostgreSQL as written)")
             if len(_DOLLAR_TAG.findall(sql)) % 2:
-                raise plans.PlanError(f"{where}: unbalanced $$ quoting. Each sql string is "
+                raise PreCheckError(f"{where}: unbalanced $$ quoting. Each sql string is "
                                       "executed as one statement, so a function body must open "
                                       "and close its $$ in the same string")
+
+
+# UPDATE <table> SET <col> = <other_col> [WHERE <condition>], with a bare column on the right.
+_COPY_UPDATE = re.compile(
+    r"^\s*UPDATE\s+[\w.\"]+\s+SET\s+\"?(\w+)\"?\s*=\s*\"?(\w+)\"?\s*"
+    r"(?:WHERE\s+(.*?))?;?\s*$", re.IGNORECASE | re.DOTALL)
+
+
+def _copy_terminates(target: str, source: str, cond: str | None) -> bool:
+    """True when the WHERE condition of `SET target = source` is made false by the update."""
+    if not cond:
+        return False
+
+    def has(pattern: str) -> bool:
+        return re.search(pattern, cond, re.IGNORECASE) is not None
+
+    t, s = rf"\b{target}\b\"?", rf"\b{source}\b\"?"
+    for x, y in ((t, s), (s, t)):
+        if has(rf"{x}\s+IS\s+DISTINCT\s+FROM\s+\"?{y}") or has(rf"{x}\s*(<>|!=)\s*\"?{y}"):
+            return True
+    return has(rf"{t}\s+IS\s+NULL\b") and has(rf"{s}\s+IS\s+NOT\s+NULL\b")
+
+
+def check_backfill_terminates(plan_obj: dict) -> None:
+    """Agent-side pre-check for the most common first-attempt halt on Lightning: a
+    repeat_until_zero_rows copy (`UPDATE t SET a = b ...`) whose WHERE stays true after the
+    update, so every batch matches rows again and the runner stops after 10,000 batches.
+    Seen shapes: `WHERE a IS NULL` (rows where b is NULL stay NULL), `WHERE b IS NOT NULL`
+    and no WHERE at all. Only a plain column copy is checked; the runner still executes and
+    judges the stage."""
+    for st in plan_obj.get("stages", []):
+        if not st.get("repeat_until_zero_rows"):
+            continue
+        for i, sql in enumerate(st.get("sql") or []):
+            m = _COPY_UPDATE.match(sql)
+            if not m or _copy_terminates(*m.groups()):
+                continue
+            target, source = m.group(1), m.group(2)
+            raise PreCheckError(
+                f"stage {st.get('id')!r}, sql[{i}]: this repeat_until_zero_rows backfill never "
+                f"reaches 0 rows, because its WHERE still matches rows after the update (a row "
+                f"counts as updated even when its value does not change). Use a condition the "
+                f"update makes false, e.g. 'WHERE {target} IS NULL AND {source} IS NOT NULL' or "
+                f"'WHERE {target} IS DISTINCT FROM {source}', or drop repeat_until_zero_rows "
+                "for a single-statement copy")
+
+
+_PLPGSQL = re.compile(r"\bLANGUAGE\s+'?plpgsql\b|^\s*DO\b", re.IGNORECASE)
+
+
+def check_sql_syntax(plan_obj: dict) -> None:
+    """Agent-side pre-check: parse every sql string with PostgreSQL's own parser (libpg_query
+    through pglast, PostgreSQL 18 grammar; the runner's database is PostgreSQL 15), and the
+    body of every plpgsql function and DO block with the PL/pgSQL parser. On Lightning, 15 stages failed to
+    execute with a syntax error (`UPDATE ... LIMIT`, `EXECUTE FUNCTION f` without `()`,
+    `CREATE UNIQUE INDEX NOT VALID`, broken plpgsql bodies), so the attempt tested nothing.
+    Parsing executes nothing and checks no names or types; the runner still executes and
+    judges every statement."""
+    import pglast   # imported lazily: only live plan validation needs it
+
+    for st in plan_obj.get("stages", []):
+        for i, sql in enumerate(st.get("sql") or []):
+            try:
+                pglast.parser.parse_sql(sql)
+                if _PLPGSQL.search(sql):
+                    pglast.parse_plpgsql(sql)
+            except pglast.parser.ParseError as exc:
+                raise PreCheckError(
+                    f"stage {st.get('id')!r}, sql[{i}]: PostgreSQL syntax error: {exc}. "
+                    "Fix the statement; each sql string is sent to PostgreSQL as written"
+                ) from None
+
+
+def run_prechecks(plan_obj: dict) -> None:
+    check_sql_quoting(plan_obj)
+    check_sql_syntax(plan_obj)
+    check_backfill_terminates(plan_obj)
 
 
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
-    Raises plans.PlanError (a ValueError), so chat_json asks the model to correct it."""
+    Raises plans.PlanError (a ValueError), so chat_json asks the model to correct it. The
+    agent-side SQL pre-checks run last and raise PreCheckError (advisory, see there)."""
 
-    def validate(obj: dict) -> dict:
+    def hard(obj: dict) -> dict:
         if not isinstance(obj, dict):
             raise plans.PlanError("plan must be a JSON object")
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
-        check_sql_quoting(obj)
         deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
         named = deploy.get("variant")
         if named is not None and (named in VARIANT_TEXT or named not in sc_facts.variants):
@@ -314,6 +401,11 @@ def plan_validator(sc_facts: ScenarioFacts):
                                   "sql stages")
         if rec == "staged_rollout" and not has_sql:
             raise plans.PlanError("staged_rollout needs at least one sql stage")
+        return obj
+
+    def validate(obj: dict) -> dict:
+        hard(obj)
+        run_prechecks(obj)    # last, so an advisory miss never hides a hard error
         return obj
 
     return validate

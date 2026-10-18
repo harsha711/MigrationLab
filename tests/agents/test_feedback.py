@@ -42,19 +42,73 @@ def test_compact_check_keeps_diagnostics_and_drops_bulk():
     assert len(json.dumps(out)) < len(json.dumps(_record(1))) / 2
 
 
-def test_best_earlier_attempt_only_when_latest_regressed():
-    from migproto.agents import loop
-    best = {"attempt": 3, "passed": 40, "plan": {"plan_id": "p3"}, "failed": ["case.x"]}
-    assert loop._best_earlier(None, 2, 10) is None
-    assert loop._best_earlier(best, 3, 40) is None          # the latest is the best
-    assert loop._best_earlier(best, 4, 40) is None          # not worse
-    got = loop._best_earlier(best, 4, 31)
-    assert got["latest_passed"] == 31 and got["plan"] == {"plan_id": "p3"}
-    fb = loop._feedback({"ok": False, "plan_id": "p4"}, {"summary": "s"}, [], got)
-    assert list(fb)[:2] == ["tester_summary", "best_earlier_attempt"]
-    assert fb["best_earlier_attempt"]["attempt"] == 3
-    assert fb["best_earlier_attempt"]["failed_checks"] == ["case.x"]
-    assert "best_earlier_attempt" not in loop._feedback({"ok": False}, {}, [])
+def test_runner_facts_come_before_the_labelled_tester_hypothesis():
+    fb = loop._feedback({"ok": False, "plan_id": "p2", "halted": "h"}, {"summary": "s"},
+                        [_record(1)])
+    keys = list(fb)
+    assert keys.index("failed_checks") < keys.index("tester_hypothesis")
+    assert fb["tester_hypothesis"]["report"] == {"summary": "s"}
+    assert "not verified" in fb["tester_hypothesis"]["note"]
+    assert "earlier_attempts" not in fb
+
+
+def test_earlier_attempts_are_runner_facts_not_a_ranking():
+    # Run 220028: attempt 1 halted early (few checks ran) but was closer than attempt 2.
+    a1 = loop._attempt_record(1, {"plan_id": "a1-p"}, {"halted": "stage b failed to execute",
+                              "halted_step": "b", "stages": [{"stage": "e"}]},
+                              [{"name": "stage.b.executes"}])
+    a2 = loop._attempt_record(2, {"plan_id": "a2-p"}, {"halted": "contract skipped",
+                              "halted_step": "c", "stages": [{"stage": "e"}, {"stage": "d"}]},
+                              [{"name": f"case.{i}"} for i in range(18)])
+    fb = loop._feedback({"ok": False}, {}, [], [a1, a2])
+    got = fb["earlier_attempts"]["attempts"]
+    assert [r["attempt"] for r in got] == [1, 2]
+    assert got[0]["plan"] == {"plan_id": "a1-p"} and got[0]["halted_step"] == "b"
+    assert got[1]["stages_run"] == ["e", "d"] and len(got[1]["failed_checks"]) == 18
+    assert "best" not in json.dumps(fb)
+
+
+def test_feedback_fits_the_prompt_cap_by_dropping_optional_parts_first():
+    big = {"plan_id": "x", "stages": [{"sql": ["SELECT 1;" * 400]}]}
+    earlier = [loop._attempt_record(i, big, {}, []) for i in (1, 2, 3)]
+    fb = loop._feedback({"ok": False}, {"summary": "KEEP"}, [_record(i) for i in range(5)],
+                        [dict(r) for r in earlier])
+    assert len(json.dumps(fb, indent=1)) <= roles.EVIDENCE_CHARS
+    assert fb["tester_hypothesis"]["report"] == {"summary": "KEEP"}
+    assert len(fb["failed_checks"]) == 5
+    assert earlier[0]["plan"] == big            # the caller's records are not mutated
+    fb = loop._fit({"failed_checks": [_record(i) for i in range(100)],
+                    "tester_hypothesis": {"report": "KEEP"}}, limit=5000)
+    assert fb["tester_hypothesis"] == {"report": "KEEP"} and "failed_checks_omitted" in fb
+    assert len(json.dumps(fb, indent=1)) <= 5000
+
+
+def test_backfill_termination_precheck():
+    import pytest
+    from migproto import plans
+    from migproto.agents import facts
+
+    def plan(sql, repeat=True):
+        return {"stages": [{"id": "b", "kind": "sql", "phase": "expand", "sql": [sql],
+                            "repeat_until_zero_rows": repeat}]}
+
+    for ok in ("UPDATE account_user SET customer_note = note WHERE customer_note IS NULL "
+               "AND note IS NOT NULL;",
+               "UPDATE account_user SET customer_note = note "
+               "WHERE customer_note IS DISTINCT FROM note",
+               "UPDATE account_user SET customer_note = note WHERE note <> customer_note",
+               "UPDATE account_user SET customer_note = COALESCE(note, '') "
+               "WHERE customer_note IS NULL",
+               "UPDATE account_user SET customer_note = note WHERE id IN (SELECT id FROM "
+               "account_user WHERE customer_note IS NULL AND note IS NOT NULL LIMIT 1000)"):
+        facts.check_backfill_terminates(plan(ok))
+    facts.check_backfill_terminates(plan("UPDATE account_user SET customer_note = note;",
+                                         repeat=False))
+    for bad in ("UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;",
+                "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL;",
+                "UPDATE account_user SET customer_note = note;"):
+        with pytest.raises(plans.PlanError, match="never reaches 0 rows"):
+            facts.check_backfill_terminates(plan(bad))
 
 
 def test_sql_quoting_precheck():
@@ -74,3 +128,32 @@ def test_sql_quoting_precheck():
     with pytest.raises(plans.PlanError, match="unbalanced"):
         facts.check_sql_quoting(plan("CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN",
                                      "RETURN NEW; END; $$ LANGUAGE plpgsql"))
+
+
+def test_sql_syntax_precheck_uses_the_postgresql_parser():
+    import pytest
+    from migproto import plans
+    from migproto.agents import facts
+
+    def plan(*sql):
+        return {"stages": [{"id": "e", "kind": "sql", "phase": "expand", "sql": list(sql)}]}
+
+    fn = ("CREATE OR REPLACE FUNCTION f() RETURNS trigger AS $$ BEGIN IF NEW.note IS NULL "
+          "THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql")
+    facts.check_sql_syntax(plan(
+        fn, "CREATE TRIGGER t BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW "
+            "EXECUTE FUNCTION f()",
+        "ALTER TABLE account_user ADD COLUMN customer_note text",
+        "DO $$ BEGIN UPDATE account_user SET customer_note = note; END $$"))
+    # Shapes that failed to execute on Lightning (runs 215440, 220035, 210420, 213633, 205627).
+    for bad in ("UPDATE account_user SET customer_note = note WHERE customer_note IS NULL "
+                "LIMIT 1000;",
+                "CREATE TRIGGER t BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION f;",
+                "CREATE UNIQUE INDEX NOT VALID i ON account_user (last_name)",
+                fn.replace("END IF; RETURN NEW;", "END IF; END; IF TG_OP = 'x' THEN END IF; "
+                           "RETURN NEW;"),
+                fn.replace("RETURN NEW; END;", "RETURN NEW;"),
+                "DO $$ BEGIN LOOP UPDATE account_user SET customer_note = note LIMIT 1000; "
+                "EXIT WHEN NOT FOUND; END LOOP; END $$"):
+        with pytest.raises(plans.PlanError, match="PostgreSQL syntax error"):
+            facts.check_sql_syntax(plan(bad))

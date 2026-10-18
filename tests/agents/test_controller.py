@@ -166,14 +166,14 @@ def test_accept_as_is_must_match_plan_shape():
     validate = facts.plan_validator(facts.for_scenario("add-optional-column", roles.SEARCH_ROOTS))
     with pytest.raises(plans.PlanError, match="accept_as_is"):
         validate({"plan_id": "x", "recommendation": "accept_as_is", "stages": [
-            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
             {"id": "d", "kind": "deploy_new", "migration": "apply"},
             {"id": "r", "kind": "retire_old"}]})
     with pytest.raises(plans.PlanError, match="variant"):
         validate({"plan_id": "x", "stages": [   # omitted migration means state_only
-            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
             {"id": "d", "kind": "deploy_new"}, {"id": "r", "kind": "retire_old"},
-            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]})
+            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]}]})
     assert scenarios.get("add-optional-column").variants.keys() == {"apply"}
 
 
@@ -186,9 +186,9 @@ def test_scenario_plan_validator_rejects_variant_that_contradicts_migration():
 
     def plan(**deploy):
         return {"plan_id": "x", "stages": [
-            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
             {"id": "d", "kind": "deploy_new", **deploy}, {"id": "r", "kind": "retire_old"},
-            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]}
+            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]}]}
 
     drop = facts.plan_validator(facts.for_scenario("drop-column", roles.SEARCH_ROOTS))
     with pytest.raises(plans.PlanError, match="leave \"variant\" out"):
