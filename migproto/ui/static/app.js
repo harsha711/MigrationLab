@@ -620,17 +620,56 @@ async function pageEvidence(oid) {
 
 async function pageCompare(a, b) {
   crumbs([["Runs", "#/"], ["Compare"]]);
+  const failureTheme = (name) => {
+    if (/^stage\./.test(name)) return "stage execution";
+    if (/preservation|columns_agree|retirement_gate|preconditions/.test(name)) return "migration safeguards";
+    if (/^case\./.test(name)) return "application compatibility";
+    return "other recorded checks";
+  };
+  const closest = (attempts) => [...attempts].sort((x, y) =>
+    (x.checks_failed ?? Infinity) - (y.checks_failed ?? Infinity))[0];
+  const trajectory = (attempts) => attempts.map((x) => x.checks_failed).filter((n) => n != null);
+  const trend = (attempts) => {
+    const values = trajectory(attempts);
+    if (values.length < 2) return "One recorded attempt; no revision trend to compare.";
+    const first = values[0], best = Math.min(...values), last = values.at(-1);
+    if (best < first && last > best) return `Failure count improved from ${first} to ${best}, then rose to ${last}.`;
+    if (last < first) return `Failure count fell from ${first} to ${last} across recorded attempts.`;
+    if (last > first) return `Failure count rose from ${first} to ${last} across recorded attempts.`;
+    return `Failure count ended where it began (${last}).`;
+  };
   const col = async (id) => {
     const run = await getRun(id);
-    return `<div class="card"><div class="row"><a href="#/run/${enc(id)}"><strong>${esc(id)}</strong></a>${verdictBadge(run.meta?.verdict)}</div>
-      <div class="row" style="margin:6px 0">${typeBadges(run)}</div>
-      ${run.attempts.map((x) => `<p><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}
-        <span class="muted">${x.checks_total} checks · ${x.checks_failed} failed</span>
-        ${(x.failed || []).length ? `<br><span class="muted">${x.failed.map((f) => `<code>${esc(f)}</code>`).join(", ")}</span>` : ""}</p>`).join("")}
-    </div>`;
+    const best = closest(run.attempts);
+    const finalVerdict = run.meta?.verdict || "not recorded";
+    const final = run.attempts.at(-1);
+    const groups = (best?.failed || []).reduce((out, name) => {
+      const theme = failureTheme(name);
+      (out[theme] ||= []).push(name);
+      return out;
+    }, {});
+    return `<article class="compare-run card"><header><div><span class="eyebrow">RECORDED REVIEW</span><a href="#/run/${enc(id)}"><strong>${esc(id)}</strong></a></div>${verdictBadge(finalVerdict)}</header>
+      <div class="row compare-context">${typeBadges(run)}</div>
+      <section class="compare-takeaway">
+        <span class="eyebrow">CLOSEST RECORDED ATTEMPT</span>
+        ${best ? `<strong>${esc(short(best.attempt_id))} · ${best.checks_failed} failed check${best.checks_failed === 1 ? "" : "s"}</strong>
+          <p>${esc(trend(run.attempts))}</p>` : `<p class="muted">No attempts were recorded.</p>`}
+      </section>
+      ${best?.failed?.length ? `<section class="compare-themes"><span>What still blocked that attempt</span>
+        ${Object.entries(groups).map(([theme, names]) => `<div><strong>${esc(theme)}</strong><small>${names.length} failed check${names.length === 1 ? "" : "s"}</small></div>`).join("")}
+      </section>` : ""}
+      <p class="compare-outcome"><strong>Final recorded outcome:</strong> ${verdictBadge(finalVerdict)}${final?.halted ? ` <span class="muted">${esc(final.halted)}</span>` : ""}</p>
+      <details class="compare-evidence"><summary>View every attempt and named failed check</summary>
+        ${run.attempts.map((x) => `<section><div class="row"><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}
+          <span class="muted">${x.checks_total} checks · ${x.checks_failed} failed</span></div>
+          ${x.halted ? `<p class="muted">Stopped: ${esc(x.halted)}</p>` : ""}
+          ${(x.failed || []).length ? `<div class="chips">${x.failed.map((f) => `<code class="chip">${esc(f)}</code>`).join("")}</div>` : `<p class="muted">No failed checks recorded for this attempt.</p>`}</section>`).join("")}
+      </details>
+    </article>`;
   };
-  return `<h1>Compare</h1><p class="muted">Separate runs, shown side by side. Results are not merged.</p>
-    <div class="compare">${await col(a)}${await col(b)}</div>`;
+  const [left, right] = await Promise.all([col(a), col(b)]);
+  return `<h1>Compare two reviews</h1><p class="muted">This is a side-by-side reading aid, not an approach ranking. Each card shows the closest recorded attempt, its blockers, and the final runner outcome.</p>
+    <div class="compare">${left}${right}</div>`;
 }
 
 // ---------- Brev batches (supervisor records, read-only) ----------
