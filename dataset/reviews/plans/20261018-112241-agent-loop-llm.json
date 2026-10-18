@@ -1,0 +1,61 @@
+{
+  "plan_id": "a4-rename-note-to-customer-pf",
+  "summary": "Add column, backfill, deploy a bidirectional sync trigger between note and customer_note, deploy new version, retire old, then drop old column after removing the trigger.",
+  "write_consistency": "A PostgreSQL trigger mirrors writes between note and customer_note: on INSERT, both columns sync to the non-null value; on UPDATE, each changed column updates the other, ensuring both versions see the most recent write from either side.",
+  "revision_notes": "Root cause: The drop_note_column SQL stage dropped the note column without first dropping the sync_user_note_trig trigger, causing a ProgrammingError when the trigger function referenced NEW.note on a column that no longer exists. Fix: added DROP TRIGGER sync_user_note_trig ON account_user; as the first SQL statement in the contract stage before dropping the note column.",
+  "stages": [
+    {
+      "id": "add_customer_note",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the new customer_note column to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_customer_note",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note so the new version has data to work with.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_note_columns",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create a trigger to keep note and customer_note synchronized during overlapping application versions.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_user_note_mirror() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.note, NEW.customer_note); ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM COALESCE(OLD.note, '') THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM COALESCE(OLD.customer_note, '') THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_user_note_trig BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note_mirror();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy the new version (new-staged) with a state-only migration; the new Django model only knows customer_note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version (old) that still references the note column."
+    },
+    {
+      "id": "drop_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the original note column now that the old version is gone.",
+      "sql": [
+        "DROP TRIGGER sync_user_note_trig ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

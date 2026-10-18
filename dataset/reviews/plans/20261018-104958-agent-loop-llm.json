@@ -1,0 +1,29 @@
+{
+  "plan_id": "a1-mig-001-pf",
+  "summary": "Deploy the new Saleor version so its Django migration creates the customer_note column, then backfill all existing note values into customer_note while both versions are live, and finally retire the old version, achieving zero-downtime migration.",
+  "write_consistency": "Old version writes to note column via Django save(); new version writes to customer_note column via its updated model. After deploy_new, the backfill stage copies existing note values into customer_note for rows where customer_note is NULL, synchronising the columns before old version retirement. During the overlap, writes to note do not affect customer_note and vice versa, so the most recent write by either version is reflected in its respective column.",
+  "revision_notes": "Removed the expand stage that added customer_note column; column creation is now handled by the new version's Django migration. Backfill stage moved after deploy_new to avoid conflict with migration and ensure column exists before data copy.",
+  "stages": [
+    {
+      "id": "deploy-001",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill-001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for rows where customer_note is NULL.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE note IS NOT NULL AND customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "retire-001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only the new version serves traffic."
+    }
+  ]
+}

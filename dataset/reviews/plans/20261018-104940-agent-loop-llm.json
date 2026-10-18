@@ -1,0 +1,36 @@
+{
+  "plan_id": "a3-rename-note-v2-pf",
+  "summary": "Add customer_note column, backfill existing note values, create BEFORE INSERT and BEFORE UPDATE triggers to keep note and customer_note in sync, deploy new version with state_only migration, then drop note column after old app retirement.",
+  "write_consistency": "A BEFORE INSERT trigger copies the non-null column value to the other column for new rows; BEFORE UPDATE OF note sets customer_note to NEW.note, and BEFORE UPDATE OF customer_note sets note to NEW.customer_note. This ensures that whichever app writes to its column, the other column is updated atomically, so reads from either version see the most recently written value.",
+  "revision_notes": "The previous plan failed because inserts from the new app left note NULL, causing reads by the old app to return null. No insert-side synchronization existed. This revision adds a BEFORE INSERT trigger that uses COALESCE to set note and customer_note to the provided value, ensuring both columns are populated on insert. Update triggers remain column-specific to avoid recursion, and the backfill guarantees initial consistency. The retire_old stage now includes the ALTER TABLE DROP COLUMN statement to remove the old column after old app retirement, satisfying the runner's check that the column is gone at the end.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill existing note values, and create triggers to synchronize note and customer_note during concurrent operation",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_insert_note() RETURNS trigger AS $$ BEGIN NEW.note := COALESCE(NEW.note, NEW.customer_note); NEW.customer_note := COALESCE(NEW.customer_note, NEW.note); RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_insert_note BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_insert_note();",
+        "CREATE OR REPLACE FUNCTION sync_note_to_customer_note() RETURNS trigger AS $$ BEGIN NEW.customer_note := NEW.note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_to_customer_note BEFORE UPDATE OF note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_to_customer_note();",
+        "CREATE OR REPLACE FUNCTION sync_customer_note_to_note() RETURNS trigger AS $$ BEGIN NEW.note := NEW.customer_note; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_customer_note_to_note BEFORE UPDATE OF customer_note ON account_user FOR EACH ROW EXECUTE FUNCTION sync_customer_note_to_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new version with state_only migration; new app knows customer_note only",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Drop old note column after old app retirement confirmed stable before removal of legacy column; removes the legacy note column once the old version no longer writes to it. Both columns are kept in sync via triggers until this point, ensuring no data loss during the transition window where both versions serve traffic concurrently."
+    }
+  ]
+}

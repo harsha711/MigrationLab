@@ -1,0 +1,68 @@
+{
+  "plan_id": "a4-rename-note-to-customer-pf",
+  "summary": "Renames the Django User.note DB column to customer_note while preserving the public GraphQL field name note. Adds a nullable customer_note column, backfills existing note values, adds PostgreSQL triggers to synchronize note and customer_note columns during concurrent dual-version operation, deploys the new version with a state-only migration, retires the old version, and finally drops the note column after cleanup of dependent triggers and function.",
+  "write_consistency": "The expand phase adds customer_note alongside note. The backfill copies all existing note values into customer_note, preserving NULLs. The sync stage adds BEFORE UPDATE and BEFORE INSERT triggers with FOR EACH ROW WHEN conditions that mirror writes between note and customer_note, ensuring either version's writes are visible to the other version's reads, including at INSERT time. The note column remains active for the old version through the deploy_new and retire_old stages; it is dropped only after retire_old when the old version no longer serves traffic, with associated triggers and function cleaned up first to avoid reference errors.",
+  "revision_notes": "Modified contract_1 stage sql to drop the sync_user_note() function and all four triggers before executing ALTER TABLE account_user DROP COLUMN note CASCADE. Root cause: the contract_1 stage dropped the note column while the sync_user_note() function and INSERT triggers still referenced it, causing ProgrammingError: record new has no field note when triggers fired on INSERT. Adding explicit DROP TRIGGER and DROP FUNCTION statements before the column removal prevents residual trigger activation.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the customer_note column to the account_user table.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into customer_note for all rows.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add PostgreSQL triggers to synchronize note and customer_note columns during concurrent dual-version operation.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_user_note() RETURNS trigger AS $$ BEGIN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER trg_sync_note BEFORE UPDATE ON account_user FOR EACH ROW WHEN (NEW.note IS DISTINCT FROM OLD.note) EXECUTE FUNCTION sync_user_note();",
+        "CREATE TRIGGER trg_sync_customer_note BEFORE UPDATE ON account_user FOR EACH ROW WHEN (NEW.customer_note IS DISTINCT FROM OLD.customer_note) EXECUTE FUNCTION sync_user_note();",
+        "CREATE TRIGGER trg_sync_note_insert BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();",
+        "CREATE TRIGGER trg_sync_customer_note_insert BEFORE INSERT ON account_user FOR EACH ROW EXECUTE FUNCTION sync_user_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "description": "Deploy the new-staged version with a state_only Django migration (no SQL); the schema change is already applied by the SQL stages above.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version. After this stage only the new version runs, which exclusively uses customer_note."
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the old note column after the old version is retired and dependent triggers/function are cleaned up.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS trg_sync_note_insert ON account_user;",
+        "DROP TRIGGER IF EXISTS trg_sync_customer_note_insert ON account_user;",
+        "DROP TRIGGER IF EXISTS trg_sync_note ON account_user;",
+        "DROP TRIGGER IF EXISTS trg_sync_customer_note ON account_user;",
+        "DROP FUNCTION IF EXISTS sync_user_note();",
+        "ALTER TABLE account_user DROP COLUMN note CASCADE;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

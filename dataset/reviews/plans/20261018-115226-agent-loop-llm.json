@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-mkt-optin-01",
+  "summary": "Add a NOT NULL boolean column marketing_opt_in with DEFAULT false to the account_user table via an expand SQL stage, ensuring no NULLs exist before the new version starts; then deploy the new version with a state_only migration, and finally retire the old version.",
+  "write_consistency": "The old version, unaware of the new column, will cause INSERTs to use the column's DEFAULT false, and UPDATEs will preserve the existing false value. The new version explicitly sets marketing_opt_in, so both versions stay consistent.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column as boolean NOT NULL DEFAULT false on account_user; PostgreSQL will set existing rows to false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean NOT NULL DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is serving traffic."
+    }
+  ]
+}

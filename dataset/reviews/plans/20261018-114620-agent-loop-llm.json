@@ -1,0 +1,18 @@
+{
+  "plan_id": "a1-unique-last-name-reject-pf",
+  "summary": "The account_user table contains 245 rows with 244 distinct non‑NULL last_name values, meaning one duplicate exists. Adding a unique constraint on last_name would require either changing that row's value (prohibited by the \"pre-existing rows' values must not change\" rule) or allowing the duplicate to remain, both of which break the goal. The closest workable plan is a direct deploy_new with migration \"apply\" followed by retire_old; the runner will record that the new version's migration fails because of the duplicate.",
+  "write_consistency": "none",
+  "revision_notes": "The plan was originally rejected because the database has a duplicate last_name value (Cook). No SQL stages can resolve this without altering pre‑existing rows, which is disallowed. Therefore the plan remains a reject; the deploy_new stage will fail as shown in the dry‑run, evidence of the constraint conflict.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the new version is running."
+    }
+  ]
+}

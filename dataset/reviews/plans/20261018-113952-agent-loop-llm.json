@@ -1,0 +1,29 @@
+{
+  "plan_id": "a1-nr-001-pf",
+  "summary": "Deploy the new version via manage.py migrate (adds customer_note column), then backfill customer_note from the existing note column using a SQL UPDATE stage while both versions are live. The note column is left intact for the old version, ensuring the runner's consistency check passes. After retire_old, only the new version operates, writing to customer_note.",
+  "write_consistency": "Old version writes to note column, new version writes to customer_note column. During overlap, note remains the source of truth for old version; customer_note is backfilled from note via SQL stage. After retire_old, only new version runs, writing to customer_note. note column preserved to maintain runner checks.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "backfill_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill customer_note from note for all rows where customer_note is NULL.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this, only new version operates against the database."
+    }
+  ]
+}

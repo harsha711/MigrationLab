@@ -8,11 +8,11 @@
 | Project description | draft below | form |
 | Challenge selected | draft below; team decides | form |
 | 3-5 min demo video, unlisted YouTube/Vimeo, camera on | TODO: record from the script below | form |
-| Repo link with README | repo is public: https://github.com/harsha711/MigrationLab. README needs the final merge to `main` | `README.md` |
+| Repo link with README | repo is public: https://github.com/harsha711/MigrationLab. `main` has the UI and README; the dataset and K results merge with the final push | `README.md` |
 | README: quick start | done | `README.md` → Quick start |
 | README: tech stack and architecture diagram | done (Mermaid, renders on GitHub) | `README.md` → Architecture |
 | README: reproduce the demo (env vars, keys, sample .env) | done; `.env.example` is committed | `README.md` → How to reproduce |
-| README: datasets/synthetic data and provenance | done | `README.md` → Data and provenance |
+| README: datasets/synthetic data and provenance | done; open dataset with datasheet in `dataset/` | `README.md` → Data and provenance, `dataset/README.md` |
 | README: known limitations and next steps | done | `README.md` |
 | Deployed URL or short screen capture | no deployment; attach a 30-60 s capture of the UI (it can be cut from the video) | form |
 | Team roster (names, roles, contacts) | TODO: fill names and contacts | `README.md` → Team, and form |
@@ -46,7 +46,7 @@ against the old and new versions of a real app running side by side.
 Event tracks (from the event page): Best Use of NVIDIA Nemotron 3.5 Lightning, Best Use of
 Red Hat vLLM, Best Use of NVIDIA NeMo Gym. What we can show for each:
 
-- **Lightning:** every agent role runs on it. There are 190 recorded Lightning reviews,
+- **Lightning:** every agent role runs on it. There are 226 recorded Lightning reviews,
   smoke tests included; the measured configurations are in `docs/results.md`.
 - **vLLM:** one vLLM 0.27.1 server per H100 served up to 8 concurrent reviews. The full
   serving record (flags, driver/CUDA workarounds) is in `docs/serving.md`.
@@ -92,8 +92,10 @@ agents and proves its plans against a real app."
    sends that back and attempt 2 passes.
 3. **A real Lightning review, about 20 s:** open `20261017-214321-agent-loop-llm` and show
    its revision story: 17 → 1 → 0 failed checks. The fix was adding the missing two-way sync
-   trigger stage. Show the dry-run panel and "Starting database" card on a configuration K
-   run if you have one ingested.
+   trigger stage. Then open configuration K run `20261018-104940-agent-loop-llm` (PASS on
+   attempt 3) to show the "Starting database" card, the dry-run panel with its write probe,
+   and "Plan fixed after dry run" with its SQL diff. Say: "the dry run is not a verdict; the
+   runner still decides."
 
 ### 4. How we built it (2:15-3:45)
 - **Architecture** (README diagram): controller → roles → vLLM. The plan goes to the runner,
@@ -114,9 +116,11 @@ agents and proves its plans against a real app."
     the starting database, and a dry run with a write probe on a throwaway copy.
   - *Driver mismatch:* the Brev image's driver was too old for vLLM's CUDA 13. We fixed it
     with CUDA compat packages and pinned JIT toolchains (`docs/serving.md`).
-- **Honest evaluation:** we pre-registered the multi-agent vs single-agent test. Result: 21/36
-  vs 19/36, p = 0.81, so no difference is established. "We report that rather than
-  cherry-pick."
+- **Honest evaluation:** we pre-registered the multi-agent vs single-agent tests. H
+  (`parallel` vs `single`): 21/36 vs 19/36, p = 0.81. K (`roles` vs `single`, with the dry
+  run): 11/18 vs 11/18, p = 1.0. No difference is established in either. "We report that
+  rather than cherry-pick." One descriptive point you may make, labelled as such: in K,
+  `roles` used about half the tokens per matched review (156k vs 291k).
 
 ### 5. So what (3:45-4:15)
 - "Every team ships migrations. The dangerous ones look fine in CI."

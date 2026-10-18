@@ -1,0 +1,34 @@
+{
+  "plan_id": "a1-ref-fk-staged-pf",
+  "summary": "Add ForeignKey constraint on account_user.referrer_id referencing account_user.id via an SQL expand stage that first sets orphan referrer_id values to NULL before adding the constraint, ensuring data integrity before the new version deploys with state_only migration; both versions concurrently serve traffic with FK enforcement, and the old version is retired after the overlap.",
+  "write_consistency": "Both old and new versions write referrer_id as integer. The FK constraint added in the expand SQL stage enforces referential integrity for all writes from either version. Since existing data contains only valid user IDs and NULLs are permitted, writes from both versions succeed without violation. The note column remains unchanged as the SQL stage only modifies referrer_id.",
+  "revision_notes": "Changed expand_fk stage to include a data cleanup UPDATE before adding the FK constraint, after dry run revealed that orphan referrer_id values (e.g., 1000097) caused FK addition to fail. Previously the plan attempted to add the constraint directly on data with 26 non-NULL referrer_ids that included values not present in account_user.id. The new plan first NULLs orphan values, then adds the validated FK constraint. All other stages and ordering remain the same.",
+  "stages": [
+    {
+      "id": "expand_fk",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Clean orphan referrer_id values and add ForeignKey constraint on account_user.referrer_id referencing account_user.id.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);",
+        "ALTER TABLE account_user ADD CONSTRAINT referrer_id_fk FOREIGN KEY (referrer_id) REFERENCES account_user(id);"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "rollback_check",
+      "kind": "rollback_check",
+      "description": "Optional rollback check: stops the new version, migrates the database back to the previous Django migration, checks notes and the old version, then re-applies the migration and restarts the new version."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire old version; after this stage, only the new version serves traffic."
+    }
+  ]
+}

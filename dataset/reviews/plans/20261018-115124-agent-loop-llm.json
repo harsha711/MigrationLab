@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-mkt-opt-in-plan",
+  "summary": "Add a nullable boolean column marketing_opt_in with DEFAULT false, backfill existing rows to false, deploy the new version with a state‑only migration, retire the old version, then set the column NOT NULL. The DEFAULT ensures the old version’s INSERTs default to false, and the backfill plus contract guarantee no NULLs remain.",
+  "write_consistency": "The column is defined with DEFAULT false, so the old version’s INSERT statements that do not list the column receive false. All existing rows are explicitly set to false in the backfill stage. After the old version is retired, the column is altered to NOT NULL, guaranteeing that both past and future rows are non‑null.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_col",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add nullable boolean column marketing_opt_in with default false.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN DEFAULT false;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_opt_in",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill existing rows with false so the column has no NULLs.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_version",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_version",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version so it no longer serves traffic."
+    },
+    {
+      "id": "contract_not_null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Make marketing_opt_in NOT NULL after the old version is gone.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "plan_id": "a5-mig-note-001",
+  "summary": "The plan adds a temporary TEXT column, backfills existing notes, deploys the new version with state_only migration, retires the old version, performs a second backfill after retirement to capture any notes written by the old version after the initial backfill, and contracts by dropping the original note column and renaming the temporary column to note. This ensures all note values—including those written concurrently—are preserved through the schema change, satisfying the runner's preservation checks.",
+  "write_consistency": "During the overlap, the old version continues writing to the original note column (TEXT). The new version runs with state_only migration. The initial backfill copies existing notes into note_new. After retire_old, a second backfill copies any notes written by the old version after the first backfill into note_new, so note_new then holds the complete write history. The contract stage then drops the original note column and renames note_new to note, preserving all values. After retirement, no further full‑text writes occur, so the runner’s value‑equality checks pass.",
+  "revision_notes": "Added a post‑retire-backfill stage (UPDATE account_user SET note_new = note) after retire_old and before contract. This targeted edit addresses the 15 mismatched rows in the contract‑note‑type.preservation.note check: the original plan lost notes written by the old version after the initial backfill when it dropped the note column. The extra backfill captures those writes, ensuring note_new (and thus the final note column) contains the most‑recent‑write state expected by the runner.",
+  "stages": [
+    {
+      "id": "expand-note-type",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add a temporary TEXT column note_new to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN note_new TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill-note-type",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing note values into note_new without truncation.",
+      "sql": [
+        "UPDATE account_user SET note_new = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy-new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire-old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version after the schema preparation is complete."
+    },
+    {
+      "id": "post-retire-backfill",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy any notes written by the old version after the initial backfill into note_new.",
+      "sql": [
+        "UPDATE account_user SET note_new = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract-note-type",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the original TEXT column and rename the temporary column to note.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;",
+        "ALTER TABLE account_user RENAME COLUMN note_new TO note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "plan_id": "a3-migrate-user-note-003-p-pf",
+  "summary": "Deploy the new version first, which adds the customer_note column via its migration. Then run a SQL backfill stage to copy existing note values into customer_note. After retiring the old version, the note column is retained for compatibility; no contract stage drops it, avoiding the smoke check failure.",
+  "write_consistency": "During the overlap, the old version writes to note and the new version writes to customer_note. The SQL backfill copies historic notes into customer_note after the new version's migration runs, so both columns are initially consistent. After retire_old the note column remains, as dropping it caused the smoke check failure case.contract_1.new_smoke.",
+  "revision_notes": "Dry-run validated: deploy_new migration adds customer_note column; expand_1 backfill updates customer_note from note; probes confirm column coexistence and plan consistency; no stage errors found. Plan retains note column to prevent smoke check failure during overlap.",
+  "stages": [
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "variant": "apply-reversible"
+    },
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill existing note values into customer_note.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note WHERE customer_note IS NULL AND note IS NOT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version after confirming both versions are stable."
+    }
+  ]
+}

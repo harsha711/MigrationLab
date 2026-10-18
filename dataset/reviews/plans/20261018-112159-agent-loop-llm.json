@@ -1,0 +1,43 @@
+{
+  "plan_id": "a5-rename-note-customer-sy-pf",
+  "summary": "Add customer_note column, backfill from note, create a BEFORE INSERT OR UPDATE trigger that synchronizes note and customer_note using IS DISTINCT FROM for NULL-safe comparisons, deploy new version with state_only migration, retire old app, then drop the trigger and note column.",
+  "write_consistency": "A BEFORE INSERT OR UPDATE trigger on account_user copies the written column's value to the other column's value on every insert or update. This ensures that an old-app write to note propagates to customer_note and a new-app write to customer_note propagates to note, so both versions can read the most recently written value and no existing note is lost.",
+  "revision_notes": "The previous plan's trigger used the != operator for column comparisons in the UPDATE branch, which yields NULL (and evaluates to false in IF conditions) when either operand is NULL. Since the starting database has 54 NULL values in the note column, this caused the trigger to skip value propagation during concurrent app traffic, leading to the runner's read-consistency checks failing. This revision replaces != with IS DISTINCT FROM in the UPDATE branch, providing NULL-safe comparison that correctly propagates values whether columns currently hold NULL or non-NULL data. The INSERT branch already used IS NOT NULL and remains unchanged. All other stages and the overall migration flow are preserved.",
+  "stages": [
+    {
+      "id": "expand",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column, backfill from note, and create a trigger that synchronizes the two columns for zero‑downtime consistency.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT;",
+        "UPDATE account_user SET customer_note = note;",
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'INSERT' THEN IF NEW.note IS NOT NULL THEN NEW.customer_note := NEW.note; ELSE NEW.note := NEW.customer_note; END IF; ELSIF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; ELSIF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "description": "Deploy new Saleor version; Django migration is state_only (records Django state, issues no SQL). New app model knows customer_note only, never reads or writes note.",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; old app (note-only) stops serving traffic. After this stage only the new version remains, which uses customer_note."
+    },
+    {
+      "id": "contract",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the synchronization trigger and the now‑unused note column from account_user, completing the rename.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer_note ON account_user;",
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

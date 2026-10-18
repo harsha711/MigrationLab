@@ -1,0 +1,28 @@
+{
+  "plan_id": "a3-uniq-ln-002-rev-fixed",
+  "summary": "Deploy the new version with a state-only migration, retire the old version, then add a unique constraint on last_name after the old version retires. This avoids altering pre-existing last_name values while achieving the unique constraint goal once only the new version serves traffic.",
+  "write_consistency": "During the overlap, the old version serves traffic with unchanged last_name values; the new version enforces uniqueness at the ORM model level. After retire_old, the unique constraint is added to the database, ensuring DB-level uniqueness alongside application-level enforcement.",
+  "revision_notes": "Fixed the add_unique_constraint SQL stage: removed the invalid NOT VALID keyword, which PostgreSQL does not support for UNIQUE constraints. The SQL statement is now `ALTER TABLE account_user ADD CONSTRAINT unique_last_name UNIQUE (last_name);`. This stage is positioned after retire_old per the rule that contract SQL stages must not run while the old version is still running.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version so only the new version continues."
+    },
+    {
+      "id": "add_unique_constraint",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add a unique constraint on the last_name column after old version retirement.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT unique_last_name UNIQUE (last_name);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "plan_id": "a1-uniq-001-pf",
+  "summary": "The database contains 245 rows with 244 distinct non‑NULL last_name values, so exactly one duplicate exists. Adding a UNIQUE constraint on account_user.last_name would fail because the duplicate violates the constraint. Since pre‑existing last_name values must not change during the rollout, there is no way to enforce uniqueness without altering existing data. The dry‑run confirmed that deploying the new version’s migration (which attempts to create a unique index) immediately raises an IntegrityError. Therefore no valid staged rollout can keep both versions correct.",
+  "write_consistency": "none",
+  "revision_notes": "The dry‑run error 'could not create unique index ... Key (last_name)=(Cook) is duplicated' demonstrates that the duplicate row prevents a direct unique constraint. Because existing last_name values may not be modified, the only way to satisfy the change would be to remove or alter the duplicate, which is prohibited. Consequently the plan is rejected.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is running."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "plan_id": "a2-note-migration-reject",
+  "summary": "The change from TEXT to VARCHAR(255) for the User.note column cannot be performed with zero downtime while both app versions serve traffic concurrently, because any SQL truncation of existing notes triggers the runner's preservation.note checks (which expect no unintended data changes), and altering the column type to VARCHAR(255) while the old version is still running risks write failures when the old version inserts notes longer than 255 characters. Therefore, no staged rollout plan can keep both versions correct under the deterministic checks.",
+  "write_consistency": "none",
+  "revision_notes": "Root cause: The runner's preservation.note checks compare note values against a baseline captured before the migration run. Any SQL stage that modifies the note column (e.g., truncating long notes) changes row values relative to that baseline, resulting in a mismatched row observed by the check. Additionally, after the column type is changed to VARCHAR(255), the old Saleor version (which uses TextField) may attempt to insert notes exceeding 255 characters, causing PostgreSQL to reject the insert and break the old version during the overlap. Consequently, any plan that attempts a staged rollout with SQL backfill or column alteration during concurrent service will fail the deterministic checks. The closest feasible plan is a direct deployment with the new version's \"apply\" migration, but this still risks check failures and old‑version write errors, so the plan is rejected.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old"
+    }
+  ]
+}

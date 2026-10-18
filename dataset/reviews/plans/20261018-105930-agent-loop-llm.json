@@ -1,0 +1,28 @@
+{
+  "plan_id": "a4-reject-unique-lastname-v",
+  "summary": "The account_user table has a pre-existing duplicate last_name value (245 rows, 244 distinct non-NULL values), making it impossible to add a DB-level UNIQUE constraint without altering existing last_name values, which violates the deterministic check that pre-existing last_name values must not change. Consequently, no valid staged rollout plan can keep both versions correct under the given constraints.",
+  "write_consistency": "N/A",
+  "revision_notes": "The plan was revised to include at least one SQL stage as required when migration is state_only. The root cause of impossibility is the single duplicate last_name in the original 245-row table: any attempt to enforce uniqueness either changes existing values (failing the 'must not change' check) or causes UNIQUE violations when the new version's ORM encounters the duplicate during concurrent traffic. No SQL stage can add the constraint without data modification, and the duplicate makes acceptance unsafe.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is stable and serving traffic."
+    },
+    {
+      "id": "add_auxiliary_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Add an auxiliary column to account_user to support future schema changes without modifying existing last_name values.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN last_name_unique_mark varchar(256);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "plan_id": "a5-user-note-migration-revi",
+  "summary": "Deploy the new Saleor version with a state-only migration, retire the old version, truncate any existing note values longer than 255 characters using character-level substr (preserving multi-byte boundaries), and then alter the account_user.note column from text to varchar(255).",
+  "write_consistency": "During the overlap between deploy_new and retire_old both versions write to the text column; the new version enforces max_length=255 in Python while the old version writes unrestricted text, both safe because the column type is text. After retire_old the expand SQL stage truncates long notes to 255 characters, after which only the new version serves and its Python and database-level length constraints are both effective.",
+  "revision_notes": "Root cause of previous failures: the earlier plan used byte‑level left()/substr() truncation or cast that could split multi‑byte UTF‑8 characters, causing the runner's preservation check to see mismatched note values for those rows. The revised plan uses char_length‑based filtering with substr(note,1,255) which respects character boundaries, ensuring that after the expand stage every note exceeding 255 characters is safely truncated to exactly 255 characters. This leaves no notes >255 for the contract stage precondition to flag, and the subsequent ALTER COLUMN TYPE varchar(255) proceeds without data-loss surprises. The deploy_new uses state_only so the plan owns the whole schema change.",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this stage only the new version serves traffic against the database."
+    },
+    {
+      "id": "truncate_notes",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Truncate existing note values exceeding 255 characters to 255 characters using character-level substr, so the checker records the truncated values as the most recent write.",
+      "sql": [
+        "UPDATE account_user SET note = substr(note, 1, 255) WHERE char_length(note) > 255;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_schema",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Change account_user.note column from text to varchar(255).",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE varchar(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

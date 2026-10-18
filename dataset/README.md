@@ -17,8 +17,8 @@ uv run python scripts/export_dataset.py                           # writes this 
 |---|---|---|
 | `seed/account_user.jsonl` | 245 | Start state of Saleor's `account_user` table, the table every scenario changes (`id, email, first_name, last_name, note, is_staff, is_active`) |
 | `scenarios/scenarios.json` | 14 | Migration scenario definitions from `migproto/scenarios.py`: the requested change, old/new app versions, per-scenario checks, preparation SQL |
-| `reviews/reviews.jsonl` | 190 | One row per recorded review by Nemotron 3.5 Lightning: scenario, topology, configuration, runner verdict and recommendation, every attempt's failed checks, budget and token/time usage, expected outcome and match |
-| `reviews/plans/<run_id>.json` | 182 | The final staged migration plan (SQL stages) each review submitted, where one was saved |
+| `reviews/reviews.jsonl` | 226 | One row per recorded review by Nemotron 3.5 Lightning: scenario, topology, configuration, runner verdict and recommendation, every attempt's failed checks, budget and token/time usage, expected outcome and match |
+| `reviews/plans/<run_id>.json` | 213 | The final staged migration plan (SQL stages) each review submitted, where one was saved |
 
 ## How the data was made
 
@@ -45,7 +45,7 @@ upstream Saleor bug. Each scenario's old and new app versions are patches in `pa
 - **Serving:** vLLM 0.27.1 on Brev H100s.
 - **Verdicts:** produced only by the deterministic runner, which executes each plan against
   the old and new app versions on a fresh copy of the seed.
-- **`configuration`:** the measurement setup (A-I, M, sweeps). The settings for each are in
+- **`configuration`:** the measurement setup (A-I, K, M, sweeps). The settings for each are in
   `docs/results.md`. `SMOKE` marks smoke tests, which are not results.
 - **`infrastructure_failure`:** the run is named in its batch's `INFRA-NOTE`.
 - **`expected` / `matches_expected`:** scored against manual labels in
@@ -54,7 +54,8 @@ upstream Saleor bug. Each scenario's old and new app versions are patches in `pa
 - Run directories also hold full transcripts and logs. They are not included here because they
   contain machine-specific paths.
 
-Snapshot: exported 2026-10-18. Configuration K (running at export time) is not included.
+Snapshot: exported 2026-10-18, after configuration K finished. The cancelled configuration J
+(no review finished) and the unrun K0 and KB have no rows.
 
 ## Limitations
 
@@ -62,6 +63,7 @@ Snapshot: exported 2026-10-18. Configuration K (running at export time) is not i
   scale.
 - **Variable settings:** budgets and prompts differ between configurations, so compare
   topologies only within one configuration.
-- **Cross-check:** configuration H here reproduces `docs/results.md`: 21 of 36 matched for
-  `parallel`, 19 of 36 for `single`. Configuration I includes the reviews from its cancelled
+- **Cross-check:** the pre-registered results reproduce from this file alone, matching
+  `docs/results.md`: configuration H, 21 of 36 matched for `parallel` and 19 of 36 for
+  `single`; configuration K, 11 of 18 for both `roles` and `single`. Configuration I includes the reviews from its cancelled
   second repetition (`batch_index` above 18), which its analysis excludes.

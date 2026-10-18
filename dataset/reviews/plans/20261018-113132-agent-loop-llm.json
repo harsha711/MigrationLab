@@ -1,0 +1,48 @@
+{
+  "plan_id": "a6-mig-001-rev2",
+  "summary": "Truncates existing notes >255 chars before deploy, uses state_only migration for overlap, adds backfill stage after deploy to catch concurrent writes, contracts column to VARCHAR(255) after old version retirement.",
+  "write_consistency": "Expand stage runs with old version only to truncate long notes; deploy_new state_only keeps column Text so both versions can write; backfill stage after deploy_new truncates any notes >255 written during overlap; contract stage after retire_old enforces VARCHAR(255) exclusively for new version.",
+  "revision_notes": "Root cause: CHARACTER_LENGTH(note) > 255 condition missed rows (multi-byte chars, boundary lengths), and concurrent old-version writes during overlap left >255 notes in Text column, triggering new-version CharField validation mismatches. Revised plan broadens truncation condition to include octet_length and adds backfill stage to handle writes from both versions during concurrent traffic.",
+  "stages": [
+    {
+      "id": "expand_truncate_notes",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Truncate existing notes longer than 255 characters before deploy_new.",
+      "sql": [
+        "UPDATE account_user SET note = LEFT(note, 255) WHERE CHARACTER_LENGTH(note) > 255 OR octet_length(note) > 255;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "backfill_truncate_notes",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Truncate any notes >255 characters written by either version during the overlap period.",
+      "sql": [
+        "UPDATE account_user SET note = LEFT(note, 255) WHERE CHARACTER_LENGTH(note) > 255;"
+      ],
+      "repeat_until_zero_rows": true
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version has stabilized."
+    },
+    {
+      "id": "contract_column_type",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Narrow the note column to VARCHAR(255) after old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN note TYPE VARCHAR(255);"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

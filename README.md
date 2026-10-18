@@ -125,7 +125,8 @@ review request -> investigator (searches old-version code) -> planner (staged SQ
 ## Data and provenance
 
 All data we created is published in [`dataset/`](dataset/README.md): the 245 seed rows, the 14
-scenario definitions, and all 190 recorded Lightning reviews with their final plans. Its
+scenario definitions, and all 226 recorded Lightning reviews (configurations A-K, failures
+included) with their 213 saved final plans. Its
 datasheet explains the method, and `scripts/export_dataset.py` regenerates it.
 
 | Data | Provenance |
@@ -151,6 +152,12 @@ Full tables, including every failed review, are in [docs/results.md](docs/result
   the expected outcome in 21 of 36 reviews, `single` in 19 of 36, across 9 scenarios.
   Fisher exact p = 0.81, so **no difference is established**. We do not claim multi-agent
   beats single-agent.
+- **Pre-registered comparison, configuration K** (`roles` vs `single`, both with the schema
+  profile and the dry run with write probe): 11 of 18 vs 11 of 18 matched, p = 1.0, no
+  difference. `roles` used about half the tokens per matched review (156k vs 291k).
+  Descriptively, runner attempts that halted on a stage or migration error fell from 73 of
+  281 in H to 6 of 67 in K. The configurations differ in more than the dry run, so this is
+  not its effect alone.
 
 ## Known limitations
 
@@ -161,9 +168,9 @@ Full tables, including every failed review, are in [docs/results.md](docs/result
 - **Reliability:** about half of reviews reach the expected outcome (40 of 72 in
   configuration H). Three scenarios never matched the expected outcome in H (raw-SQL
   rename, shortening a column, the irreversible migration).
-- **Topology comparisons:** with 36 reviews per arm, the comparisons are underpowered.
-- **Contract stages:** 18 of 40 PASSes in configuration H left the old column in place (no
-  contract stage). The runner accepts this, so a PASS does not always mean the migration was
+- **Topology comparisons:** with 18-36 reviews per arm, the comparisons are underpowered.
+- **Contract stages:** 18 of 40 PASSes in configuration H, and 8 of 23 in K, left the old
+  column in place (no contract stage). The runner accepts this, so a PASS does not always mean the migration was
   finished.
 - **SQL guard:** a denylist on disposable local databases, not a security sandbox.
 - **NeMo Gym:** the resources server is implemented and tested with scripted plans, but has
@@ -171,8 +178,10 @@ Full tables, including every failed review, are in [docs/results.md](docs/result
 
 ## Next steps
 
-- Measure whether the dry-run and write-probe tools improve outcomes (configuration K is
-  running), and require a contract stage when a plan claims a finished migration.
+- Isolate the dry run's effect with the pre-registered K0 ablation (K without the dry run;
+  not run), and require a contract stage when a plan claims a finished migration.
+- Compare against one big model on the same task (configuration KB, gpt-oss-120b `single`,
+  pre-registered, not run).
 - Run NeMo Gym rollouts and fine-tune Lightning on runner-verified trajectories.
 - Add concurrent old/new writers and lock-wait measurements.
 - Support more apps and frameworks by turning scenario definitions into data.

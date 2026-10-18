@@ -1,0 +1,47 @@
+{
+  "plan_id": "a1-ref-fk-001-pf",
+  "summary": "Deploy new version with state_only migration, add temporary column to preserve referrer_id data, retire old version, clean orphan referrer_id values to NULL, add FK constraint to referrer_id referencing account_user, and drop temporary column.",
+  "write_consistency": "During the overlap phase (deploy_new to retire_old), the old version continues writing referrer_id as integer; the new version's save() omits referrer_id because its model does not know the column (state_only migration), so PostgreSQL assigns the column's database default (NULL). The temporary column referrer_tmp is unaffected by the old version. Orphan values are cleared after old version retires before the FK constraint is added.",
+  "revision_notes": "Added orphan cleanup UPDATE and reordered stages: orphan cleanup and FK addition now occur after retire_old in the contract stage to avoid race conditions with the old version writing referrer_id.",
+  "stages": [
+    {
+      "id": "dn1",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "s1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add temporary column referrer_tmp to safely preserve referrer_id values during overlap.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN referrer_tmp BIGINT NULL;"
+      ]
+    },
+    {
+      "id": "s2",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy existing referrer_id values into referrer_tmp.",
+      "sql": [
+        "UPDATE account_user SET referrer_tmp = referrer_id;"
+      ]
+    },
+    {
+      "id": "r1",
+      "kind": "retire_old",
+      "description": "Retire the old version."
+    },
+    {
+      "id": "s3",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Clean orphan referrer_id values to NULL, add FK constraint, and drop temporary column.",
+      "sql": [
+        "UPDATE account_user SET referrer_id = NULL WHERE referrer_id IS NOT NULL AND referrer_id NOT IN (SELECT id FROM account_user);",
+        "ALTER TABLE account_user ADD CONSTRAINT fk_referrer FOREIGN KEY (referrer_id) REFERENCES account_user(id);",
+        "ALTER TABLE account_user DROP COLUMN referrer_tmp;"
+      ]
+    }
+  ]
+}

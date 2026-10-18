@@ -1,0 +1,48 @@
+{
+  "plan_id": "a1-so-001",
+  "summary": "Add the marketing_opt_in boolean NOT NULL DEFAULT False column to account_user via SQL expand stage, backfill to ensure no NULLs, deploy new version with state_only migration, retire old version, then contract stage. The DB DEFAULT False ensures old version INSERTs receive False, preventing NULLs during concurrent traffic.",
+  "write_consistency": "The column is defined with a database-level DEFAULT False, so INSERT statements from the old version that omit the column will populate it with False. The new version explicitly sets the field, and all existing rows are set to False in the backfill stage. This keeps writes consistent across both versions during the overlap.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "expand_001",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add marketing_opt_in column with NOT NULL DEFAULT False",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_001",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Backfill marketing_opt_in to False for safety",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = FALSE;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_001",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old_001",
+      "kind": "retire_old",
+      "description": "Retire the old Saleor version; after this only the new version serves traffic."
+    },
+    {
+      "id": "contract_001",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Contract step to confirm column existence after retire_old",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = marketing_opt_in;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

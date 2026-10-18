@@ -1,0 +1,69 @@
+{
+  "plan_id": "a3-rename-user-note-001-pf-pf",
+  "summary": "Add customer_note column, backfill, create DB trigger to sync note and customer_note, deploy new version with apply migration, retire old, drop trigger, then drop note column.",
+  "write_consistency": "PostgreSQL trigger keeps note and customer_note values identical across concurrent old and new version writes, so reads from either column return the most recent write.",
+  "revision_notes": "Fixed the sync_1 SQL stage: replaced the PL/pgSQL function body with proper END IF delimiters instead of bare END, which was causing the syntax error during the dry run. All other stages (expand_1, backfill_1, deploy_new_1 with apply, retire_old_1, drop_trigger_1, contract_1) remain unchanged from the previous successful attempt.",
+  "stages": [
+    {
+      "id": "expand_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add customer_note column to account_user.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN customer_note TEXT NULL;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "backfill_1",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Copy note values into customer_note before deploy_new.",
+      "sql": [
+        "UPDATE account_user SET customer_note = note;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "sync_1",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Create trigger to keep note and customer_note in sync.",
+      "sql": [
+        "CREATE OR REPLACE FUNCTION sync_note_customer_note() RETURNS trigger AS $$ BEGIN IF TG_OP = 'UPDATE' THEN IF NEW.note IS DISTINCT FROM OLD.note THEN NEW.customer_note := NEW.note; END IF; IF NEW.customer_note IS DISTINCT FROM OLD.customer_note THEN NEW.note := NEW.customer_note; END IF; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql;",
+        "CREATE TRIGGER sync_note_customer_note AFTER UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION sync_note_customer_note();"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "deploy_new_1",
+      "kind": "deploy_new",
+      "migration": "apply"
+    },
+    {
+      "id": "retire_old_1",
+      "kind": "retire_old",
+      "description": "Retire the old version after the new version is confirmed live and data is synced."
+    },
+    {
+      "id": "drop_trigger_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the sync trigger before removing the note column.",
+      "sql": [
+        "DROP TRIGGER IF EXISTS sync_note_customer_note ON account_user;"
+      ],
+      "repeat_until_zero_rows": false
+    },
+    {
+      "id": "contract_1",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Remove the note column after old version retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}

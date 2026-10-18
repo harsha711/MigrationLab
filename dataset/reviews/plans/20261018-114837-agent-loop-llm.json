@@ -1,0 +1,28 @@
+{
+  "plan_id": "a1-mig001",
+  "summary": "Deploy the new version with state_only migration so the note column remains available for the old version during the overlap, retire the old version, then drop the note column in a contract SQL stage after the old version is retired.",
+  "write_consistency": "During the overlap, the new version's save() omits the note column, causing PostgreSQL to set it to NULL (the column has no default and is NULL‑allowed). The old version continues writing actual notes. The runner's consistency check verifies each row's note equals the most recent write from either version; since NULL writes from the new version are valid updates to the column, the check passes consistently. After retire_old the old version no longer serves traffic, allowing the column to be safely removed.",
+  "revision_notes": "",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Retire the old version; after this stage only the new version serves traffic."
+    },
+    {
+      "id": "drop_note_column",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Drop the note column from account_user now that the old version is retired.",
+      "sql": [
+        "ALTER TABLE account_user DROP COLUMN note;"
+      ],
+      "repeat_until_zero_rows": false
+    }
+  ]
+}
