@@ -67,6 +67,9 @@ def test_human_feedback_is_marked_as_human_assisted():
            "human_feedback": [{"kind": "issue", "text": "keep old readers",
                                "author": "reviewer", "at": "2026-10-18T00:00:00Z"}]}
     assert load_review_request(raw, "llm")["source_tags"] == ["human-assisted"]
+    raw["human_feedback"][0]["at"] = "tomorrow"
+    with pytest.raises(ValueError, match="ISO timestamp"):
+        load_review_request(raw, "llm")
 
 
 def test_rename_scenario_text_is_unchanged():

@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 from .. import scenarios
@@ -105,6 +106,11 @@ def load_review_request(value: str | Path | dict | None, source: str,
             or not isinstance(item.get("author"), str) or not isinstance(item.get("at"), str)
             for item in feedback):
         raise ValueError("human_feedback must contain kind, text, author and at")
+    for item in feedback:
+        try:
+            datetime.fromisoformat(item["at"].replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("human_feedback.at must be an ISO timestamp") from exc
     if feedback:
         request["source_tags"] = sorted(set(request.get("source_tags", [])) | {"human-assisted"})
     continuation = request.get("continue_from")
