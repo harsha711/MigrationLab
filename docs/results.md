@@ -432,6 +432,11 @@ changes H's verdict, and H's verdict never borrows from it.
 review finished, because the instance was handed to a teammate for another experiment. No
 results; the code (`6654bb0`, branch `feat/config-i`) is tested (348 passed) and unrun.
 
+**Status (04:20):** restarted from scratch on a third Brev H100, `human-brown-mollusk`
+(Hyperstack H100 PCIe, driver 570, 28 vCPU, 177 GB RAM, event credits; `defensive-green-cicada`
+was deleted). Same procedure, code (`d343bb5`, same code as `6654bb0`), serving script, budgets,
+scenarios and 8 workers; the runner again runs on the instance. The stopped 02:15 batch is not used.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
