@@ -1,7 +1,10 @@
 """Budgeted Investigator -> Planner -> Tester controller."""
 
+import contextvars
+import copy
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from .. import plans, runner_api
 from ..config import PROPOSALS, WORKTREES
@@ -13,6 +16,8 @@ from .llm import LLM, LLMError
 from .request import load_review_request, scenario_text
 
 MAX_REVISIONS = 1
+# Topology `parallel`: independent planners per round, each with its own isolated context.
+PARALLEL_PLANNERS = 3
 
 
 def _tag(obj: dict, attempt: int) -> dict:
@@ -60,12 +65,13 @@ def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
     evidence that contradicted it, and a controller-picked "best attempt" (most passed checks)
     that pointed at a regression instead of the attempt that halted early but was closer."""
     out = _evidence(result, failed_checks)
-    out["tester_hypothesis"] = {
-        "note": ("Model-written diagnosis of the runner evidence above. It is not verified; "
-                 "where it disagrees with the runner evidence (expected, observed, schema, "
-                 "step_id), the runner evidence is right."),
-        "report": tester_report,
-    }
+    if tester_report is not None:
+        out["tester_hypothesis"] = {
+            "note": ("Model-written diagnosis of the runner evidence above. It is not verified; "
+                     "where it disagrees with the runner evidence (expected, observed, schema, "
+                     "step_id), the runner evidence is right."),
+            "report": tester_report,
+        }
     if earlier:
         out["earlier_attempts"] = {
             "note": ("Runner facts for each earlier executed attempt (your latest plan is "
@@ -207,6 +213,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "solution_origin": solution_origin,
             "scenario": scenario_id,
             "history_compaction": single.POLICY if topology == "single" and llm else None,
+            "parallel_planners": PARALLEL_PLANNERS if topology == "parallel" else None,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -248,9 +255,10 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
         scenario = scenario_text(review)
         plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
-        def call(role: str, fn, *args, **kwargs):
-            if llm:
-                llm.trace_name = role
+        def call(role: str, fn, *args, client: LLM | None = None, **kwargs):
+            client = client or llm
+            if client:
+                client.trace_name = role
             transcript_role = "single" if memory is not None else role
             tx = transcripts.setdefault(transcript_role, [])
             compaction = None
@@ -259,7 +267,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 kwargs.update(history=history, system=single.SYSTEM)
             first = len(tx)
             try:
-                out = fn(source, llm, *args, tx, **kwargs)
+                out = fn(source, client, *args, tx, **kwargs)
             finally:
                 if memory is not None:
                     memory.end(role)
@@ -283,6 +291,14 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
         else:
             log.event("investigator_score", provenance=prov, skipped=True,
                       msg=f"no investigator ground truth for scenario {scenario_id}; not scored")
+
+        if topology == "parallel":
+            last_result, reason = _run_parallel(
+                log, prov, solution_origin, call, llm, investigation, plan_kwargs, test_kwargs,
+                sfacts, scenario_id, budget, attempts)
+            final_ok = bool(last_result and last_result["ok"])
+            return _finish(final_ok, "PASS" if final_ok else "FAIL", source, topology, model,
+                           score, attempts, budget, reason=reason, scenario=scenario_id)
 
         plan_obj = _tag(call("planner-1", roles.plan, investigation, **plan_kwargs), 1)
         _validate_plan(plan_obj, sfacts, log, prov, 1)
@@ -376,6 +392,155 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
     final_ok = bool(last_result and last_result["ok"])
     return _finish(final_ok, "PASS" if final_ok else "FAIL", source, topology, model,
                    score, attempts, budget, scenario=scenario_id)
+
+
+def _parallel(jobs: list) -> list[tuple]:
+    """Run zero-argument callables at once (vLLM batches the requests); returns one
+    (value, exception) pair per job, in order. Each thread gets a copy of the caller's context
+    so tracing spans stay under the review's trace."""
+    if not jobs:
+        return []
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, job) for job in jobs]
+        out = []
+        for future in futures:
+            try:
+                out.append((future.result(), None))
+            except Exception as exc:  # noqa: BLE001 - sorted by the caller
+                out.append((None, exc))
+    for _, exc in out:
+        if isinstance(exc, BudgetExceeded):
+            raise exc
+    return out
+
+
+def _run_parallel(log: RunLog, prov: str, solution_origin: str, call, llm: LLM | None,
+                  investigation: dict, plan_kwargs: dict, test_kwargs: dict, sfacts,
+                  scenario_id: str, budget: ReviewBudget,
+                  attempts: list[dict]) -> tuple[dict | None, str | None]:
+    """Topology `parallel` (decision D5): PARALLEL_PLANNERS planners per round, each an
+    isolated role call with its own lineage. Every valid plan gets its own tester proposal
+    and is executed by the runner, one at a time; the first runner PASS ends the review. A
+    revision sees its own runner evidence plus the runner facts and plans of the other
+    planners' attempts in the same round, never their model-written diagnosis (there is no
+    tester report: on Lightning a wrong tester diagnosis misled revisions, D3). Shares the
+    review budget with every other topology. Returns (last runner result, FAIL reason)."""
+    k = PARALLEL_PLANNERS
+    labels = "abcdefgh"[:k]
+    # One client per planner (same endpoint and shared budget) so each thread names its own
+    # role in traces.
+    clients = [copy.copy(llm) if llm else None for _ in range(k)]
+    lineages = [{"plan": None, "feedback": None, "earlier": []} for _ in range(k)]
+    log.event("parallel_planners", provenance=prov, planners=k,
+              msg=f"{k} planners per round; the runner executes every valid plan")
+    attempt_no = 0
+    last_result = None
+    for rnd in range(1, budget.max_revisions + 2):
+        def plan_job(i: int):
+            lin = lineages[i]
+            extra = ({} if lin["plan"] is None
+                     else {"feedback": lin["feedback"], "previous": lin["plan"]})
+            return lambda: call(f"planner-{rnd}{labels[i]}", roles.plan, investigation,
+                                client=clients[i], **extra, **plan_kwargs)
+
+        candidates = []
+        for i, (obj, exc) in enumerate(_parallel([plan_job(i) for i in range(k)])):
+            if exc is None:
+                candidates.append((i, obj))
+            elif isinstance(exc, (LLMError, plans.PlanError)):
+                log.event("candidate_invalid", provenance=prov, round=rnd, planner=labels[i],
+                          error=str(exc)[:500])
+            else:
+                raise exc
+        if not candidates:
+            if rnd == 1:
+                raise LLMError("no parallel planner produced a valid plan")
+            log.event("revision_invalid", provenance=prov, round=rnd,
+                      error="no parallel planner produced a valid revision")
+            return last_result, "revision invalid: no parallel planner produced a valid revision"
+
+        def test_job(i: int, obj: dict):
+            return lambda: call(f"tester-propose-{rnd}{labels[i]}", roles.propose_tests, obj,
+                                client=clients[i], **test_kwargs)
+
+        proposals = _parallel([test_job(i, obj) for i, obj in candidates])
+        executed = []
+        for (i, plan_obj), (tests, exc) in zip(candidates, proposals):
+            attempt_no += 1
+            lin = lineages[i]
+            parent = lin["plan"]["plan_id"] if lin["plan"] else None
+            plan_obj = _tag(plan_obj, attempt_no)
+            _validate_plan(plan_obj, sfacts, log, prov, attempt_no)
+            log.event("proposal", provenance=prov, role="planner", attempt=attempt_no,
+                      plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
+                      parent_plan_id=parent, recommendation=plan_obj.get("recommendation"),
+                      round=rnd, planner=labels[i])
+            if exc is not None:
+                if not isinstance(exc, (LLMError, plans.PlanError)):
+                    raise exc
+                # The mandatory runner checks still run; only the extra cases are missing.
+                log.event("tester_invalid", provenance=prov, attempt=attempt_no,
+                          error=str(exc)[:500])
+                tests = None
+            else:
+                plans.validate_tests(tests)
+                if isinstance(tests, dict):
+                    tests["provenance"] = prov
+                log.event("proposal", provenance=prov, role="tester", attempt=attempt_no,
+                          plan_id=plan_obj["plan_id"], solution_origin=solution_origin)
+            log.event("attempt", provenance=prov, name=f"attempt {attempt_no}",
+                      plan_id=plan_obj.get("plan_id"), round=rnd, planner=labels[i])
+            check_start = len(log.checks)
+            result = runner_api.execute_plan(
+                scenario_facts.runner_plan(plan_obj),
+                run_context=runner_api.RunContext(log, provenance=prov, attempt=attempt_no),
+                extra_tests=tests, scenario=scenario_id).as_dict()
+            last_result = result
+            failures = _failure_records(log, check_start)
+            attempts.append({
+                "attempt": attempt_no,
+                "round": rnd,
+                "planner": labels[i],
+                "plan_id": result.get("plan_id"),
+                "ok": result["ok"],
+                "halted": result.get("halted"),
+                "failed_checks": [c["name"] for c in failures],
+                "tester_summary": None,
+                "planner_recommendation": plan_obj.get("recommendation"),
+                "runner_recommendation": result.get("recommendation"),
+            })
+            tracing.attempt(attempt_no, result, attempts[-1]["failed_checks"])
+            log.event("attempt_result", provenance="runner", name=f"attempt {attempt_no}",
+                      status="PASS" if result["ok"] else "FAIL",
+                      failed=attempts[-1]["failed_checks"], round=rnd, planner=labels[i])
+            if result["ok"]:
+                return result, None
+            executed.append((i, attempt_no, plan_obj, result, failures))
+        if rnd > budget.max_revisions:
+            break
+        if all(p.get("recommendation") == "reject" and r.get("recommendation") == "reject"
+               for _, _, p, r, _ in executed):
+            log.event("revision_skipped", provenance=prov, round=rnd,
+                      msg="every planner recommended reject and the runner rejected each plan")
+            break
+        records = {i: _attempt_record(n, p, r, f) for i, n, p, r, f in executed}
+        for i, n, plan_obj, result, failures in executed:
+            lin = lineages[i]
+            others = [dict(records[j], author="another planner, same round")
+                      for j in records if j != i]
+            lin["feedback"] = _feedback(result, None, failures,
+                                        [dict(r) for r in lin["earlier"]] + others)
+            lin["earlier"].append(records[i])
+            lin["plan"] = plan_obj
+        # A planner whose reply was invalid this round keeps its lineage and retries; one
+        # that has no executed plan yet continues from another planner's.
+        done = [i for i, *_ in executed]
+        for n, lin in enumerate(lineages):
+            if lin["plan"] is None:
+                src = lineages[done[n % len(done)]]
+                lin.update(plan=src["plan"], feedback=src["feedback"],
+                           earlier=list(src["earlier"]))
+    return last_result, None
 
 
 def _validate_plan(plan_obj: dict, sfacts, log: RunLog | None = None,

@@ -1,7 +1,11 @@
 """Shared model-call budget for one migration review."""
 
 from dataclasses import asdict, dataclass, field
+import threading
 import time
+
+# Parallel planners (topology `parallel`) share one budget across threads.
+_LOCK = threading.RLock()
 
 
 class BudgetExceeded(RuntimeError):
@@ -57,12 +61,17 @@ class ReviewBudget:
             self._exhaust(f"wall-time budget exhausted ({self.max_wall_seconds}s)")
 
     def begin_call(self) -> None:
-        self.check_wall()
-        if self.model_calls >= self.max_model_calls:
-            self._exhaust(f"model-call budget exhausted ({self.max_model_calls})")
-        self.model_calls += 1
+        with _LOCK:
+            self.check_wall()
+            if self.model_calls >= self.max_model_calls:
+                self._exhaust(f"model-call budget exhausted ({self.max_model_calls})")
+            self.model_calls += 1
 
     def finish_call(self, usage: dict | None, seconds: float, valid: bool = False) -> None:
+        with _LOCK:
+            self._finish_call(usage, seconds, valid)
+
+    def _finish_call(self, usage: dict | None, seconds: float, valid: bool) -> None:
         self.model_seconds += seconds
         usage = usage or {}
         prompt = int(usage.get("prompt_tokens") or 0)

@@ -20,6 +20,9 @@ EXPECTED = ROOT / "proposals" / "manual" / "scenarios"
 
 
 def target(scenario: str) -> dict:
+    if scenario == "rename-note":
+        # No manual file: the documented target is the staged rollout (REPORT.md, plan v2).
+        return {"verdict": "PASS", "recommendations": ["staged_rollout"]}
     plans = json.loads((EXPECTED / f"{scenario}.json").read_text())["plans"]
     passing = sorted({v["recommendation"] for v in plans.values() if v["verdict"] == "PASS"})
     if passing:
@@ -38,6 +41,7 @@ def main(dirs):
           "(failed checks) | Target | Match |")
     print("|---|---|---|---|---|---|---|---|---|")
     matched = scored = 0
+    per: dict[str, list[int]] = {}
     for r in rows:
         sc = r.get("scenario", "rename-note")
         run_id = r.get("run_id") or ""
@@ -52,11 +56,16 @@ def main(dirs):
             ok = s.get("verdict") == "PASS"
         scored += 1
         matched += ok
+        tally = per.setdefault(r["topology"], [0, 0])
+        tally[0] += ok
+        tally[1] += 1
         attempts = " → ".join(str(len(a["failed_checks"])) for a in s.get("attempts", []))
         print(f"| {sc} | {r['topology']} | `{run_id}` | {s.get('verdict')} | {rec} | "
               f"{s.get('recommendation')} | {attempts} | {tgt['verdict']} "
               f"{'/'.join(tgt['recommendations'])} | {'yes' if ok else 'no'} |")
     print(f"\nMatched {matched} of {scored} scored runs.")
+    for topology, (m, n) in sorted(per.items()):
+        print(f"- {topology}: matched {m} of {n}")
 
 
 if __name__ == "__main__":

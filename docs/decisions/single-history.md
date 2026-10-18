@@ -98,3 +98,33 @@ trailing failed checks with a count, so the prompt slice never cuts the JSON.
   `20261017-224014` ended ERROR because planner-1's three replies failed three different
   validations, the last one the backfill pre-check; that plan would otherwise have reached the
   runner. Hard errors (schema, variant, recommendation) still fail the call.
+
+## D5. Topology `parallel`: independent planners, the runner chooses
+
+`agent_topology: "parallel"` (`loop._run_parallel`, `PARALLEL_PLANNERS = 3`). Investigator as in
+`roles`, then rounds:
+
+1. **Plan:** three planner calls at once, one per lineage (a, b, c), each an isolated role call
+   on the shared endpoint (vLLM batches them). Round 1 has no feedback; temperature 1.0 gives
+   different plans. No fixed seeds, so repeated reviews stay independent samples.
+2. **Test:** one tester proposal per valid plan, also at once. An invalid tester reply drops only
+   the extra cases (logged `tester_invalid`); the mandatory runner checks still run.
+3. **Execute:** the runner executes the valid plans one at a time, each as its own attempt (`a1`,
+   `a2`, ...). The first runner PASS ends the review. Every executed attempt stays in
+   `summary.json` with `round` and `planner`.
+4. **Revise:** each planner revises its own last plan from its runner evidence, plus the runner
+   facts and plans of the other planners' attempts in the same round (`earlier_attempts`,
+   `author: "another planner, same round"`). An invalid reply keeps the lineage for the next
+   round; a lineage with no executed plan continues from another's.
+
+- **No tester report:** revisions get runner facts only. In configuration E (`220028`) a wrong
+  tester diagnosis led a revision to move a correct trigger (D3). `roles` and `single` keep it.
+- **No controller ranking:** the controller never picks a "best" plan (D3: ranking by passed
+  checks pointed at a regression). Each planner sees all the facts and chooses.
+- **Same budget:** the review budget (calls, tokens, wall) is shared by all threads and is the
+  same for every topology in a comparison, so `parallel` buys breadth with the same tokens
+  `single` spends on one growing history.
+- **Why:** on Lightning, rename reviews got stuck repeating one wrong idea (F `225329`: the same
+  refused trigger three times), and `single` ran out of tokens in 5 of the last 6 G/M reviews.
+  Separate contexts keep each call small; three lineages explore in parallel.
+- **Not changed:** runner checks, verdicts, the retirement gate, pre-checks and prompts.

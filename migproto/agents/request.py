@@ -8,7 +8,7 @@ from .. import scenarios
 from ..config import SALEOR_COMMIT
 
 CONTRACT_VERSION = "migproto.contracts/v1"
-TOPOLOGIES = {"roles", "single"}
+TOPOLOGIES = {"roles", "single", "parallel"}
 
 DEFAULT_REQUEST = {
     "contract_version": CONTRACT_VERSION,

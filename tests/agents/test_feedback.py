@@ -157,3 +157,27 @@ def test_sql_syntax_precheck_uses_the_postgresql_parser():
                 "EXIT WHEN NOT FOUND; END LOOP; END $$"):
         with pytest.raises(plans.PlanError, match="PostgreSQL syntax error"):
             facts.check_sql_syntax(plan(bad))
+
+
+def test_trigger_when_precheck():
+    import pytest
+    from migproto import plans
+    from migproto.agents import facts
+
+    def plan(*sql):
+        return {"stages": [{"id": "e", "kind": "sql", "phase": "expand", "sql": list(sql)}]}
+
+    head = "CREATE TRIGGER t BEFORE {} ON account_user {} WHEN ({}) EXECUTE FUNCTION f()"
+    for ok in (head.format("UPDATE", "FOR EACH ROW", "OLD.note IS DISTINCT FROM NEW.note"),
+               head.format("INSERT", "FOR EACH ROW", "NEW.customer_note IS NULL"),
+               head.format("DELETE", "FOR EACH ROW", "OLD.note IS NOT NULL"),
+               "CREATE TRIGGER t BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW "
+               "EXECUTE FUNCTION f()"):
+        facts.check_trigger_when(plan(ok))
+    # Shapes PostgreSQL refused on Lightning (runs 225329, 220035).
+    for bad, match in ((head.format("INSERT OR UPDATE", "FOR EACH ROW",
+                                    "OLD.note IS DISTINCT FROM NEW.note"), "INSERT"),
+                       (head.format("DELETE", "FOR EACH ROW", "NEW.note IS NULL"), "DELETE"),
+                       (head.format("UPDATE", "FOR EACH STATEMENT", "true"), "statement-level")):
+        with pytest.raises(plans.PlanError, match=match):
+            facts.check_trigger_when(plan(bad))

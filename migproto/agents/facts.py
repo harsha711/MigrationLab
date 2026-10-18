@@ -357,9 +357,58 @@ def check_sql_syntax(plan_obj: dict) -> None:
                 ) from None
 
 
+# pg_trigger tgtype event bits (PostgreSQL's TRIGGER_TYPE_INSERT, _DELETE).
+_TRIG_INSERT, _TRIG_DELETE = 4, 8
+
+
+def check_trigger_when(plan_obj: dict) -> None:
+    """Agent-side pre-check for trigger WHEN clauses PostgreSQL refuses when the trigger is
+    created: OLD in the WHEN of a trigger that fires on INSERT, NEW in one that fires on
+    DELETE, and any WHEN on a statement-level trigger. On Lightning these stopped whole attempts
+    (F `225329` repeated `INSERT trigger's WHEN condition cannot reference OLD values` three
+    times). Unparseable SQL is left to the syntax pre-check."""
+    from pglast import ast, parser, visitors
+
+    for st in plan_obj.get("stages", []):
+        for i, sql in enumerate(st.get("sql") or []):
+            try:
+                stmts = [raw.stmt for raw in parser.parse_sql(sql)]
+            except parser.ParseError:
+                continue
+            for stmt in stmts:
+                if not isinstance(stmt, ast.CreateTrigStmt) or stmt.whenClause is None:
+                    continue
+                where = f"stage {st.get('id')!r}, sql[{i}]"
+                if not stmt.row:
+                    raise PreCheckError(
+                        f"{where}: a statement-level trigger cannot have a WHEN condition. "
+                        "Use FOR EACH ROW, or test the condition inside the trigger function")
+                refs = set()
+
+                class Refs(visitors.Visitor):
+                    def visit_ColumnRef(self, ancestors, node):
+                        first = node.fields[0]
+                        if isinstance(first, ast.String):
+                            refs.add(first.sval.lower())
+
+                Refs()(stmt.whenClause)
+                if stmt.events & _TRIG_INSERT and "old" in refs:
+                    raise PreCheckError(
+                        f"{where}: a trigger that fires on INSERT cannot reference OLD in its "
+                        "WHEN condition (PostgreSQL refuses to create it). Split it into an "
+                        "INSERT trigger and an UPDATE trigger, or drop the WHEN and compare "
+                        "inside the function using TG_OP")
+                if stmt.events & _TRIG_DELETE and "new" in refs:
+                    raise PreCheckError(
+                        f"{where}: a trigger that fires on DELETE cannot reference NEW in its "
+                        "WHEN condition. Split the trigger, or compare inside the function "
+                        "using TG_OP")
+
+
 def run_prechecks(plan_obj: dict) -> None:
     check_sql_quoting(plan_obj)
     check_sql_syntax(plan_obj)
+    check_trigger_when(plan_obj)
     check_backfill_terminates(plan_obj)
 
 

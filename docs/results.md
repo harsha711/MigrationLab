@@ -286,6 +286,36 @@ the same time).
 **Next (not in F, on branch `fix/next`):** a PostgreSQL syntax pre-check (`pglast`). On the same
 203 replies it flagged all 18 stages that failed with a syntax error and none of the 181 others.
 
+## Configuration H: `parallel` versus `single` (pre-registered)
+
+Written and committed before the batch started; the results will be added below this
+paragraph without changing it.
+
+- **Arms:** `parallel` (D5: three planners per round, the runner executes every valid plan)
+  and `single` (D1 compacted history). Same model, serving, sampling (temperature 1.0, top_p
+  0.95, `THINKING_BUDGET=16384`), prompts, pre-checks (quoting, syntax, trigger `WHEN`,
+  backfill) and plan rules (no-filler, `31c2cf7`). Prior evidence (RAG) is off for both.
+- **Budget, identical for both:** `max_revisions` 5, 40 model calls, 450,000 tokens, 3,000 s.
+- **Scenarios (9), chosen before running:** every catalogue scenario that in earlier sweeps
+  needed a revision, a rejection or a staged plan: rename-note, raw-sql-rename, shorten-note,
+  irreversible-data-migration, foreign-key-orphans, unique-last-name, drop-column,
+  backfill-then-required, add-required-column. Excluded because they passed on attempt 1
+  with `accept_as_is` and cannot separate the topologies: add-optional-column, add-table,
+  lengthen-varchar, rename-db-column, add-index-concurrently.
+- **Runs:** 4 per scenario per topology (72 reviews), interleaved scenario by scenario so
+  both arms share the same load.
+- **Primary metric:** reviews whose outcome matches Mahek's expected outcome
+  (`scripts/brev/score_scenarios.py`, `proposals/manual/scenarios/`, never shown to agents;
+  rename-note: runner PASS with `staged_rollout`), per topology, out of 36.
+- **Decision rule:** `parallel` is reported as better only if it matches more reviews and a
+  two-sided Fisher exact test on the two 2x2 counts gives p < 0.05. Otherwise the counts are
+  reported as not distinguishable at this sample size.
+- **Secondary (reported, not decisive):** runner PASS count, budget-exhausted (INCOMPLETE)
+  count, median tokens per review, tokens per matched review, wall time.
+- **Exclusions:** none, except runs recorded in the batch's INFRA-NOTE as infrastructure
+  failures (listed with their cause). Every other review is reported, including failed
+  attempts.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts

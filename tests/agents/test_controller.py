@@ -205,3 +205,62 @@ def test_scenario_plan_validator_rejects_variant_that_contradicts_migration():
         b4(plan(variant="apply-reversible"))
     with pytest.raises(plans.PlanError, match="apply-reversible"):
         b4(plan(migration="apply", variant="apply"))
+
+
+def test_parallel_planners_share_runner_facts_and_stop_on_first_pass(monkeypatch, tmp_path):
+    import threading
+    monkeypatch.setattr(roles, "gather_hits", lambda *a, **k: [])
+    runs = []
+
+    def fake_staged(log, plan, tests, provenance, keep_db=False, scenario=None):
+        runs.append(plan["plan_id"])
+        ok = len(runs) == 5   # round 1: a, b, c fail; round 2: a fails, b passes
+        log.check("runner-check", ok, provenance="runner")
+        return {"ok": ok, "plan_id": plan["plan_id"], "halted": None, "stages": [],
+                "failed_checks": [] if ok else [{"name": "runner-check"}]}
+
+    monkeypatch.setattr(staged, "run", fake_staged)
+    prompts, lock = [], threading.Lock()
+
+    class FakeLLM:
+        model = "nemotron-test"
+        base_url = "http://test/v1"
+        temperature = 1.0
+        top_p = 0.95
+        reasoning_enabled = True
+        force_nonempty_content = True
+        budget = ReviewBudget(max_revisions=3, max_model_calls=40)
+
+        def serving_metadata(self):
+            return {}
+
+        def chat_json(self, system, user, transcript, validator=None, response_schema=None,
+                      history=None):
+            self.budget.begin_call()
+            self.budget.finish_call({"total_tokens": 10}, 0.0, valid=True)
+            if response_schema and response_schema["name"] == "migration_plan":
+                with lock:
+                    prompts.append((self.trace_name, user))
+                return validator({"plan_id": "p", "stages": [
+                    {"id": "e", "kind": "sql", "phase": "expand",
+                     "sql": ["ALTER TABLE account_user ADD COLUMN customer_note text"]},
+                    {"id": "d", "kind": "deploy_new"}, {"id": "r", "kind": "retire_old"}]})
+            if response_schema:
+                return {"checks": [], "custom_cases": []}
+            return {"findings": [], "implicit_paths": []}
+
+    llm = FakeLLM()
+    result = loop.run_review(RunLog("test", root=tmp_path), "llm", llm=llm,
+                             request={"change": {"description": "rename note"},
+                                      "agent_topology": "parallel"})
+    assert result["verdict"] == "PASS"
+    assert [(a["round"], a["planner"]) for a in result["attempts"]] == [
+        (1, "a"), (1, "b"), (1, "c"), (2, "a"), (2, "b")]
+    assert [a["ok"] for a in result["attempts"]] == [False] * 4 + [True]
+    assert runs == [f"a{n}-p" for n in range(1, 6)]
+    # 1 investigator + 2 rounds x (3 planners + 3 testers), all on the one shared budget.
+    assert result["agent_totals"]["model_calls"] == 13
+    revisions = sorted(u for name, u in prompts if name.startswith("planner-2"))
+    assert len(revisions) == 3
+    assert all("another planner, same round" in u and "tester_hypothesis" not in u
+               for u in revisions)

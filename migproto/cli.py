@@ -124,7 +124,7 @@ def main(argv=None) -> int:
     a = sub.add_parser("agent-loop", help="investigator -> planner -> tester with one revision")
     a.add_argument("--proposals", choices=["scripted", "llm"], default="scripted")
     a.add_argument("--request", help="path to a migproto.contracts/v1 review request JSON")
-    a.add_argument("--topology", choices=["roles", "single"],
+    a.add_argument("--topology", choices=["roles", "single", "parallel"],
                    help="override the request's agent topology")
     a.add_argument("--scenario", help="scenario id from migproto/scenarios.py (default: the "
                                       "request's scenario, else rename-note)")
