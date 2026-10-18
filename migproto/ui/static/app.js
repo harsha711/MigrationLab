@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
+const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null, topologyPair: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -700,6 +700,66 @@ async function pageBatch(id) {
       : b.infra_note ? `<h2>INFRA-NOTE</h2><pre class="batch-note">${esc(b.infra_note)}</pre><p class="muted">No run in runs.jsonl matches a run named in this note.</p>` : ""}`;
 }
 
+// ---------- Roles versus single (recorded rename observations only) ----------
+
+const topologyNumber = (value, suffix = "") => value == null ? unknown("not recorded") : `${fmt(value)}${suffix}`;
+const topologyMedian = (value, unit) => value == null ? unknown("not recorded") : `${fmt(Math.round(value))} ${unit}`;
+const topologyVerdicts = (setup) => BATCH_VERDICTS.filter((v) => setup.verdicts[v]).map((v) =>
+  `<span class="badge ${v === "PASS" ? "pass" : v === "INCOMPLETE" ? "warn" : "fail"}">${setup.verdicts[v]} ${v}</span>`).join(" ") || `<span class="muted">No reviews</span>`;
+
+function incompleteStops(setup) {
+  const stops = setup.incomplete_stops;
+  if (!setup.verdicts.INCOMPLETE) return "";
+  const labels = [["token_budget", "token budget"], ["call_budget", "call budget"], ["other", "reason not recorded"]]
+    .filter(([key]) => stops[key]).map(([key, label]) => `${stops[key]} ${label}`);
+  return `<small>Incomplete: ${esc(labels.join(", "))}</small>`;
+}
+
+function topologySummaryCell(name, setup) {
+  return `<section class="topology-summary-cell"><header><strong>${name}</strong><span>${setup.reviews} review${setup.reviews === 1 ? "" : "s"}</span></header>
+    <div class="topology-verdicts">${topologyVerdicts(setup)}</div>${incompleteStops(setup)}
+    <dl><div><dt>Median tokens</dt><dd>${topologyMedian(setup.median_tokens, "tokens")}</dd></div><div><dt>Median wall time</dt><dd>${topologyMedian(setup.median_seconds, "s")}</dd></div></dl></section>`;
+}
+
+function trajectory(run) {
+  const values = run.failed_checks;
+  if (!Array.isArray(values)) return `<span class="muted">Failed-check trajectory not recorded</span>`;
+  const peak = Math.max(...values, 1);
+  return `<div class="failure-trajectory" aria-label="Failed checks per attempt: ${values.join(", ")}">${values.map((value, index) =>
+    `<span title="Attempt ${index + 1}: ${value} failed check${value === 1 ? "" : "s"}"><i style="--trajectory-height:${Math.max(12, Math.round((value / peak) * 100))}%"></i><b>${value}</b><small>a${index + 1}</small></span>`).join("") || `<span class="muted">No attempt executed</span>`}</div>`;
+}
+
+function topologyRunCard(run) {
+  return `<article class="topology-run ${String(run.verdict).toLowerCase()}"><header><div><span class="eyebrow">${esc(run.topology)}</span><h3>${esc(run.verdict || "unknown")}</h3></div><a href="#/run/${enc(run.run_id)}">Replay</a></header>
+    <p class="topology-run-id">${esc(run.run_id || "run ID not recorded")}</p>
+    <div class="topology-trajectory"><span>Failed checks by attempt</span>${trajectory(run)}</div>
+    <dl><div><dt>Tokens</dt><dd>${topologyNumber(run.total_tokens)}</dd></div><div><dt>Calls</dt><dd>${topologyNumber(run.model_calls)}</dd></div><div><dt>Wall time</dt><dd>${topologyNumber(run.wall_seconds, " s")}</dd></div></dl>
+  </article>`;
+}
+
+async function pageTopologies() {
+  crumbs([["Runs", "#/"], ["Roles vs single"]]);
+  const data = await api("/api/topology-comparison");
+  const configurations = data.configurations || [];
+  const pairs = configurations.flatMap((configuration) => {
+    const roles = configuration.setups.roles.runs || [], single = configuration.setups.single.runs || [];
+    return roles.flatMap((r) => single.map((s) => ({configuration: configuration.configuration, roles: r, single: s})));
+  });
+  const selected = pairs.find((pair) => `${pair.configuration}|${pair.roles.run_id}|${pair.single.run_id}` === state.topologyPair) || pairs[0];
+  if (selected) state.topologyPair = `${selected.configuration}|${selected.roles.run_id}|${selected.single.run_id}`;
+  const options = pairs.map((pair) => {
+    const value = `${pair.configuration}|${pair.roles.run_id}|${pair.single.run_id}`;
+    return `<option value="${esc(value)}" ${value === state.topologyPair ? "selected" : ""}>Config ${esc(pair.configuration)} · roles ${esc(pair.roles.verdict || "?")} / single ${esc(pair.single.verdict || "?")}</option>`;
+  }).join("");
+  const rows = configurations.map((configuration) => `<section class="topology-config"><header><div><span class="eyebrow">CONFIGURATION ${esc(configuration.configuration)}</span><h2>Same settings, separate recorded reviews</h2></div><details><summary>Configuration note</summary><pre>${esc(configuration.config_note || "not recorded")}</pre></details></header><div class="topology-summary-grid">${topologySummaryCell("roles", configuration.setups.roles)}${topologySummaryCell("single", configuration.setups.single)}</div></section>`).join("");
+  const pair = selected ? `<section class="topology-pair"><header><div><span class="eyebrow">PRESENTER PAIR · CONFIGURATION ${esc(selected.configuration)}</span><h2>Inspect two recorded reviews side by side</h2><p>Each trajectory includes every saved attempt. The runner recorded the verdicts shown here.</p></div><label><span>Choose a pair</span><select id="topology-pair">${options}</select></label></header><div class="topology-pair-grid">${topologyRunCard(selected.roles)}${topologyRunCard(selected.single)}</div></section>` : `<section class="card"><p class="muted">No roles/single pair is available yet. Batches appear here once both setups have recorded rename reviews in the same configuration.</p></section>`;
+  return `<header class="editorial-head topology-head"><div><span class="eyebrow">RECORDED MODEL REVIEWS</span><h1>Multi-agent vs single-agent</h1><p>Both setups use the same model, runner, and checks. Comparisons are only within each configuration.</p></div></header>
+    <p class="topology-caption">One to three reviews per setup per configuration: observations, not rates. Neither setup is shown to be better.</p>
+    <section class="topology-definition"><div><strong>roles</strong><span>Investigator, planner, and tester use separate calls with no chat history; the controller passes JSON between them.</span></div><div><strong>single</strong><span>One agent performs every step in one conversation with compacted history.</span></div></section>
+    ${rows || `<section class="card"><p class="muted">No completed configuration B–M batch records were found under runs/. This view reads batch folders directly and will populate when they are copied in.</p></section>`}
+    ${pair}`;
+}
+
 async function openEvidence(oid) {
   const drawer = $("#evidence-drawer");
   const backdrop = $("#drawer-backdrop");
@@ -836,6 +896,7 @@ async function route() {
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
     else if (parts[0] === "batches" && parts.length === 1) html = await pageBatches();
     else if (parts[0] === "batches" && parts.length === 2) html = await pageBatch(parts[1]);
+    else if (parts[0] === "topologies" && parts.length === 1) html = await pageTopologies();
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
@@ -900,6 +961,7 @@ document.addEventListener("click", (ev) => {
   if (row) location.hash = row.dataset.href;
 });
 document.addEventListener("change", (ev) => {
+  if (ev.target.id === "topology-pair") { state.topologyPair = ev.target.value; route(); return; }
   if (ev.target.id === "dashboard-run") {
     state.dashboardRunId = ev.target.value;
     route();

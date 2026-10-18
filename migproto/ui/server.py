@@ -52,6 +52,8 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
                 return {"batches": query.list_batches(runs_root, conn)}
             if path == "/api/batch":
                 return query.batch_detail(runs_root, p("id"), conn)
+            if path == "/api/topology-comparison":
+                return query.topology_comparison(runs_root, conn)
         raise KeyError(path)
 
     class Handler(BaseHTTPRequestHandler):

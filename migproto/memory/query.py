@@ -12,6 +12,7 @@ query fixture runs (pass `source_kind="local_run"`).
 
 import json
 import re
+import statistics
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -339,6 +340,30 @@ def _attempt_outcomes(summary: dict) -> list[dict] | None:
             for key, c in sorted(counts.items(), key=lambda kv: number(kv[0]))]
 
 
+def _failed_trajectory(summary: dict, rec: dict) -> list[int] | None:
+    """Failed checks for every recorded attempt, never just the final attempt."""
+    attempts = summary.get("attempts")
+    if isinstance(attempts, list):
+        values = []
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            failed = attempt.get("failed_checks")
+            if isinstance(failed, list):
+                values.append(len(failed))
+            elif isinstance(failed, int):
+                values.append(failed)
+            elif isinstance(attempt.get("checks_failed"), int):
+                values.append(attempt["checks_failed"])
+        if values or attempts:
+            return values
+    outcomes = _attempt_outcomes(summary)
+    if outcomes is not None:
+        return [int(a.get("fail") or 0) for a in outcomes]
+    failed = rec.get("checks_failed")
+    return [failed] if isinstance(failed, int) else None
+
+
 def _first(*values):
     return next((v for v in values if v is not None), None)
 
@@ -445,6 +470,7 @@ def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str],
         "runner_recommendation": s.get("runner_recommendation"),
         "recommendation_agrees": s.get("recommendation_agrees"),
         "attempts": _attempt_outcomes(s),
+        "failed_checks": _failed_trajectory(s, rec),
         "total_tokens": _first(totals.get("total_tokens"), rec.get("total_tokens")),
         "model_calls": _first(totals.get("model_calls"), rec.get("model_calls")),
         "wall_seconds": _first(totals.get("wall_seconds"), s.get("elapsed_s"), rec.get("seconds")),
@@ -591,3 +617,65 @@ def batch_detail(runs_root, batch_id, conn=None, *, now=None,
         return None
     return _batch(path, Path(runs_root), _stored_run_ids(conn), now or datetime.now(),
                   expected_root, _run_id_rows(Path(runs_root)))
+
+
+# ---- Roles versus single: compact evidence-only demo view ----
+
+_CONFIGURATION = re.compile(r"\bCONFIGURATION\s+([BCDEFGM])\b", re.IGNORECASE)
+
+
+def _configuration_letter(note: str | None) -> str | None:
+    match = _CONFIGURATION.search(note or "")
+    return match.group(1).upper() if match else None
+
+
+def _median(rows: list[dict], field: str):
+    values = [r[field] for r in rows if isinstance(r.get(field), (int, float))]
+    return statistics.median(values) if values else None
+
+
+def topology_comparison(runs_root, conn=None) -> dict:
+    """Rename-only roles/single observations, grouped strictly by configuration.
+
+    Each configuration has its own settings. This deliberately returns no pooled rate or
+    cross-configuration winner. It reads the same immutable batch records as Batches.
+    """
+    root = Path(runs_root)
+    stored = _stored_run_ids(conn)
+    rows_by_id = _run_id_rows(root)
+    grouped: dict[str, list[dict]] = {}
+    notes = {}
+    for path in _batch_dirs(root):
+        note = _read_text(path / "CONFIG-NOTE")
+        config = _configuration_letter(note)
+        if config is None:
+            continue
+        batch = _batch(path, root, stored, datetime.now(), EXPECTED_VERDICTS, rows_by_id)
+        notes.setdefault(config, note)
+        grouped.setdefault(config, []).extend(
+            row for row in batch["runs"]
+            if not row["infrastructure_failure"]
+            and row["scenario"] == "rename-note"
+            and row["topology"] in {"roles", "single"}
+        )
+
+    configurations = []
+    for config in sorted(grouped):
+        reviews = grouped[config]
+        setups = {}
+        for topology in ("roles", "single"):
+            rows = [r for r in reviews if r["topology"] == topology]
+            counts = {verdict: 0 for verdict in BATCH_VERDICTS}
+            stops = {"token_budget": 0, "call_budget": 0, "other": 0}
+            for row in rows:
+                verdict = str(row.get("verdict") or "").upper()
+                if verdict in counts:
+                    counts[verdict] += 1
+                if verdict == "INCOMPLETE":
+                    stopped = str(row.get("stopped") or "").lower()
+                    stops["token_budget" if "token" in stopped else "call_budget" if "call" in stopped else "other"] += 1
+            setups[topology] = {"reviews": len(rows), "verdicts": counts, "incomplete_stops": stops,
+                                "median_tokens": _median(rows, "total_tokens"),
+                                "median_seconds": _median(rows, "wall_seconds"), "runs": rows}
+        configurations.append({"configuration": config, "config_note": notes.get(config), "setups": setups})
+    return {"configurations": configurations}

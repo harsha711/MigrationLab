@@ -373,6 +373,48 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 .badge.running { background: var(--none-bg); color: var(--accent); border: 1px solid var(--accent); }
 .badge.running::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; animation: batch-pulse 1.6s ease-in-out infinite; }
 @keyframes batch-pulse { 50% { opacity: .25; } }
+
+/* Roles versus single: observations stay separated by configuration. */
+.topology-head { margin-bottom: 12px; }
+.topology-caption { margin: 0 0 16px; padding: 12px 15px; border-left: 3px solid var(--warn); border-radius: 8px; background: var(--warn-bg); color: var(--text); font-weight: 650; }
+.topology-definition { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.topology-definition > div { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.topology-definition strong { color: var(--accent); font-size: 15px; }
+.topology-definition span { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.topology-config, .topology-pair { margin: 18px 0; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); overflow: hidden; }
+.topology-config > header, .topology-pair > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; padding: 19px 20px 14px; border-bottom: 1px solid var(--border); }
+.topology-config h2, .topology-pair h2 { margin: 3px 0 0; font-size: 19px; }
+.topology-config details { max-width: 310px; color: var(--muted); font-size: 12px; }
+.topology-config details pre { max-height: 150px; white-space: pre-wrap; }
+.topology-summary-grid, .topology-pair-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.topology-summary-cell { padding: 18px 20px; }
+.topology-summary-cell + .topology-summary-cell { border-left: 1px solid var(--border); }
+.topology-summary-cell header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.topology-summary-cell header strong { font-size: 16px; text-transform: lowercase; }
+.topology-summary-cell header span, .topology-summary-cell small { color: var(--muted); font-size: 11px; }
+.topology-verdicts { display: flex; flex-wrap: wrap; gap: 5px; min-height: 28px; margin: 12px 0 4px; }
+.topology-summary-cell dl, .topology-run dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 15px 0 0; }
+.topology-summary-cell dl div, .topology-run dl div { padding: 10px; border-radius: 8px; background: var(--panel-2); }
+.topology-summary-cell dt, .topology-run dt { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.topology-summary-cell dd, .topology-run dd { margin: 3px 0 0; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.topology-pair > header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+.topology-pair label { display: grid; gap: 5px; min-width: 250px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.topology-pair select { min-height: 38px; max-width: 330px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; text-transform: none; letter-spacing: normal; }
+.topology-run { min-width: 0; padding: 20px; }
+.topology-run + .topology-run { border-left: 1px solid var(--border); }
+.topology-run > header { display: flex; justify-content: space-between; gap: 12px; }
+.topology-run h3 { margin: 4px 0 0; font-size: 27px; line-height: 1; }
+.topology-run.pass h3 { color: var(--pass); }.topology-run.fail h3, .topology-run.error h3 { color: var(--fail); }.topology-run.incomplete h3 { color: var(--warn); }
+.topology-run > header a { font-size: 12px; font-weight: 700; }
+.topology-run-id { overflow: hidden; margin: 13px 0; color: var(--muted); font: 11px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.topology-trajectory { padding: 13px; border: 1px solid var(--border); border-radius: 10px; }
+.topology-trajectory > span { display: block; margin-bottom: 9px; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+.failure-trajectory { display: flex; align-items: end; gap: 8px; height: 102px; }
+.failure-trajectory > span { display: grid; grid-template-rows: 1fr auto auto; align-items: end; justify-items: center; min-width: 26px; height: 100%; }
+.failure-trajectory i { display: block; width: 18px; height: var(--trajectory-height); min-height: 5px; border-radius: 5px 5px 2px 2px; background: var(--accent); }
+.topology-run.fail .failure-trajectory i, .topology-run.error .failure-trajectory i { background: var(--fail); }.topology-run.incomplete .failure-trajectory i { background: var(--warn); }
+.failure-trajectory b { margin-top: 4px; font-size: 12px; font-variant-numeric: tabular-nums; }.failure-trajectory small { color: var(--muted); font-size: 9px; }
+@media (max-width: 760px) { .topology-definition, .topology-summary-grid, .topology-pair-grid { grid-template-columns: 1fr; }.topology-summary-cell + .topology-summary-cell, .topology-run + .topology-run { border-top: 1px solid var(--border); border-left: 0; }.topology-config > header, .topology-pair > header { flex-direction: column; }.topology-pair label, .topology-pair select { width: 100%; max-width: none; } }
 @media (prefers-reduced-motion: reduce) { .badge.running::before { animation: none; } }
 .score-head { min-width: 13em; }
 .score-head small { display: block; max-width: 16em; font-weight: 400; font-size: 11px; color: var(--muted); text-transform: none; letter-spacing: 0; white-space: normal; }

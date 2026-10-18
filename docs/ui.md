@@ -47,6 +47,7 @@ Every page is read-only unless it says otherwise.
 | Data checks | `#/workspace/<run>` | Guided view of one run: stages, compatibility table, agent handoffs, failed plan next to revised plan. |
 | Guided demo | `#/demo/<run>` | Step-by-step replay of a recorded run. |
 | Batches | `#/batches` | Brev test batches, explained below. |
+| Roles vs single | `#/topologies` | Rename-only, within-configuration observations for the two agent topologies. |
 | Run Review | `#/review` | Starts a new review. This is the only page that runs anything. |
 
 ## Batches
