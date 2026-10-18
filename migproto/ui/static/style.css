@@ -379,3 +379,96 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 .run-dir-warning { color: var(--warn); max-width: 26em; white-space: normal; }
 .poll-note { font-size: 12px; margin: 4px 0 12px; }
 .infra-section { margin-top: 26px; padding: 4px 16px 16px; border: 1px dashed var(--warn); border-radius: 10px; background: var(--warn-bg); }
+
+/* Evidence-scoped metrics for the Old / New compatibility table. */
+.matrix-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 20px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.matrix-metrics > div {
+  min-width: 0;
+  padding: 13px 14px;
+  border-right: 1px solid var(--border);
+}
+.matrix-metrics > div:last-child { border-right: 0; }
+.matrix-metrics span,
+.matrix-metrics small { display: block; }
+.matrix-metrics span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.matrix-metrics strong {
+  display: block;
+  margin: 3px 0 1px;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.matrix-metrics small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.matrix-metrics .metric-alert strong { color: var(--fail); }
+.matrix-metrics .metric-ok strong { color: var(--pass); }
+@media(max-width:680px) {
+  .matrix-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .matrix-metrics > div:nth-child(2) { border-right: 0; }
+  .matrix-metrics > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+}
+
+/* Keep the dashboard controls honest: every visible control has an active purpose. */
+.theme-button {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-color: var(--border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+}
+.theme-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.scope-label,
+.recorded-view {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.rail-section-title {
+  margin: 0;
+  padding: 12px 20px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.evidence-rail > header {
+  grid-template-columns: 38px 1fr;
+}
+@media(max-width:680px) {
+  .scope-label { width: 100%; justify-content: center; }
+}

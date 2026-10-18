@@ -81,6 +81,16 @@ function attemptPills(run, page, current) {
 
 const findAttempt = (run, s) => run.attempts.find((a) => short(a.attempt_id) === s);
 const humanize = (value) => String(value || "unknown").replace(/^case\./, "").replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const reviewUnavailableReason = (reason) => {
+  const text = String(reason || "");
+  if (/fcntl|execution lock unavailable/i.test(text)) {
+    return "Live review requires Linux or macOS because the execution lock uses fcntl. Recorded replay remains available.";
+  }
+  if (/controller not available/i.test(text)) {
+    return "The live-review controller is not connected. Recorded replay remains available.";
+  }
+  return text || "Live review is not available. Recorded replay remains available.";
+};
 
 // ---------- pages ----------
 
@@ -114,6 +124,24 @@ async function pageRuns() {
   const checks = [...new Set(matrix.rows.map((item) => item.check_name))]
     .map((name) => [name, new Set(matrix.rows.filter((item) => item.check_name === name).map((item) => item.column)).size])
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 5).map(([name]) => name);
+  const scopedResults = [...new Map(matrix.rows.map((item) => [
+    `${item.stage_id || "unknown"}|${item.check_name}|${item.column}`,
+    item
+  ])).values()];
+  const passedResults = scopedResults.filter((item) => kindOf(item) === "PASS").length;
+  const reviewResults = scopedResults.filter(isBad).length;
+  const passRate = scopedResults.length ? Math.round((passedResults / scopedResults.length) * 100) : null;
+  const crossVersionResults = scopedResults.filter((item) => {
+    const [writer, reader] = String(item.column || "").split(" -> ");
+    return writer && reader && writer !== reader;
+  });
+  const crossVersionPassed = crossVersionResults.filter((item) => kindOf(item) === "PASS").length;
+  const matrixMetrics = `<div class="matrix-metrics" aria-label="Recorded compatibility metrics">
+    <div><span>Scoped results</span><strong>${scopedResults.length}</strong><small>stage · check · path</small></div>
+    <div><span>Pass rate</span><strong>${passRate == null ? "—" : `${passRate}%`}</strong><small>${passedResults} of ${scopedResults.length} recorded</small></div>
+    <div class="${reviewResults ? "metric-alert" : "metric-ok"}"><span>Needs review</span><strong>${reviewResults}</strong><small>failed, refused, or errored</small></div>
+    <div><span>Cross-version</span><strong>${crossVersionResults.length ? `${crossVersionPassed}/${crossVersionResults.length}` : "—"}</strong><small>recorded paths passed</small></div>
+  </div>`;
   const matrixGrid = `<div class="matrix-corner"></div>${paths.map(([, label]) => `<b>${esc(label)}</b>`).join("")}` + checks.map((checkName) => {
     const cells = paths.map(([column]) => {
       const candidates = matrix.rows.filter((item) => item.column === column && item.check_name === checkName);
@@ -141,17 +169,17 @@ async function pageRuns() {
   const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
   const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
   const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
-  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-control">⌘&nbsp;&nbsp; Scope: sequential interleaving <b>⌄</b></span></div></header>
+  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
     <section class="editorial-layout">
       <main class="editorial-main">
         <section class="stage-panel"><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
         <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
-        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span>View: recorded checks ⌄</span></header><div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">— means this exact check and application path was not recorded. Missing scope remains unknown.</p></section>
+        <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span class="recorded-view">Recorded checks</span></header>${matrixMetrics}<div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">Metrics cover recorded final-attempt application paths only. — means this exact check and application path was not recorded; missing scope remains unknown.</p></section>
       </main>
-      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div><button aria-label="More options">⋮</button></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><nav><b>Evidence</b><span>Checks</span><span>Diffs</span><span>Logs</span></nav><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
+      <aside class="editorial-panel evidence-rail"><header><span class="rail-verdict ${finalPassed ? "" : "failed"}">${finalPassed ? "✓" : "×"}</span><div><h2>${humanize(short(finalAttempt?.attempt_id))} · ${esc(verdict)}</h2><p>${demo?.source_kind === "fixture" ? "Recorded fixture" : "Local recorded run"}</p></div></header><dl><div><dt>Run</dt><dd>${esc(demo?.run_id || "unknown")}</dd></div><div><dt>Elapsed</dt><dd>${demo?.meta?.elapsed_s == null ? "not recorded" : `${esc(demo.meta.elapsed_s)} s`}</dd></div><div><dt>Checks</dt><dd>${fmt(finalAttempt?.checks_total)} recorded</dd></div><div><dt>Model</dt><dd>${esc(demo?.meta?.model || "scripted / not recorded")}</dd></div></dl><h3 class="rail-section-title">Stage evidence</h3><div class="editorial-evidence-list">${evidence || `<p class="muted">No database-level evidence recorded.</p>`}</div><footer><strong>Key observations</strong><p>${fmt(finalAttempt?.checks_total)} checks were recorded for the final attempt.</p><p>${demo?.attempts.length || 0} attempt${demo?.attempts.length === 1 ? "" : "s"} remain visible.</p><p>Missing scope is displayed as unknown.</p></footer></aside>
     </section>
     <section id="runs-table" class="section-head"><div><span class="eyebrow">REVIEW LIBRARY</span><h2>Recorded migration runs</h2></div>
-      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_reason || "Start a review through the controller")}">Run Review</a></div></section>
+      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div></section>
     <div class="filterbar"><input id="run-search" type="search" placeholder="Search runs, model, verdict..." aria-label="Search runs">
       <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All verdicts</option><option>PASS</option><option>FAIL</option><option>REPRODUCED</option><option>ERROR</option></select>
       <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
@@ -159,7 +187,7 @@ async function pageRuns() {
       <tr><th></th><th>run</th><th>verdict</th><th>type</th><th>attempts</th><th>checks</th><th>failed</th></tr>
       ${rows || `<tr><td colspan="7" class="muted">No runs in examples/ or runs/.</td></tr>`}
     </table></div>
-    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(controller_reason || "The controller is not connected.")}</span></div>`}`;
+    ${controller_available ? "" : `<div class="notice"><strong>Why is Run Review unavailable?</strong><span>${esc(reviewUnavailableReason(controller_reason))}</span></div>`}`;
 }
 
 function replaySteps(run) {
@@ -275,10 +303,9 @@ async function pageWorkspace(id) {
   return `<div class="workspace-head"><div><span class="eyebrow">INTERACTIVE COMPATIBILITY REVIEW</span><h1>${esc(id)}</h1><p>Explore recorded plan decisions and runner evidence. Selecting a result opens its scoped TestEvidence.</p></div><div class="workspace-actions"><button class="button ghost" data-open-tour>&#10024; Guide me</button><button class="button primary" data-reveal-revision>Reveal safe plan</button><div class="row">${verdictBadge(run.meta?.verdict)} ${typeBadges(run)}</div></div></div>
     <section class="journey-strip"><div><span>Migration journey</span><strong>Step ${selectedIndex + 1} of ${stages.length}</strong></div><div class="journey-track"><i style="width:${stages.length ? ((selectedIndex + 1) / stages.length) * 100 : 0}%"></i>${stages.map((s, i) => `<button class="${i <= selectedIndex ? "visited" : ""}" data-stage-select="${esc(s.stage_id)}" title="${stageTitle(s)}"><span>${i + 1}</span></button>`).join("")}</div><div class="journey-now"><span class="stage-pulse"></span><p><small>YOU ARE HERE</small><strong>${stageTitle(selectedStage)}</strong></p><button data-next-stage>${selectedIndex === stages.length - 1 ? "Restart journey" : "Next stage"} &#8594;</button></div></section>
     <section class="workspace-layout">
-      <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}
-        <div class="execution-controls"><span class="eyebrow">EXECUTION CONTROLS</span><button data-reset-workspace>Reset database</button><button disabled title="Read-only evidence replay">Execute selected migration step</button><button disabled title="Read-only evidence replay">Run compatibility checks</button><small>Recorded replay only. Live execution awaits the controller API.</small></div></aside>
-      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><span class="source-pill"><i></i> Live from recorder</span></div>
-        <div class="scope-filters"><select id="workspace-version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select><select disabled title="Schema fingerprints are not present in this v0 fixture"><option>Schema: not recorded</option></select><select disabled title="Snapshot IDs are not present in this v0 fixture"><option>Snapshot: not recorded</option></select></div>
+      <aside class="workspace-panel plan-panel"><div class="panel-heading"><div><span class="eyebrow">MIGRATION PLAN</span><h2>Safe rollout timeline</h2></div><span class="counter">${stages.length} steps</span></div>${timeline}</aside>
+      <main class="workspace-panel matrix-panel" data-tour-target="matrix"><div class="panel-heading"><div><span class="eyebrow">OLD VS. NEW</span><h2>Compatibility matrix</h2><p class="panel-help">Click any pass or fail result to inspect the evidence behind it.</p></div><span class="source-pill"><i></i> Recorded evidence</span></div>
+        <div class="scope-filters"><select id="workspace-version"><option value="">All app versions</option><option value="old">Old application</option><option value="new-staged">New application</option></select><select id="workspace-stage"><option value="">All stages</option>${stages.map((s) => `<option value="${esc(s.stage_id)}">${stageTitle(s)}</option>`).join("")}</select><select id="workspace-status"><option value="">All statuses</option><option value="PASS">Passed</option><option value="FAIL">Failed</option><option value="UNKNOWN">Not tested</option></select></div>
         <div class="compat-table"><table><thead><tr><th>Migration stage</th><th>Old application</th><th>New application</th></tr></thead><tbody>${rows}</tbody></table></div>
         <div class="scope-callout"><b>Why scope matters</b><p>A pass for the new application does not prove the old application can read or write the same schema. Every cell is derived from observations scoped to an application path and migration stage.</p></div>
       </main>
@@ -294,9 +321,10 @@ async function pageReview() {
   const status = await api("/api/review/status");
   const current = status.current;
   const running = current && current.state === "running";
+  const unavailable = status.ok ? "" : reviewUnavailableReason(status.reason);
   return `<h1>Run Review</h1><p class="muted">Starts one review through the controller, which calls the runner. The UI never runs SQL or starts Saleor directly.</p>
     ${current ? `<div class="card">Last review: <a href="#/review/${enc(current.run_id)}">${esc(current.run_id)}</a> ${running ? `<span class="badge">running</span>` : verdictBadge(current.verdict)} ${current.error ? `<span class="muted">${esc(current.error)}</span>` : ""}</div>` : ""}
-    <div class="card">${status.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(status.reason)}</p>`}<div class="row">
+    <div class="card">${status.ok ? "" : `<p><span class="badge warn">unavailable</span> ${esc(unavailable)}</p>`}<div class="row">
       <label>Proposals <select id="rv-mode"><option value="scripted">scripted (no model)</option><option value="llm">llm (configured endpoint)</option></select></label>
       <label>Topology <select id="rv-topology"><option value="roles">roles</option><option value="single">single agent</option></select></label>
       <button id="rv-start" ${status.ok && !running ? "" : "disabled"}>Start</button></div><p id="rv-msg" class="muted"></p></div>`;
@@ -833,7 +861,6 @@ document.addEventListener("click", (ev) => {
   }
   const stageSelect = ev.target.closest("[data-stage-select]");
   if (stageSelect) { state.workspaceStage = stageSelect.dataset.stageSelect; route(); showToast(`Selected: ${stageSelect.title || "migration stage"}`); return; }
-  if (ev.target.closest("[data-reset-workspace]")) { state.workspaceStage = null; route(); showToast("Replay state reset. No database was changed."); return; }
   if (ev.target.closest("[data-scroll-runs]")) {
     document.querySelector("#runs-table")?.scrollIntoView({behavior: "smooth", block: "start"});
     return;
@@ -854,7 +881,8 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("#theme-toggle")) {
     const root = document.documentElement;
     root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
-    localStorage.setItem("migrationlab-theme", root.dataset.theme); return;
+    localStorage.setItem("migrationlab-theme", root.dataset.theme);
+    syncThemeToggle(); return;
   }
   if (ev.target.closest("a, input, button, summary")) return;
   const row = ev.target.closest("[data-href]");
@@ -899,5 +927,14 @@ document.addEventListener("keydown", (ev) => {
   }
 });
 window.addEventListener("hashchange", route);
+function syncThemeToggle() {
+  const button = document.querySelector("#theme-toggle");
+  if (!button) return;
+  const dark = document.documentElement.dataset.theme === "dark";
+  button.textContent = dark ? "☀" : "☾";
+  button.setAttribute("aria-label", dark ? "Use light theme" : "Use dark theme");
+  button.title = dark ? "Use light theme" : "Use dark theme";
+}
 document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "light";
+syncThemeToggle();
 route();

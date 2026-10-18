@@ -58,6 +58,20 @@ def test_unavailable_without_controller_or_lock(env, monkeypatch):
         m.start("scripted", "roles")
 
 
+def test_fcntl_import_is_reported_as_platform_limitation(env, monkeypatch):
+    conn, runs = env
+
+    def missing_fcntl(_name):
+        raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+
+    monkeypatch.setattr(review_mod.importlib, "import_module", missing_fcntl)
+    status = ReviewManager(conn, threading.Lock(), runs_root=runs).available()
+    assert status == {
+        "ok": False,
+        "reason": "live review requires Linux or macOS because the execution lock uses fcntl",
+    }
+
+
 def test_available_with_merged_controller_and_lock(env):
     conn, runs = env
     status = ReviewManager(conn, threading.Lock(), runs_root=runs).available()

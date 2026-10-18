@@ -59,6 +59,9 @@ class ReviewManager:
             try:
                 controller = importlib.import_module("migproto.agents.controller").run_review
             except (ImportError, AttributeError) as exc:
+                if isinstance(exc, ImportError) and getattr(exc, "name", "") == "fcntl":
+                    raise Unavailable("live review requires Linux or macOS because the "
+                                      "execution lock uses fcntl") from exc
                 raise Unavailable(f"controller not available ({exc})") from exc
         lock_module = self._lock_module
         if lock_module is None:
@@ -66,8 +69,8 @@ class ReviewManager:
                 lock_module = importlib.import_module("migproto.lock")
             except ImportError as exc:
                 if getattr(exc, "name", "") == "fcntl":
-                    raise Unavailable("execution lock unavailable on this platform "
-                                      "(needs fcntl: Linux or macOS)") from exc
+                    raise Unavailable("live review requires Linux or macOS because the "
+                                      "execution lock uses fcntl") from exc
                 raise Unavailable(f"execution lock not available ({exc})") from exc
         factory = self._runlog_factory
         if factory is None:
