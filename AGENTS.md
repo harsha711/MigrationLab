@@ -18,7 +18,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 - **Live run:** one `gpt-oss:120b-cloud` run (via Ollama, cloud-backed) generated its own SQL. Attempt 1 had 30 checks, of which 1 failed: `retirement_gate`, because the contract stage was placed before `retire_old`. After that feedback, attempt 2 reordered the stages and passed 41 of 41. The run made 8 model calls, used 30,036 total tokens, and took 88.2 s (`examples/live-ordering-revision`).
 - **Status of the 120B run:** it is a development smoke test. It is **not** our qualifying small-model implementation, and it sits outside the 33B parameter budget. Nemotron 3.5 Lightning has been served on vLLM 0.27.1 on a Brev H100 (2026-10-17) and run through the controller in smoke tests only (one `roles` and one `single` run per configuration). No smoke run passed, and no measurement batch exists yet; see "Brev Lightning quick start" below. No NeMo Gym integration exists yet.
 - **Multi-agent claim:** no superiority over a single agent has been established. A `single` topology exists, but it has only been run with a local 4B stand-in model; none of those runs passed and they measure nothing about Lightning (`docs/local-standin-runs.md`).
-- **Tests:** `uv run pytest` runs 135 tests on Linux with `uv` / Python 3.12: 68 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 17 in `tests/agents`, and 50 in `tests/memory`.
+- **Tests:** `uv run pytest` runs 148 tests on Linux with `uv` / Python 3.12: 68 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 30 in `tests/agents`, and 50 in `tests/memory`.
 - **Evidence store and review UI (Owner 3, merged through `integrate/memory-ui`):**
   - **Fixtures:** ingesting the four `examples/` fixtures reproduces their `summary.json` facts. For `scripted-sync-failure` at `deploy_new`, every old-writer/new-reader case fails and every new-writer/old-reader case passes.
   - **v1 records and Owner 2's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
@@ -93,7 +93,7 @@ uv run migproto staged --plan proposals/scripted/plan_v2.json   # about 31 s, an
 uv run migproto agent-loop --proposals scripted # no model needed, about 55 s
 uv run migproto agent-loop --proposals llm      # live model, see configuration
 uv run migproto all [--skip-pytest]             # setup + baseline + unsafe + scripted loop
-uv run pytest                                   # 135 tests (68 runner, 17 agents, 50 memory/UI), under 5 s, needs local Postgres for trigger tests
+uv run pytest                                   # 148 tests (68 runner, 30 agents, 50 memory/UI), under 5 s, needs local Postgres for trigger tests
 uv run pytest -q tests/memory                   # 50 memory/UI tests, no Docker or Postgres needed
 uv run migproto ui [--port 8765] [--db PATH]    # Replay UI at http://127.0.0.1:8765/ (reads examples/ and runs/)
 ```
@@ -169,6 +169,15 @@ Findings from the 2026-10-17 smoke tests (runs `20261017-1815*` to `-1832*`, non
 - **Capped at 4096 with 120k tokens:** both runs reached the runner; the runner refused the plans (retirement gate; 19-22 failed cross-version checks, no bidirectional sync).
 - **Fixed:** the plan response schema let deploy/retire stages carry `"sql": []`, which `plans.validate_plan` rejects; the schema now has separate stage shapes (thinking budget `86e9b34`, schema `7d77778`).
 - **Open:** an invalid revision turns a run with a real attempt-1 runner FAIL into `ERROR`; consider `FAIL`/`INCOMPLETE` (controller change). The measurement configuration and the budget-fairness rule are not decided yet.
+
+### Tracing (optional)
+
+`migproto/agents/tracing.py` can send each live review to Langfuse Cloud as a viewer for prompts and replies. It is off unless `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set in the process environment (`.env` is not auto-loaded; see `.env.example`). `LANGFUSE_BASE_URL` selects the region. Set `LANGFUSE_TRACING_ENVIRONMENT` (for example `dev` for tests, something else for measurement batches) so test traces can be filtered out.
+
+- **What is sent:** one trace per review (`session_id` = run ID, name `review <topology>`). It holds one generation per model request, named after the role (input messages as sent, reply, reasoning, token usage, latency; `ERROR` level for invalid replies, `WARNING` when a valid reply exhausted the budget) and one span per runner attempt (the runner's verdict and failed check names). Trace metadata records topology, model, thinking budget, reasoning flag, `max_revisions` and `request_id`. Tags are `source:`, `topology:` and `verdict:<PASS|FAIL|INCOMPLETE|ERROR|EXCEPTION>`. Prompts, replies and reasoning leave the machine, so do not enable tracing for content that must stay local.
+- **Run link:** `runs/<run_id>/agents/trace.json` stores the trace ID and URL. `summary.json` is unchanged.
+- **Evidence:** traces are a viewer. They never decide anything and are not evidence. `events.jsonl` and `summary.json` from `RunLog` remain the record, and only the runner produces checks. A tracing failure (bad key, network) is logged and never fails a review.
+- **Tests:** `tests/agents/conftest.py` clears `LANGFUSE_*` so the suite never sends traces; tracing tests use the real SDK with an in-memory exporter.
 
 ## Collaboration
 

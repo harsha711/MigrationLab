@@ -8,7 +8,8 @@ from collections.abc import Callable
 
 import requests
 
-from .budget import ReviewBudget
+from . import tracing
+from .budget import BudgetExceeded, ReviewBudget
 
 
 class LLMError(RuntimeError):
@@ -34,6 +35,7 @@ class LLM:
         # vLLM's per-request cap on reasoning tokens; unset sends nothing (uncapped).
         budget_env = os.environ.get("MIGPROTO_LLM_THINKING_BUDGET")
         self.thinking_budget = int(budget_env) if budget_env else None
+        self.trace_name = "llm"  # set by the controller to the current role
 
     def serving_metadata(self) -> dict:
         env = os.environ
@@ -71,6 +73,14 @@ class LLM:
             usage = None
             content = ""
             reasoning = None
+            call_err = None  # why this request failed; None once the reply validated
+            budget_err = None
+            trace_cm = tracing.generation(
+                self.trace_name, self.model,
+                {"temperature": self.temperature, "top_p": self.top_p,
+                 "thinking_token_budget": self.thinking_budget, "attempt": attempt},
+                messages)
+            trace = trace_cm.__enter__()
             try:
                 payload = {
                     "model": self.model,
@@ -96,10 +106,11 @@ class LLM:
                 )
                 elapsed = round(time.monotonic() - t0, 3)
                 if resp.status_code != 200:
-                    last_err = f"HTTP {resp.status_code}: {resp.text[:500]}"
+                    last_err = call_err = f"HTTP {resp.status_code}: {resp.text[:500]}"
                     _record(transcript, attempt, messages, None, None, elapsed, last_err, False)
                     self.budget.finish_call(None, elapsed)
                     continue
+                call_err = "invalid reply"
                 body = resp.json()
                 message = body["choices"][0]["message"]
                 content = message.get("content") or ""
@@ -109,25 +120,39 @@ class LLM:
                 obj = parse_json(content)
                 if validator:
                     obj = validator(obj)
+                call_err = None
                 _record(transcript, attempt, messages, content, usage, elapsed, None, True,
                         reasoning)
                 self.budget.finish_call(usage, elapsed, valid=True)
                 if history is not None:
                     history.append({"role": "assistant", "content": content})
                 return obj
+            except BudgetExceeded as exc:
+                budget_err = str(exc)
+                raise
             except requests.RequestException as exc:
                 elapsed = round(time.monotonic() - t0, 3)
-                last_err = f"request failed: {exc}"
+                last_err = call_err = f"request failed: {exc}"
                 _record(transcript, attempt, messages, None, None, elapsed, last_err, False)
                 self.budget.finish_call(None, elapsed)
                 # No reply to correct: retry the same request without an extra turn.
                 continue
             except (KeyError, TypeError, ValueError) as exc:
                 elapsed = round(time.monotonic() - t0, 3)
-                last_err = str(exc)
+                last_err = call_err = str(exc)
                 _record(transcript, attempt, messages, content, usage, elapsed, last_err, False,
                         reasoning)
                 self.budget.finish_call(usage, elapsed)
+            finally:
+                usage_details = ({"input": usage.get("prompt_tokens") or 0,
+                                  "output": usage.get("completion_tokens") or 0}
+                                 if isinstance(usage, dict) else None)
+                level = "ERROR" if call_err else "WARNING" if budget_err else "DEFAULT"
+                tracing.update(trace, output=content or None, usage_details=usage_details,
+                               metadata={"reasoning": reasoning,
+                                         "seconds": round(time.monotonic() - t0, 3)},
+                               level=level, status_message=call_err or budget_err)
+                trace_cm.__exit__(None, None, None)
             if attempt < retries:
                 messages = messages + [
                     {"role": "assistant", "content": content},

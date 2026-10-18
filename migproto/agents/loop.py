@@ -7,7 +7,7 @@ from .. import plans, runner_api
 from ..config import PROPOSALS
 from ..runlog import SCRIPTED, RunLog, agent
 from . import facts as scenario_facts
-from . import roles, single
+from . import roles, single, tracing
 from .budget import BudgetExceeded, ReviewBudget
 from .llm import LLM, LLMError
 from .request import load_review_request, scenario_text
@@ -91,6 +91,20 @@ def run(log: RunLog, source: str, request=None, topology: str | None = None,
 def run_review(log: RunLog, source: str, request=None, topology: str | None = None,
                llm: LLM | None = None, scenario: str | None = None) -> dict:
     """Run one review; safe for future CLI and UI callers to share."""
+    with tracing.review(log, source) as trace:
+        try:
+            result = _run_review(log, source, request=request, topology=topology, llm=llm,
+                                 scenario=scenario, trace=trace)
+        except BaseException as exc:
+            tracing.fail(trace, exc)
+            raise
+        tracing.finish(trace, result)
+        return result
+
+
+def _run_review(log: RunLog, source: str, request=None, topology: str | None = None,
+                llm: LLM | None = None, scenario: str | None = None,
+                trace: tracing.Review | None = None) -> dict:
     budget = llm.budget if llm else ReviewBudget()
     if source not in {"scripted", "llm"}:
         return _finish(False, "ERROR", source, topology or "roles", None, None, [], budget,
@@ -135,6 +149,11 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
+        tracing.configure(trace, topology=topology, model=model,
+                          thinking_budget=getattr(llm, "thinking_budget", None),
+                          reasoning_enabled=llm.reasoning_enabled if llm else None,
+                          max_revisions=budget.max_revisions,
+                          request_id=review.get("request_id"))
         log.write_json("agents/review-request.json", review)
 
         if sfacts.is_default:
@@ -162,6 +181,8 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
         plan_kwargs["scenario"] = test_kwargs["scenario"] = scenario
 
         def call(role: str, fn, *args, **kwargs):
+            if llm:
+                llm.trace_name = role
             transcript_role = "single" if shared_history is not None else role
             tx = transcripts.setdefault(transcript_role, [])
             if shared_history is not None:
@@ -226,6 +247,7 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
                 "planner_recommendation": plan_obj.get("recommendation"),
                 "runner_recommendation": result.get("recommendation"),
             })
+            tracing.attempt(attempt, result, attempts[-1]["failed_checks"])
             log.event("attempt_result", provenance="runner", name=f"attempt {attempt}",
                       status="PASS" if result["ok"] else "FAIL",
                       failed=attempts[-1]["failed_checks"])
