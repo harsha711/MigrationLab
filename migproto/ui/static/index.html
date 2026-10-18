@@ -55,6 +55,15 @@
     <summary>Ask about runs</summary>
     <div class="chat-body">
       <p class="muted">Answers use recorded evidence. Model phrasing is a claim and can be wrong.</p>
+      <div class="chat-suggestions" aria-label="Suggested questions">
+        <span>Try a question</span>
+        <button type="button" data-chat-question="Why did the recent run fail?">Why did the recent run fail?</button>
+        <button type="button" data-chat-question="What checks kept failing in the recent run?">What checks kept failing?</button>
+        <button type="button" data-chat-question="How did roles compare with single in the latest batch?">Compare roles with single</button>
+        <button type="button" data-chat-question="Is parallel better in the latest batch?">Is parallel better?</button>
+        <button type="button" data-chat-question="Which check failed most on rename-note?">Most frequent failure</button>
+        <button type="button" data-chat-question="Did the recent run prove zero downtime?">Did this prove zero downtime?</button>
+      </div>
       <form id="chat-form">
         <label for="chat-question" class="sr-only">Question about recorded runs</label>
         <textarea id="chat-question" maxlength="1000" rows="3" placeholder="Why did run 20261017-230415-agent-loop-llm fail?"></textarea>

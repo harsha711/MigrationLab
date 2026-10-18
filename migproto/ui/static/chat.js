@@ -3,6 +3,14 @@
   const question = document.getElementById("chat-question");
   const result = document.getElementById("chat-result");
 
+  document.querySelectorAll("[data-chat-question]").forEach((button) => {
+    button.addEventListener("click", () => {
+      question.value = button.dataset.chatQuestion;
+      question.focus();
+      question.setSelectionRange(question.value.length, question.value.length);
+    });
+  });
+
   const add = (parent, tag, text, className) => {
     const node = document.createElement(tag);
     node.textContent = text;

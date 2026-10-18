@@ -182,3 +182,12 @@ def test_chat_endpoint_with_fake_llm(conn, tmp_path):
         assert body["mode"] == "model" and body["citations"] == ["live-ordering-revision"]
     finally:
         httpd.shutdown()
+
+
+def test_chat_ui_has_clickable_question_suggestions():
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "migproto" / "ui" / "static" / "chat.js").read_text(encoding="utf-8")
+    assert html.count("data-chat-question=") >= 6
+    assert "Why did the recent run fail?" in html
+    assert 'querySelectorAll("[data-chat-question]")' in js
+    assert "question.value = button.dataset.chatQuestion" in js
