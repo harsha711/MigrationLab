@@ -111,6 +111,15 @@ def plan_schema(variants: tuple[str, ...] | None = None) -> dict:
         "required": ["id", "kind"],
         "additionalProperties": False,
     }
+    if variants is not None:
+        # `variant` names an alternative build only; apply/state_only are chosen by
+        # `migration` (the runner prefers an explicit variant, so a mismatch would deploy
+        # the wrong build).
+        named = [v for v in variants if v not in DEPLOY_MIGRATIONS]
+        if named:
+            deploy["properties"]["variant"] = {"enum": named}
+        else:
+            del deploy["properties"]["variant"]
     if variants is not None and "state_only" not in variants:
         deploy["properties"]["migration"] = {"enum": ["apply"]}
         deploy["required"] = ["id", "kind", "migration"]

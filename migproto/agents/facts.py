@@ -62,6 +62,12 @@ def _variant_lines(sc: scenarios.Scenario) -> list[str]:
     if "state_only" not in sc.variants:
         lines.append('  There is no "state_only" build for this change, so deploy_new must set '
                      '"migration": "apply" (an omitted migration means state_only).')
+    if any(key not in VARIANT_TEXT for key in sc.variants):
+        lines.append('  Set "variant" only to choose a named build above; leave it out for '
+                     '"apply" and "state_only".')
+    else:
+        lines.append('  Choose the build with "migration" only; deploy_new takes no "variant" '
+                     'field for this change.')
     return lines
 
 
@@ -247,6 +253,19 @@ def plan_validator(sc_facts: ScenarioFacts):
             raise plans.PlanError("plan must be a JSON object")
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
+        deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
+        named = deploy.get("variant")
+        if named is not None and (named in VARIANT_TEXT or named not in sc_facts.variants):
+            # The runner deploys an explicit variant over `migration`, so "migration":
+            # "state_only" with "variant": "apply" would silently deploy the apply build.
+            raise plans.PlanError(
+                f'deploy_new "variant" {named!r} is not a named build of this change; choose '
+                '"apply" or "state_only" with "migration" alone and leave "variant" out'
+                + (f"; named builds: {[k for k in sc_facts.variants if k not in VARIANT_TEXT]}"
+                   if any(k not in VARIANT_TEXT for k in sc_facts.variants) else ""))
+        if named is not None and plans.deploy_migration(obj) != "apply":
+            raise plans.PlanError(f'a named build ("variant": {named!r}) needs deploy_new '
+                                  '"migration": "apply"')
         variant = plans.deploy_variant(obj)
         if variant not in sc_facts.variants:
             raise plans.PlanError(f"deploy_new variant {variant!r} does not exist for this "

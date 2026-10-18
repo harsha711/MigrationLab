@@ -146,7 +146,7 @@ def test_scenario_schema_limits_variants_and_requires_apply_without_state_only()
     sc = scenarios.get("add-optional-column")
     schema = plan_schema(tuple(sc.variants))["schema"]
     deploy = schema["properties"]["stages"]["items"]["anyOf"][1]
-    assert deploy["properties"]["variant"]["enum"] == ["apply"]
+    assert "variant" not in deploy["properties"]
     assert deploy["properties"]["migration"]["enum"] == ["apply"]
     assert "migration" in deploy["required"]
     plan = {"plan_id": "a", "stages": [{"id": "d", "kind": "deploy_new"},
@@ -157,4 +157,15 @@ def test_scenario_schema_limits_variants_and_requires_apply_without_state_only()
     assert matches(schema, ok)
     b4 = plan_schema(tuple(scenarios.get("irreversible-data-migration").variants))["schema"]
     assert b4["properties"]["stages"]["items"]["anyOf"][1]["properties"]["variant"]["enum"] == [
-        "apply", "apply-reversible"]
+        "apply-reversible"]
+
+
+def test_scenario_schema_rejects_variant_contradicting_migration():
+    sc = scenarios.get("drop-column")
+    schema = plan_schema(tuple(sc.variants))["schema"]
+    plan = {"plan_id": "a", "stages": [
+        {"id": "d", "kind": "deploy_new", "migration": "state_only", "variant": "apply"},
+        {"id": "r", "kind": "retire_old"}]}
+    assert not matches(schema, plan)
+    del plan["stages"][0]["variant"]
+    assert matches(schema, plan)

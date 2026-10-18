@@ -175,3 +175,33 @@ def test_accept_as_is_must_match_plan_shape():
             {"id": "d", "kind": "deploy_new"}, {"id": "r", "kind": "retire_old"},
             {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]})
     assert scenarios.get("add-optional-column").variants.keys() == {"apply"}
+
+
+def test_scenario_plan_validator_rejects_variant_that_contradicts_migration():
+    # Seen on Lightning (drop-column, backfill-then-required): "migration": "state_only" with
+    # "variant": "apply" made the runner deploy the apply build.
+    from migproto import plans
+    from migproto.agents import facts
+    import pytest
+
+    def plan(**deploy):
+        return {"plan_id": "x", "stages": [
+            {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+            {"id": "d", "kind": "deploy_new", **deploy}, {"id": "r", "kind": "retire_old"},
+            {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]}
+
+    drop = facts.plan_validator(facts.for_scenario("drop-column", roles.SEARCH_ROOTS))
+    with pytest.raises(plans.PlanError, match="leave \"variant\" out"):
+        drop(plan(migration="state_only", variant="apply"))
+    with pytest.raises(plans.PlanError, match="leave \"variant\" out"):
+        drop(plan(migration="state_only", variant="state_only"))
+    assert drop(plan(migration="state_only"))
+    assert drop(plan(migration="apply"))
+
+    b4 = facts.plan_validator(facts.for_scenario("irreversible-data-migration",
+                                                 roles.SEARCH_ROOTS))
+    assert b4(plan(migration="apply", variant="apply-reversible"))
+    with pytest.raises(plans.PlanError, match="needs deploy_new"):
+        b4(plan(variant="apply-reversible"))
+    with pytest.raises(plans.PlanError, match="apply-reversible"):
+        b4(plan(migration="apply", variant="apply"))
