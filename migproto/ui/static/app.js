@@ -764,6 +764,39 @@ function topologyRunCard(run) {
   </article>`;
 }
 
+function topologyMetricValue(run, field) {
+  if (field === "tokens_per_call") {
+    return typeof run.total_tokens === "number" && typeof run.model_calls === "number" && run.model_calls > 0
+      ? run.total_tokens / run.model_calls : null;
+  }
+  return typeof run[field] === "number" ? run[field] : null;
+}
+
+function topologyMetricLabel(value, field) {
+  if (value == null) return "not recorded";
+  if (field === "wall_seconds") return `${fmt(Math.round(value))} s`;
+  if (field === "tokens_per_call") return `${fmt(Math.round(value))} / call`;
+  return fmt(Math.round(value));
+}
+
+function topologyResourceMetric(label, field, roles, single) {
+  const roleValue = topologyMetricValue(roles, field);
+  const singleValue = topologyMetricValue(single, field);
+  const max = Math.max(roleValue || 0, singleValue || 0, 1);
+  const bar = (value) => value == null ? "0" : `${Math.max(5, Math.round(value / max * 100))}`;
+  return `<article class="resource-metric"><header><strong>${label}</strong><span>recorded pair</span></header>
+    <div class="resource-row roles"><span>Roles</span><b>${topologyMetricLabel(roleValue, field)}</b><i><em style="width:${bar(roleValue)}%"></em></i></div>
+    <div class="resource-row single"><span>Single</span><b>${topologyMetricLabel(singleValue, field)}</b><i><em style="width:${bar(singleValue)}%"></em></i></div>
+  </article>`;
+}
+
+function topologyResourceProfile(roles, single) {
+  return `<section class="topology-resource-profile" aria-label="Recorded resource profile for selected roles and single reviews">
+    <header><div><span class="eyebrow">RECORDED RESOURCE PROFILE</span><h3>What each selected review consumed</h3></div><p>Bar length is relative only within this pair. It does not determine which approach is better.</p></header>
+    <div class="resource-metric-grid">${topologyResourceMetric("Token footprint", "total_tokens", roles, single)}${topologyResourceMetric("Wall time", "wall_seconds", roles, single)}${topologyResourceMetric("Model calls", "model_calls", roles, single)}${topologyResourceMetric("Tokens per call", "tokens_per_call", roles, single)}</div>
+  </section>`;
+}
+
 async function pageTopologies() {
   crumbs([["Runs", "#/"], ["Roles vs single"]]);
   const data = await api("/api/topology-comparison");
@@ -779,12 +812,12 @@ async function pageTopologies() {
     return `<option value="${esc(value)}" ${value === state.topologyPair ? "selected" : ""}>Config ${esc(pair.configuration)} · roles ${esc(pair.roles.verdict || "?")} / single ${esc(pair.single.verdict || "?")}</option>`;
   }).join("");
   const rows = configurations.map((configuration) => `<section class="topology-config"><header><div><span class="eyebrow">CONFIGURATION ${esc(configuration.configuration)}</span><h2>Same settings, separate recorded reviews</h2></div><details><summary>Configuration note</summary><pre>${esc(configuration.config_note || "not recorded")}</pre></details></header><div class="topology-summary-grid">${topologySummaryCell("roles", configuration.setups.roles)}${topologySummaryCell("single", configuration.setups.single)}</div></section>`).join("");
-  const pair = selected ? `<section class="topology-pair"><header><div><span class="eyebrow">PRESENTER PAIR · CONFIGURATION ${esc(selected.configuration)}</span><h2>Inspect two recorded reviews side by side</h2><p>Each trajectory includes every saved attempt. The runner recorded the verdicts shown here.</p></div><label><span>Choose a pair</span><select id="topology-pair">${options}</select></label></header><div class="topology-pair-grid">${topologyRunCard(selected.roles)}${topologyRunCard(selected.single)}</div></section>` : `<section class="card"><p class="muted">No roles/single pair is available yet. Batches appear here once both setups have recorded rename reviews in the same configuration.</p></section>`;
+  const pair = selected ? `<section class="topology-pair"><header><div><span class="eyebrow">PRESENTER PAIR · CONFIGURATION ${esc(selected.configuration)}</span><h2>Inspect two recorded reviews side by side</h2><p>Each trajectory includes every saved attempt. The runner recorded the verdicts shown here.</p></div><label><span>Choose a pair</span><select id="topology-pair">${options}</select></label></header>${topologyResourceProfile(selected.roles, selected.single)}<div class="topology-pair-grid">${topologyRunCard(selected.roles)}${topologyRunCard(selected.single)}</div></section>` : `<section class="card"><p class="muted">No roles/single pair is available yet. Batches appear here once both setups have recorded rename reviews in the same configuration.</p></section>`;
   return `<header class="editorial-head topology-head"><div><span class="eyebrow">RECORDED MODEL REVIEWS</span><h1>Multi-agent vs single-agent</h1><p>Both setups use the same model, runner, and checks. Comparisons are only within each configuration.</p></div></header>
     <p class="topology-caption">One to three reviews per setup per configuration: observations, not rates. Neither setup is shown to be better.</p>
     <section class="topology-definition"><div><strong>roles</strong><span>Investigator, planner, and tester use separate calls with no chat history; the controller passes JSON between them.</span></div><div><strong>single</strong><span>One agent performs every step in one conversation with compacted history.</span></div></section>
-    ${rows || `<section class="card"><p class="muted">No completed configuration B–M batch records were found under runs/. This view reads batch folders directly and will populate when they are copied in.</p></section>`}
-    ${pair}`;
+    ${pair}
+    ${rows || `<section class="card"><p class="muted">No completed configuration B–M batch records were found under runs/. This view reads batch folders directly and will populate when they are copied in.</p></section>`}`;
 }
 
 async function openEvidence(oid) {

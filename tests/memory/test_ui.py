@@ -166,6 +166,15 @@ def test_run_library_does_not_hydrate_every_run():
     assert "await getRun(selected.run_id)" in page
 
 
+def test_topology_page_has_descriptive_resource_profile():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "RECORDED RESOURCE PROFILE" in js
+    assert "Token footprint" in js and "Tokens per call" in js
+    assert "does not determine which approach is better" in js
+    assert ".resource-metric-grid" in css
+
+
 def test_batch_endpoints_over_http():
     batch = "brev-batch-20260101-100000"
     handler = server.make_handler(store.connect(":memory:"), threading.Lock(),
