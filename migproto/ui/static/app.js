@@ -720,6 +720,30 @@ function batchBadges(b) {
 
 const configNote = (b) => b.config_note ? `<pre class="batch-note">${esc(b.config_note)}</pre>` : `<p>${unknown("no CONFIG-NOTE")}</p>`;
 
+function batchPurpose(b) {
+  const scenarios = [...new Set((b.counts || []).map((c) => c.scenario).filter(Boolean))];
+  const topologies = [...new Set((b.counts || []).map((c) => c.topology).filter(Boolean))];
+  const scope = `${scenarios.length ? scenarios.join(", ") : "the recorded migration activity"}${topologies.length ? ` using ${topologies.join(" and ")}` : ""}`;
+  if (b.status === "running") return `This experiment is still collecting reviews for ${scope}. Recorded outcomes below are incomplete; no comparison conclusion should be drawn yet.`;
+  return `This finished experiment recorded ${b.model_result_count} review${b.model_result_count === 1 ? "" : "s"} for ${scope}. Open an individual review to see its plan and runner evidence.`;
+}
+
+function batchOutcomeCards(b) {
+  const groups = b.counts || [];
+  return `<div class="batch-outcome-cards">${groups.map((c) => {
+    const total = BATCH_VERDICTS.reduce((n, key) => n + (c[key] || 0), 0);
+    const result = c.PASS ? `${c.PASS} passed` : c.INCOMPLETE ? `${c.INCOMPLETE} incomplete` : c.FAIL ? `${c.FAIL} failed` : total ? `${total} recorded` : "no completed reviews";
+    return `<article><span>${esc(c.scenario || "activity not recorded")}</span><strong>${esc(c.topology || "approach not recorded")}</strong><b>${esc(result)}</b><small>${total} final verdict${total === 1 ? "" : "s"} · ${c.scored ? `${c.matched}/${c.scored} matched the evaluation label` : "not scored"}</small></article>`;
+  }).join("") || `<p class="muted">No model-result rows were recorded.</p>`}</div>`;
+}
+
+function batchTakeaway(b) {
+  if (b.status !== "finished") return "Wait for the supervisor to record DONE before interpreting the batch.";
+  if (!b.model_result_count) return "The supervisor finished without a readable model result.";
+  if (b.running_count) return "Some records are still in progress; treat the displayed results as partial.";
+  return "These are recorded outcomes, not a ranking. Compare approaches only under the batch’s pre-registered evaluation rule.";
+}
+
 async function pageBatches() {
   crumbs([["Runs", "#/"], ["Batches"]]);
   const { batches } = await api("/api/batches");
@@ -738,15 +762,14 @@ async function pageBatches() {
 }
 
 async function pageBatch(id) {
-  crumbs([["Runs", "#/"], ["Batches", "#/batches"], [id]]);
+  crumbs([["Evaluation"], ["Experiment batches", "#/batches"], [id]]);
   const b = await api(`/api/batch?id=${enc(id)}`);
   const modelRuns = b.runs.filter((r) => !r.infrastructure_failure);
-  return `<div class="row"><h1>${esc(b.batch_id)}</h1></div>
-    <div class="row">${batchBadges(b)}</div>${pollNote(b)}
-    <h2>Configuration</h2>${configNote(b)}
-    <h2>Model results by scenario and topology</h2>${batchCounts(b.counts)}
+  return `<header class="batch-story-head"><a class="back-link" href="#/batches">← Experiment batches</a><span class="eyebrow">EXPERIMENT BATCH</span><h1>What this batch tells us</h1><p>${esc(batchPurpose(b))}</p><div>${batchStatusBadge(b)} <span>${b.model_result_count} recorded review${b.model_result_count === 1 ? "" : "s"}</span>${b.running_count ? `<span>${b.running_count} still running</span>` : ""}</div></header>
+    <section class="batch-takeaway"><span>How to read this</span><strong>${esc(batchTakeaway(b))}</strong><small>A PASS covers only the data set, versions, sequential interleaving, and machine tested in its review.</small></section>
+    <section class="batch-outcomes"><header><div><span class="eyebrow">RECORDED OUTCOMES</span><h2>What finished for each activity and approach?</h2></div><p>Final runner verdicts only. Failed attempts remain in each review.</p></header>${batchOutcomeCards(b)}</section>
     ${inProgressTable(b)}
-    <h2>Finished runs</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}
+    <details class="batch-technical"><summary>Inspect the experiment configuration and exact run records</summary><section><h2>Configuration notes</h2>${configNote(b)}<h2>Outcome table</h2>${batchCounts(b.counts)}<h2>Finished reviews</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}</section></details>
     ${b.infrastructure_failures.length ? `<section class="infra-section"><h2>Infrastructure failures</h2>
       <p class="muted">Listed in INFRA-NOTE. These are not model results and are excluded from the counts above.</p>
       <pre class="batch-note">${esc(b.infra_note)}</pre>${batchRunsTable(b.infrastructure_failures)}</section>`
