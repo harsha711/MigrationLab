@@ -450,7 +450,7 @@ async function pollJob(runId, after) {
   const timeline = $("#rv-events"); if (!timeline) return;
   for (const event of data.events) {
     if (event.kind === "tool") timeline.insertAdjacentHTML("beforeend", `<article class="tool-event"><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>tool · ${esc(event.name || "tool")}</strong><small>${esc(event.msg || "")}${event.first_error ? ` · first error at ${esc(event.first_error.stage ?? "setup")}` : ""}</small></article>`);
-    if (["attempt", "stage", "attempt_result", "check"].includes(event.kind)) timeline.insertAdjacentHTML("beforeend", `<article><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>${esc(event.kind === "check" ? humanize(event.name) : event.name || event.stage || event.kind)}</strong>${event.status ? verdictBadge(event.status) : ""}<small>${esc(event.msg || event.error || "")}</small></article>`);
+    if (["attempt", "stage", "attempt_result", "check"].includes(event.kind)) timeline.insertAdjacentHTML("beforeend", `<article><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>${esc(event.kind === "check" ? humanize(event.name) : event.kind === "attempt_result" ? `${event.name || "Attempt"}: runner verdict ${event.status || "not recorded"}` : event.name || event.stage || event.kind)}</strong>${event.status ? verdictBadge(event.status) : ""}<small>${esc(event.kind === "attempt_result" && (event.failed || []).length ? `${event.failed.length} failed checks: ${event.failed.slice(0, 6).map(humanize).join(", ")}${event.failed.length > 6 ? ", …" : ""}` : event.msg || event.error || "")}</small></article>`);
   }
   if (!data.done) { setTimeout(() => pollJob(runId, data.next), 1500); return; }
   const detail = await getRun(runId).catch(() => null), verdict = detail?.meta?.verdict || "finished";
@@ -458,10 +458,12 @@ async function pollJob(runId, after) {
   $("#job-decision").hidden = false;
   const revise = $("#job-revise");
   if (revise) {
-    const attempts = detail?.attempts || [];
+    // Only an attempt with a plan the runner executed can be revised; the controller rejects the rest.
+    const attempts = (detail?.attempts || []).filter((a) => a.plan_id && (a.checks_total || 0) > 0);
     const best = [...attempts].sort((a, b) => (a.checks_failed || 0) - (b.checks_failed || 0))[0];
     $("#feedback-attempt").innerHTML = attempts.map((a) => `<option value="${esc(String(a.attempt).replace(/^a/, ""))}" ${a === best ? "selected" : ""}>Attempt ${esc(a.attempt)} · ${esc(a.status || "recorded")}</option>`).join("");
     revise.hidden = !attempts.length;
+    if (!attempts.length && (detail?.attempts || []).length) revise.insertAdjacentHTML("afterend", `<p class="notice">No attempt of this job reached the runner with a plan, so there is nothing to revise. Submit a new review instead.</p>`);
   }
   const allEvents = await api(`/api/review/events?run=${enc(runId)}&after=0`).catch(() => ({events: []}));
   const human = allEvents.events.filter((event) => event.kind === "human_feedback");
