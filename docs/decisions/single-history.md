@@ -84,3 +84,9 @@ trailing failed checks with a count, so the prompt slice never cuts the JSON.
   10,000-batch stop, none of the 25 whose backfill converged, and 8 whose backfill never ran.
   It is agent-side, like the SQL quoting check; the runner still executes and judges.
 
+- **SQL syntax pre-check (`fix/next`):** `facts.check_sql_syntax` parses every sql string with
+  PostgreSQL's parser (`pglast` 8.6, libpg_query, PostgreSQL 18 grammar; the runner database is
+  PostgreSQL 15) and every plpgsql function body and DO block with the PL/pgSQL parser. On the
+  203 recorded Lightning planner replies it flagged all 18 whose stage failed with a syntax
+  error, none of the 181 others whose stages ran, and 4 in stages that never ran; no plan under
+  `proposals/` or `examples/` is rejected. It executes nothing and checks no names or types.

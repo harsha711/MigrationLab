@@ -5,6 +5,7 @@ description = "Feasibility prototype: database migration compatibility reviewer 
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "langfuse>=5.0.2",
+    "pglast>=8.6",
     "psycopg[binary]>=3.2,<4",
     "requests>=2.32,<3",
 ]

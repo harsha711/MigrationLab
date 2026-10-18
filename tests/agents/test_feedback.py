@@ -128,3 +128,32 @@ def test_sql_quoting_precheck():
     with pytest.raises(plans.PlanError, match="unbalanced"):
         facts.check_sql_quoting(plan("CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN",
                                      "RETURN NEW; END; $$ LANGUAGE plpgsql"))
+
+
+def test_sql_syntax_precheck_uses_the_postgresql_parser():
+    import pytest
+    from migproto import plans
+    from migproto.agents import facts
+
+    def plan(*sql):
+        return {"stages": [{"id": "e", "kind": "sql", "phase": "expand", "sql": list(sql)}]}
+
+    fn = ("CREATE OR REPLACE FUNCTION f() RETURNS trigger AS $$ BEGIN IF NEW.note IS NULL "
+          "THEN NEW.note := NEW.customer_note; END IF; RETURN NEW; END; $$ LANGUAGE plpgsql")
+    facts.check_sql_syntax(plan(
+        fn, "CREATE TRIGGER t BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW "
+            "EXECUTE FUNCTION f()",
+        "ALTER TABLE account_user ADD COLUMN customer_note text",
+        "DO $$ BEGIN UPDATE account_user SET customer_note = note; END $$"))
+    # Shapes that failed to execute on Lightning (runs 215440, 220035, 210420, 213633, 205627).
+    for bad in ("UPDATE account_user SET customer_note = note WHERE customer_note IS NULL "
+                "LIMIT 1000;",
+                "CREATE TRIGGER t BEFORE UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION f;",
+                "CREATE UNIQUE INDEX NOT VALID i ON account_user (last_name)",
+                fn.replace("END IF; RETURN NEW;", "END IF; END; IF TG_OP = 'x' THEN END IF; "
+                           "RETURN NEW;"),
+                fn.replace("RETURN NEW; END;", "RETURN NEW;"),
+                "DO $$ BEGIN LOOP UPDATE account_user SET customer_note = note LIMIT 1000; "
+                "EXIT WHEN NOT FOUND; END LOOP; END $$"):
+        with pytest.raises(plans.PlanError, match="PostgreSQL syntax error"):
+            facts.check_sql_syntax(plan(bad))

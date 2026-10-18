@@ -321,6 +321,32 @@ def check_backfill_terminates(plan_obj: dict) -> None:
                 "for a single-statement copy")
 
 
+_PLPGSQL = re.compile(r"\bLANGUAGE\s+'?plpgsql\b|^\s*DO\b", re.IGNORECASE)
+
+
+def check_sql_syntax(plan_obj: dict) -> None:
+    """Agent-side pre-check: parse every sql string with PostgreSQL's own parser (libpg_query
+    through pglast, PostgreSQL 18 grammar; the runner's database is PostgreSQL 15), and the
+    body of every plpgsql function and DO block with the PL/pgSQL parser. On Lightning, 15 stages failed to
+    execute with a syntax error (`UPDATE ... LIMIT`, `EXECUTE FUNCTION f` without `()`,
+    `CREATE UNIQUE INDEX NOT VALID`, broken plpgsql bodies), so the attempt tested nothing.
+    Parsing executes nothing and checks no names or types; the runner still executes and
+    judges every statement."""
+    import pglast   # imported lazily: only live plan validation needs it
+
+    for st in plan_obj.get("stages", []):
+        for i, sql in enumerate(st.get("sql") or []):
+            try:
+                pglast.parser.parse_sql(sql)
+                if _PLPGSQL.search(sql):
+                    pglast.parse_plpgsql(sql)
+            except pglast.parser.ParseError as exc:
+                raise plans.PlanError(
+                    f"stage {st.get('id')!r}, sql[{i}]: PostgreSQL syntax error: {exc}. "
+                    "Fix the statement; each sql string is sent to PostgreSQL as written"
+                ) from None
+
+
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
@@ -332,6 +358,7 @@ def plan_validator(sc_facts: ScenarioFacts):
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
         check_sql_quoting(obj)
+        check_sql_syntax(obj)
         check_backfill_terminates(obj)
         deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
         named = deploy.get("variant")
