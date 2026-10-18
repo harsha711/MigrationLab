@@ -256,6 +256,26 @@ def old_version(scenario_id: str | None) -> str:
     return sc.old_version
 
 
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
+
+
+def check_sql_quoting(plan_obj: dict) -> None:
+    """Agent-side pre-check for two SQL mistakes seen on Lightning that made a stage fail to
+    execute, so the attempt tested nothing: backslash-escaped dollar quotes (`\\$\\$`) and a
+    dollar-quoted body split across several sql strings (each string is one statement).
+    Only quoting is checked; the runner still executes and judges every statement."""
+    for st in plan_obj.get("stages", []):
+        for i, sql in enumerate(st.get("sql") or []):
+            where = f"stage {st.get('id')!r}, sql[{i}]"
+            if "\\$" in sql:
+                raise plans.PlanError(f"{where}: write dollar quotes literally as $$, never "
+                                      "\\$\\$ (the string is sent to PostgreSQL as written)")
+            if len(_DOLLAR_TAG.findall(sql)) % 2:
+                raise plans.PlanError(f"{where}: unbalanced $$ quoting. Each sql string is "
+                                      "executed as one statement, so a function body must open "
+                                      "and close its $$ in the same string")
+
+
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
@@ -266,6 +286,7 @@ def plan_validator(sc_facts: ScenarioFacts):
             raise plans.PlanError("plan must be a JSON object")
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
+        check_sql_quoting(obj)
         deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
         named = deploy.get("variant")
         if named is not None and (named in VARIANT_TEXT or named not in sc_facts.variants):

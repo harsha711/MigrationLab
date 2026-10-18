@@ -52,9 +52,29 @@ def _evidence(result: dict, failed_checks: list[dict]) -> dict:
     }
 
 
-def _feedback(result: dict, tester_report: dict, failed_checks: list[dict]) -> dict:
-    # Tester summary first, so a prompt-length cap can never drop it.
-    return {"tester_summary": tester_report, **_evidence(result, failed_checks)}
+def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
+              best: dict | None = None) -> dict:
+    # Tester summary first, so a prompt-length cap can never drop it. `best` (an earlier
+    # attempt that passed more runner checks than this one) comes next for the same reason.
+    out = {"tester_summary": tester_report}
+    if best is not None:
+        out["best_earlier_attempt"] = {
+            "note": (f"attempt {best['attempt']} passed {best['passed']} runner checks; your "
+                     f"latest plan passed {best['latest_passed']}. Its plan and failed checks "
+                     "are included; you may revise from either plan."),
+            "attempt": best["attempt"],
+            "passed_checks": best["passed"],
+            "failed_checks": best["failed"],
+            "plan": best["plan"],
+        }
+    return {**out, **_evidence(result, failed_checks)}
+
+
+def _best_earlier(best: dict | None, attempt: int, passed: int) -> dict | None:
+    """The best earlier attempt, when the latest attempt passed fewer runner checks."""
+    if best is None or best["attempt"] == attempt or best["passed"] <= passed:
+        return None
+    return {**best, "latest_passed": passed}
 
 
 def _failure_records(log: RunLog, start: int) -> list[dict]:
@@ -230,6 +250,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
 
+        best = None   # the executed attempt that passed the most runner checks
         for attempt in range(1, budget.max_revisions + 2):
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
                          **test_kwargs)
@@ -247,6 +268,10 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 extra_tests=tests, scenario=scenario_id).as_dict()
             last_result = result
             complete_failures = _failure_records(log, check_start)
+            passed = sum(c["status"] == "PASS" for c in log.checks[check_start:])
+            if best is None or passed > best["passed"]:
+                best = {"attempt": attempt, "passed": passed, "plan": plan_obj,
+                        "failed": [c["name"] for c in complete_failures]}
             report = call(f"tester-report-{attempt}", roles.report_evidence,
                           _evidence(result, complete_failures))
             transcript_role = "single" if memory is not None else f"tester-report-{attempt}"
@@ -282,7 +307,9 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             try:
                 plan_obj = _tag(call(
                     f"planner-{attempt + 1}", roles.plan, investigation,
-                    feedback=_feedback(result, report, complete_failures), previous=plan_obj,
+                    feedback=_feedback(result, report, complete_failures,
+                                       _best_earlier(best, attempt, passed)),
+                    previous=plan_obj,
                     **plan_kwargs,
                 ), attempt + 1)
                 _validate_plan(plan_obj, sfacts)

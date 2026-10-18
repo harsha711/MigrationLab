@@ -40,3 +40,37 @@ def test_compact_check_keeps_diagnostics_and_drops_bulk():
     assert out["schema"] == {"note_columns": ["note", "customer_note"], "triggers": ["sync"]}
     assert not {"timestamp", "database_snapshot_id", "provenance"} & set(out)
     assert len(json.dumps(out)) < len(json.dumps(_record(1))) / 2
+
+
+def test_best_earlier_attempt_only_when_latest_regressed():
+    from migproto.agents import loop
+    best = {"attempt": 3, "passed": 40, "plan": {"plan_id": "p3"}, "failed": ["case.x"]}
+    assert loop._best_earlier(None, 2, 10) is None
+    assert loop._best_earlier(best, 3, 40) is None          # the latest is the best
+    assert loop._best_earlier(best, 4, 40) is None          # not worse
+    got = loop._best_earlier(best, 4, 31)
+    assert got["latest_passed"] == 31 and got["plan"] == {"plan_id": "p3"}
+    fb = loop._feedback({"ok": False, "plan_id": "p4"}, {"summary": "s"}, [], got)
+    assert list(fb)[:2] == ["tester_summary", "best_earlier_attempt"]
+    assert fb["best_earlier_attempt"]["attempt"] == 3
+    assert fb["best_earlier_attempt"]["failed_checks"] == ["case.x"]
+    assert "best_earlier_attempt" not in loop._feedback({"ok": False}, {}, [])
+
+
+def test_sql_quoting_precheck():
+    import pytest
+    from migproto import plans
+    from migproto.agents import facts
+
+    def plan(*sql):
+        return {"stages": [{"id": "e", "kind": "sql", "phase": "expand", "sql": list(sql)}]}
+
+    facts.check_sql_quoting(plan("CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RETURN NEW; "
+                                 "END; $$ LANGUAGE plpgsql", "SELECT $1::text"))
+    facts.check_sql_quoting(plan("CREATE FUNCTION f() RETURNS int AS $body$ SELECT 1 $body$ "
+                                 "LANGUAGE sql"))
+    with pytest.raises(plans.PlanError, match="literally"):
+        facts.check_sql_quoting(plan("CREATE FUNCTION f() AS \\$\\$ BEGIN END; \\$\\$"))
+    with pytest.raises(plans.PlanError, match="unbalanced"):
+        facts.check_sql_quoting(plan("CREATE FUNCTION f() RETURNS trigger AS $$ BEGIN",
+                                     "RETURN NEW; END; $$ LANGUAGE plpgsql"))
