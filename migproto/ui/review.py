@@ -138,10 +138,14 @@ class ReviewManager:
 
     def _drain(self):
         while True:
-            try:
-                job, log, controller, lock_module = self._queue.get_nowait()
-            except queue.Empty:
-                return
+            # Check for an empty queue and give up the worker slot under the same guard that
+            # start() holds, so a job submitted at that moment is never left queued.
+            with self._guard:
+                try:
+                    job, log, controller, lock_module = self._queue.get_nowait()
+                except queue.Empty:
+                    self._worker = None
+                    return
             self._work(job, log, controller, lock_module)
 
     def _work(self, job, log, controller, lock_module):

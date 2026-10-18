@@ -168,6 +168,15 @@ def run_review(log: RunLog, source: str, request=None, topology: str | None = No
         return result
 
 
+def _log_human_feedback(log: RunLog, review: dict) -> None:
+    """Human feedback is input to agents, never a runner observation or a verdict."""
+    for index, item in enumerate(review.get("human_feedback", [])):
+        # The item's own "kind" (issue/suggestion/test) would collide with the event kind.
+        log.event("human_feedback", provenance="human", index=index,
+                  feedback_kind=item["kind"], text=item["text"], author=item["author"],
+                  at=item["at"])
+
+
 def _run_review(log: RunLog, source: str, request=None, topology: str | None = None,
                 llm: LLM | None = None, scenario: str | None = None,
                 trace: tracing.Review | None = None) -> dict:
@@ -224,9 +233,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           request_id=review.get("request_id"),
                           history_compaction=config["history_compaction"])
         log.write_json("agents/review-request.json", review)
-        # Human feedback is input to agents, never a runner observation or a verdict.
-        for index, item in enumerate(review.get("human_feedback", [])):
-            log.event("human_feedback", provenance="human", index=index, **item)
+        _log_human_feedback(log, review)
 
         # The scenario's OLD app version is the code under review (deployed before the
         # change); never a new-version or state-only build.

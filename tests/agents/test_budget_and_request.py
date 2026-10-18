@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from migproto.agents.budget import BudgetExceeded, ReviewBudget
@@ -72,3 +74,16 @@ def test_rename_scenario_text_is_unchanged():
     text = scenario_text(load_review_request(None, "llm"))
     assert "Table: account_user; old column: note; new column: customer_note.\n" in text
     assert "Application versions: old=old, new=new-staged.\n" in text
+
+
+def test_human_feedback_is_logged_without_colliding_with_the_event_kind(tmp_path):
+    from migproto.agents import loop
+    from migproto.runlog import RunLog
+
+    log = RunLog("test", root=tmp_path)
+    item = {"kind": "issue", "text": "batch the backfill", "author": "reviewer",
+            "at": "2026-10-18T00:00:00Z"}
+    loop._log_human_feedback(log, {"human_feedback": [item]})
+    events = [json.loads(line) for line in (log.dir / "events.jsonl").read_text().splitlines()]
+    fb = [e for e in events if e["kind"] == "human_feedback"]
+    assert fb and fb[0]["feedback_kind"] == "issue" and fb[0]["provenance"] == "human"

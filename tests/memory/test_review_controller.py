@@ -130,3 +130,27 @@ def test_ui_job_writes_v1_request_and_human_decision(tmp_path):
     record = manager.decision(started["run_id"], "approve", "runner evidence reviewed")
     assert record["provenance"] == "human"
     assert json.loads((runs / started["run_id"] / "review-decision.json").read_text()) == record
+
+
+def test_ui_queue_runs_every_job_including_after_the_worker_went_idle(tmp_path):
+    from review_fakes import FakeLock, FakeRunLog
+
+    runs = tmp_path / "runs"
+    manager = ReviewManager(store.connect(":memory:"), threading.Lock(), runs_root=runs,
+                            controller=lambda log, source, **kw: {"ok": True, "verdict": "PASS"},
+                            lock_module=FakeLock(),
+                            runlog_factory=lambda command: FakeRunLog(runs, command))
+
+    def wait_all_finished():
+        for _ in range(250):
+            if all(j["state"] == "finished" for j in manager.jobs()) and manager._worker is None:
+                return
+            time.sleep(.02)
+        raise AssertionError(manager.jobs())
+
+    manager.start("scripted", "roles", "rename-note")
+    manager.start("scripted", "single", "rename-note")
+    wait_all_finished()
+    manager.start("scripted", "roles", "rename-note")      # the worker exited; a new one starts
+    wait_all_finished()
+    assert [j["verdict"] for j in manager.jobs()] == ["PASS"] * 3
