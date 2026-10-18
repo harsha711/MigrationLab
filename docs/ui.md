@@ -3,6 +3,8 @@
 The UI is a small local web app for looking at recorded migration runs. It lets you replay
 past runs and look through their evidence, and it can start a new review.
 
+The visual layout draws on CodePen examples for a [compact dashboard sidebar and card rhythm](https://codepen.io/Ahmod-Musa/pen/zxvOaBY) and a [responsive light and dark dashboard](https://codepen.io/whosajid/pen/dPPLddZ). The repository uses its own CSS and evidence-specific components; no example code or assets were copied.
+
 ## Start it
 
 ```bash

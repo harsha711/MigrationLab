@@ -66,9 +66,9 @@ function runHeader(run, active) {
                 ["Matrix", `#/run/${enc(id)}/matrix/${first}`, "matrix"],
                 ["Agents", `#/run/${enc(id)}/agents`, "agents"],
                 ["Metrics", `#/run/${enc(id)}/metrics`, "metrics"]];
-  return `<div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
+  return `<section class="run-page-header"><span class="eyebrow">RECORDED MIGRATION REVIEW</span><div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
     <div class="row">${typeBadges(run)}</div>
-    <nav class="tabs">${tabs.map(([l, h, k]) => `<a href="${h}" class="${k === active ? "active" : ""}">${l}</a>`).join("")}</nav>`;
+    <nav class="tabs">${tabs.map(([l, h, k]) => `<a href="${h}" class="${k === active ? "active" : ""}">${l}</a>`).join("")}</nav></section>`;
 }
 
 function attemptPills(run, page, current) {
@@ -114,10 +114,10 @@ async function pageRuns() {
       <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
   }).join("");
   const processStages = [
-    "Choose review mode",
-    "AI migration review",
-    "Mock execution",
-    "Revise and Recommend"
+    "Review request",
+    "Staged plan",
+    "Runner checks",
+    "Tested outcome"
   ];
   const stages = processStages.map((title, index) => `<div class="editorial-stage done"><div><span>${index + 1}</span><strong>${esc(title)}</strong></div><i>${index < processStages.length - 1 ? "→" : ""}</i></div>`).join("");
   const paths = (matrix.columns || []).map((column) => [column, column.replaceAll("new-staged", "new").replace(" -> ", " → ")]);
@@ -169,10 +169,10 @@ async function pageRuns() {
   const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
   const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
   const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
-  return `<header class="editorial-head"><div><h1>Migration evidence</h1><p>Review recorded evidence across the staged migration to confirm a safe cutover.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
+  return `<header class="editorial-head"><div><span class="eyebrow">RECORDED RUNS / EVIDENCE</span><h1>Migration evidence</h1><p>Follow each plan, runner check, and revision from request to tested outcome.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
     <section class="editorial-layout">
       <main class="editorial-main">
-        <section class="stage-panel"><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
+        <section class="stage-panel"><div class="stage-panel-title"><span class="eyebrow">HOW THE REVIEW WORKS</span><span>Evidence follows the runner</span></div><div class="editorial-stages">${stages || `<p class="muted">No stages recorded.</p>`}</div></section>
         <section class="attempt-transition ${demo?.attempts.length === 1 ? "single" : ""}" aria-label="Attempt revision history">${attempts || `<p class="muted">No attempt records available.</p>`}</section>
         <section class="editorial-panel matrix-editorial"><header><div><h2>Old / New compatibility</h2><p>Results from automated and recorded checks across each application path.</p></div><span class="recorded-view">Recorded checks</span></header>${matrixMetrics}<div class="editorial-matrix" style="--matrix-columns:${Math.max(paths.length, 1)}" role="group" aria-label="Application compatibility matrix">${matrixGrid || `<p class="muted">No application-scoped checks were recorded.</p>`}</div><p class="matrix-legend">Metrics cover recorded final-attempt application paths only. — means this exact check and application path was not recorded; missing scope remains unknown.</p></section>
       </main>
@@ -811,6 +811,17 @@ async function route() {
   const parts = routeParts();
   const view = $("#view");
   clearTimeout(state.batchPoll);
+  const activeNav = !parts.length ? "runs"
+    : parts[0] === "batches" ? "batches"
+    : parts[0] === "compare" ? "compare"
+    : parts[0] === "demo" ? "demo"
+    : parts[0] === "run" && parts.length === 2 ? "overview" : "runs";
+  document.querySelectorAll(".side-nav [data-nav]").forEach((link) => {
+    const active = link.dataset.nav === activeNav;
+    link.classList.toggle("is-active", active);
+    if (active) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  });
   try {
     let html;
     if (!parts.length) html = await pageRuns();
