@@ -265,6 +265,66 @@ def test_batch_endpoints_over_http():
         httpd.shutdown()
 
 
+def test_counterpart_endpoint_derives_only_recorded_batch_pairs(tmp_path):
+    """`runs.jsonl` has n, scenario and topology; repetition is its ordered occurrence."""
+    runs = tmp_path / "runs"
+    batch = runs / "brev-batch-20260102-100000"
+    batch.mkdir(parents=True)
+    (batch / "CONFIG-NOTE").write_text("CONFIGURATION Z: synthetic test\n")
+
+    def finished(run_id, scenario, topology):
+        path = runs / run_id
+        path.mkdir()
+        (path / "summary.json").write_text(json.dumps({
+            "verdict": "FAIL", "scenario": scenario, "topology": topology,
+            "model": "test-model", "thinking_budget": 1024,
+            "agent_totals": {"max_total_tokens": 1000, "max_wall_seconds": 90},
+        }))
+        (path / "request.json").write_text(json.dumps({"scenario": scenario,
+            "agent_topology": topology, "budget": {"max_total_tokens": 1000,
+            "max_wall_seconds": 90}}))
+
+    for run_id, scenario, topology in [
+        ("pair-roles", "rename-note", "roles"),
+        ("pair-single", "rename-note", "single"),
+        ("different-scenario", "add-table", "roles"),
+        ("missing-counterpart", "drop-index", "roles"),
+    ]:
+        finished(run_id, scenario, topology)
+    rows = [
+        {"n": 1, "run_id": "pair-roles", "scenario": "rename-note", "topology": "roles"},
+        {"n": 2, "run_id": "pair-single", "scenario": "rename-note", "topology": "single"},
+        {"n": 3, "run_id": "different-scenario", "scenario": "add-table", "topology": "roles"},
+        {"n": 4, "run_id": "missing-counterpart", "scenario": "drop-index", "topology": "roles"},
+    ]
+    (batch / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    handler = server.make_handler(store.connect(":memory:"), threading.Lock(), runs_root=runs)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        matched = get_json(base + "/api/runs/pair-roles/counterpart")
+        assert matched["run"]["repetition"] == 1
+        assert matched["run"]["configuration"] == "Z"
+        assert [row["run_id"] for row in matched["counterparts"]] == ["pair-single"]
+        assert matched["counterparts"][0]["repetition"] == 1
+
+        different = get_json(base + "/api/runs/different-scenario/counterpart")
+        assert not different["counterparts"]
+        assert "no other topology" in different["reason"]
+
+        missing = get_json(base + "/api/runs/missing-counterpart/counterpart")
+        assert not missing["counterparts"]
+        assert "no other topology" in missing["reason"]
+
+        outside = get_json(base + "/api/runs/not-in-a-batch/counterpart")
+        assert not outside["counterparts"]
+        assert outside["reason"] == "not part of a batch"
+    finally:
+        httpd.shutdown()
+
+
 def test_batches_page_assets():
     js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
     html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")

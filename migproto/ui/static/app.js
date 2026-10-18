@@ -22,6 +22,7 @@ const getRun = (id) => {
   if (!runCache.has(id)) runCache.set(id, api(`/api/run?id=${enc(id)}`));
   return runCache.get(id);
 };
+const counterpartFor = (id) => api(`/api/runs/${enc(id)}/counterpart`);
 
 function verdictBadge(v) {
   if (!v) return `<span class="badge">${unknown()}</span>`;
@@ -69,6 +70,24 @@ function runHeader(run, active) {
   return `<section class="run-page-header"><span class="eyebrow">RECORDED MIGRATION REVIEW</span><div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
     <div class="row">${typeBadges(run)}</div>
     <nav class="tabs">${tabs.map(([l, h, k]) => `<a href="${h}" class="${k === active ? "active" : ""}">${l}</a>`).join("")}</nav></section>`;
+}
+
+async function renderCounterpart(runId) {
+  const slot = $("#run-counterpart");
+  if (!slot) return;
+  try {
+    const info = await counterpartFor(runId);
+    if (location.hash !== `#/run/${enc(runId)}` || !$("#run-counterpart")) return;
+    const alternatives = info.counterparts || [];
+    if (!alternatives.length) {
+      slot.innerHTML = `<strong>Matched topology comparison unavailable</strong><span>${esc(info.reason || "no matched counterpart recorded")}</span>`;
+      return;
+    }
+    const links = alternatives.map((other) => `<a class="button ghost" href="#/compare/${enc(runId)}/${enc(other.run_id)}">Compare with ${esc(other.topology)} <small>same batch, scenario, repetition</small> →</a>`).join("");
+    slot.innerHTML = `<strong>Matched topology comparison</strong><span>Same batch ${esc(info.run.batch_id)}, scenario ${esc(info.run.scenario)}, derived repetition ${esc(info.run.repetition)}.</span><div>${links}</div>`;
+  } catch (err) {
+    slot.innerHTML = `<strong>Matched topology comparison unavailable</strong><span>Comparison context could not be read.</span>`;
+  }
 }
 
 function attemptPills(run, page, current) {
@@ -184,7 +203,7 @@ async function pageRuns() {
     <section class="run-library-summary" aria-label="Run library summary"><div><span>Recorded reviews</span><strong>${runs.length}</strong></div><div class="summary-positive"><span>Passed or reproduced</span><strong>${finished}</strong></div><div class="summary-attention"><span>Needs investigation</span><strong>${needsAttention}</strong><small>fail, incomplete, or error</small></div><div><span>Sources</span><strong>${new Set(runs.map((run) => run.source_kind)).size}</strong><small>fixtures and local runs stay labeled</small></div></section>
     <section class="run-quick-picks"><header><div><span class="eyebrow">START WITH A RECORDED REVIEW</span><h2>Open a run to see the evidence behind its outcome</h2></div><p>The library itself stays lightweight; detailed observations load only after you open a run.</p></header><div class="run-quick-grid">${featured || `<p class="muted">No recorded reviews are available.</p>`}</div></section>
     <section id="runs-table" class="section-head"><div><span class="eyebrow">ALL RECORDED REVIEWS</span><h2>Find the review you need</h2><p>Runner outcomes are recorded facts. Model text and plans appear after opening a review.</p></div>
-      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div></section>
+      <div class="row"><button id="compare" disabled>Compare selected</button><a class="button ${controller_available ? "primary" : "ghost"}" href="#/review" title="${esc(controller_available ? "Start a review through the controller" : reviewUnavailableReason(controller_reason))}">Run Review</a></div><p id="compare-selection" class="run-library-compare-note">Select exactly two reviews. The comparison page will show whether they are a recorded matched pair.</p></section>
     <div class="filterbar run-library-filter"><input id="run-search" type="search" placeholder="Search by run ID, model, source, or verdict" aria-label="Search runs">
       <select id="verdict-filter" aria-label="Filter by verdict"><option value="">All outcomes</option><option>PASS</option><option>FAIL</option><option>INCOMPLETE</option><option>REPRODUCED</option><option>ERROR</option></select>
       <select id="kind-filter" aria-label="Filter by source"><option value="">All sources</option><option value="fixture">Recorded fixtures</option><option value="local_run">Local runs</option></select></div>
@@ -411,6 +430,7 @@ async function submitDecision(decision) {
 async function pageOverview(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id]]);
+  setTimeout(() => renderCounterpart(id), 0);
   const m = run.meta || {};
   const intent = (attempt) => {
     const plan = attempt.plans?.[0]?.body || {};
@@ -447,7 +467,7 @@ async function pageOverview(id) {
     return `<article class="revision-story-card ${compare.tone}"><header><div><span class="story-index">${index + 1}</span><span class="eyebrow">ATTEMPT ${esc(s)}</span><h3>${verdictBadge(a.status)} ${esc(compare.title)}</h3></div><div class="story-links"><a href="#/run/${enc(id)}/plan/${s}">Open plan</a><a href="#/run/${enc(id)}/matrix/${s}">Compatibility checks</a></div></header><div class="story-grid"><section><span>Planner proposed</span><p>${esc(intent(a))}</p><small>Saved planner artifact; this is a proposal, not runner evidence.</small></section><section><span>What changed</span><ul>${planDelta(a, run.attempts[index - 1]).map((change) => `<li>${esc(change)}</li>`).join("")}</ul></section><section class="runner-observed"><span>Runner observed</span><strong>${a.outcome_counts ? esc(countsText(a.outcome_counts)) : `${a.checks_total} checks · ${a.checks_failed} failed`}</strong><p>${esc(compare.detail)}</p>${a.halted ? `<small>Stopped: ${esc(a.halted)}</small>` : ""}</section></div>${failures.length ? `<footer><span>Failed checks</span>${failures.map((failure) => `<code>${esc(failure)}</code>`).join("")}${failedCount > failures.length ? `<small>+${failedCount - failures.length} more</small>` : ""}</footer>` : ""}${cause ? `<details class="story-diagnosis"><summary>Tester’s recorded diagnosis</summary><p>${esc(cause.text)}</p></details>` : ""}</article>`;
   }).join("");
   const man = run.manifest;
-  return `${runHeader(run, "overview")}
+  return `${runHeader(run, "overview")}<section id="run-counterpart" class="run-counterpart"><strong>Looking for a matched topology comparison…</strong></section>
     <section class="revision-story-head"><span class="eyebrow">REVISION STORY</span><h2>How the proposed migration changed after runner feedback</h2><p>Follow the saved planner proposal, the exact runner result, and the next revision. The runner—not the planner—determines whether an attempt passed.</p><div><strong>Requested change</strong><span>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</span></div></section>
     <section class="revision-story" aria-label="Revision story">${story || `<p class="muted">No attempt records were saved for this run.</p>`}</section>
     ${man ? `<details><summary>Fixture notes</summary><p>${val(man.note)}</p>
@@ -675,13 +695,31 @@ async function pageCompare(a, b) {
       </details>
     </article>`;
   };
-  const [left, right] = await Promise.all([getRun(a), getRun(b)]);
+  const [left, right, leftContext, rightContext] = await Promise.all([
+    getRun(a), getRun(b), counterpartFor(a), counterpartFor(b),
+  ]);
   const leftBest = closest(left.attempts), rightBest = closest(right.attempts);
   const shared = [...new Set((leftBest?.failed || []).filter((name) => (rightBest?.failed || []).includes(name)))];
   const result = left.meta?.verdict === "PASS" || right.meta?.verdict === "PASS"
     ? "At least one review passed its recorded checks; open the run evidence before making a human decision."
     : "Neither review passed its recorded checks. This page cannot choose a better approach from these two runs.";
-  return `<h1>Compare two reviews</h1><p class="muted">Use this to compare two revision paths—not to rank models or topologies. Failed-check counts are only directly comparable when the attempt ran the same checks.</p>
+  const leftProfile = leftContext.run || {}, rightProfile = rightContext.run || {};
+  const fields = [["Scenario", "scenario"], ["Topology", "topology"], ["Batch", "batch_id"],
+    ["Configuration", "configuration"], ["Repetition", "repetition"], ["Model", "model"],
+    ["Thinking budget", "thinking_budget"], ["Token budget", "token_budget"], ["Wall budget", "wall_budget"]];
+  const contextStrip = `<section class="compare-context-strip"><header><span class="eyebrow">RECORDED COMPARISON CONTEXT</span><p>Fields with a tinted background differ. Missing means the source did not record it.</p></header><div class="table-wrap"><table><tr><th>Field</th><th>${esc(a)}</th><th>${esc(b)}</th></tr>${fields.map(([label, key]) => {
+    const different = String(leftProfile[key] ?? "") !== String(rightProfile[key] ?? "");
+    const cell = (value) => value == null ? unknown("not recorded") : esc(value);
+    return `<tr class="${different ? "context-diff" : ""}"><th>${label}</th><td>${cell(leftProfile[key])}</td><td>${cell(rightProfile[key])}</td></tr>`;
+  }).join("")}</table></div><p class="compare-expected">Expected outcome: ${leftProfile.expected ? `${esc(leftProfile.expected.verdict)} · ${leftProfile.matches_expected === true ? "left matched" : leftProfile.matches_expected === false ? "left did not match" : "left not scored"}` : "not available"}${rightProfile.expected ? `; ${esc(rightProfile.expected.verdict)} · ${rightProfile.matches_expected === true ? "right matched" : rightProfile.matches_expected === false ? "right did not match" : "right not scored"}` : ""}. This evaluation label does not change either runner verdict.</p></section>`;
+  const pairMatched = (leftContext.counterparts || []).some((item) => item.run_id === b);
+  const warnings = [];
+  if (leftProfile.scenario !== rightProfile.scenario) warnings.push("The recorded scenarios differ.");
+  const hasRunnerEvidence = (run) => run.attempts.some((attempt) => (attempt.checks_total || 0) > 0);
+  if (!hasRunnerEvidence(left) || !hasRunnerEvidence(right)) warnings.push("At least one review has no runner evidence (zero executed checks).");
+  if (!pairMatched) warnings.push(leftContext.reason || "These runs are not a recorded same-batch matched pair.");
+  const warning = warnings.length ? `<section class="compare-warning"><strong>Not a meaningful topology comparison</strong><span>${esc(warnings.join(" "))} The evidence columns are still shown for inspection.</span></section>` : "";
+  return `<h1>Compare two reviews</h1><p class="muted">This page describes two recorded reviews only. It does not rank topologies or establish that one approach is better.</p>${contextStrip}${warning}
     <section class="compare-conclusion"><span class="eyebrow">WHAT THIS COMPARISON SAYS</span><strong>${esc(result)}</strong>
       <div><section><span>Left closest attempt</span><b>${leftBest ? `${esc(short(leftBest.attempt_id))} · ${leftBest.checks_failed}/${leftBest.checks_total} failed` : "not recorded"}</b></section><section><span>Right closest attempt</span><b>${rightBest ? `${esc(short(rightBest.attempt_id))} · ${rightBest.checks_failed}/${rightBest.checks_total} failed` : "not recorded"}</b></section><section><span>Shared closest-attempt blockers</span><b>${shared.length ? `${shared.length} shared` : "none recorded"}</b>${shared.length ? `<small>${compactFailures(shared, 4)}</small>` : ""}</section></div>
     </section><div class="compare">${col(left)}${col(right)}</div>`;
@@ -1165,6 +1203,30 @@ document.addEventListener("click", (ev) => {
   const row = ev.target.closest("[data-href]");
   if (row) location.hash = row.dataset.href;
 });
+async function updateCompareSelection(picked) {
+  const btn = $("#compare"), note = $("#compare-selection");
+  if (!btn || !note) return;
+  btn.disabled = picked.length !== 2;
+  btn.onclick = () => { location.hash = `#/compare/${enc(picked[0])}/${enc(picked[1])}`; };
+  if (picked.length !== 2) {
+    note.textContent = "Select exactly two reviews. The comparison page will show whether they are a recorded matched pair.";
+    return;
+  }
+  note.textContent = "Checking recorded comparison context…";
+  try {
+    const [left, right] = await Promise.all(picked.map(counterpartFor));
+    if ([...document.querySelectorAll(".pick:checked")].map((box) => box.value).join("|") !== picked.join("|")) return;
+    if (left.run?.scenario !== right.run?.scenario) {
+      note.textContent = "These reviews have different recorded scenarios; the comparison page will flag that it is not meaningful.";
+    } else if (!(left.counterparts || []).some((item) => item.run_id === picked[1])) {
+      note.textContent = `These are not a recorded matched pair: ${left.reason || "batch, repetition, or counterpart scope differs"}.`;
+    } else {
+      note.textContent = "Matched pair: same recorded batch, scenario, and derived repetition; topology differs.";
+    }
+  } catch (err) {
+    note.textContent = "Comparison context could not be read; you can still inspect the two recorded reviews.";
+  }
+}
 document.addEventListener("change", (ev) => {
   if (ev.target.id === "rv-scenario") { const option = ev.target.selectedOptions[0]; const target = $("#scenario-description"); if (target) target.textContent = option?.dataset.description || ""; return; }
   if (ev.target.id === "topology-pair") { state.topologyPair = ev.target.value; route(); return; }
@@ -1188,9 +1250,7 @@ document.addEventListener("change", (ev) => {
   }
   if (!ev.target.classList.contains("pick")) return;
   const picked = [...document.querySelectorAll(".pick:checked")].map((x) => x.value);
-  const btn = $("#compare");
-  btn.disabled = picked.length !== 2;
-  btn.onclick = () => { location.hash = `#/compare/${enc(picked[0])}/${enc(picked[1])}`; };
+  updateCompareSelection(picked);
 });
 document.addEventListener("input", (ev) => { if (ev.target.id === "run-search") filterRuns(); });
 document.addEventListener("keydown", (ev) => {
