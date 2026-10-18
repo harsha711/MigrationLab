@@ -3,7 +3,7 @@
 **Owner / branch:** Mahek (Owner 3) / `scenarios/catalogue`
 - **Stacking:** `runner/verification-v1` → `seed/olist` → `scenarios/catalogue`
 - **Why it needs review:** it changes runner files that Harsha owns.
-- **Results:** [../results-scenarios.md](../results-scenarios.md). 22 of 22 scripted plans (14 scenarios) match their expected verdicts on the Olist 10k seed. The rename regression is identical. 84 tests pass.
+- **Results:** [../results-scenarios.md](../results-scenarios.md). all 25 catalogue rows implemented; 38 of 41 scripted plans match their expected verdicts (A/B/D 22/22, tier 3 6/6, C1-C6 10/13 with the mismatches explained). The rename regression is identical. 92 tests pass.
 
 ## What changed
 - **`migproto/scenarios.py` (new):** a registry of schema changes under review. Each scenario defines:
@@ -38,6 +38,20 @@
 - **`saleor_app.gql`:** re-login and retry once on "Signature has expired". A WSL2 wall-clock jump of +1,573 s expired a fresh token mid-run. See the incident in `docs/results-scenarios.md`.
 - **Bug fixed in my own refactor:** after deploy, the rename checks compared `note` and `customer_note` even when an immediate rename had already dropped `note`. They now only compare columns that exist.
 
+## Round 3: tier 3 (A2, A6, A7) and tier 4 (C1 to C6)
+- **Runner operations:** `AppServer` gains last-name, staff-events and language operations. `run_case` gains internal ops `write_name`, `read_events`, `write_lang`, `try_write_lang` and `read_lang`. A `try_write_lang` rejection doesn't fail the case.
+- **Derived-value checks:** `Scenario.preserve_exprs` + `checks.preservation_expr` verify data through an expression, e.g. a composed note after a column is split and dropped.
+- **Load and lock harness (`migproto/load.py`):**
+  - `LoadGenerator`: threads rewrite each row's own note, so row locks are taken but data never changes.
+  - `LockMonitor`: polls `pg_stat_activity`.
+  - `LongTransaction`: holds the table for C4.
+  - For scenarios with `load=True`, every stage records `<stage>.write_latency`. It passes if max ≤ `lock_budget_ms` (500) and there are no errors; an S0 baseline is recorded first.
+  - Write exceptions, such as HTTP timeouts on blocked writes, are recorded as errors.
+- **SQL stage options:** `pause_ms` and `retry_on_lock_timeout`.
+- **Separate scale template:** `config.SEED_DB` honours `MIGPROTO_SEED_DB`. `baseline --seed-scale N` bulk-inserts N rows with Olist text. The default template and all non-load scenarios are unaffected.
+- **`AppServer.token`** is serialized with a lock for the load threads.
+- **Please review:** the latency budget (500 ms, fixed before the runs), and whether the lock-monitor column should feed verdicts (today it doesn't).
+
 ## Decisions to review (Harsha)
 1. **`apply` plans skip expand and contract.** This is what lets the tool say "safe as-is". The alternative would be a separate stage kind. I kept the plan schema small.
 2. **Placeholder expand stages.** A3 and B1's safe plans need a no-op expand (`ALTER COLUMN note DROP NOT NULL`, already nullable), because `state_only` plans still require expand and contract. Should `state_only` plans be allowed without expand?
@@ -50,6 +64,6 @@
 - **A good evaluation set:** D1 and D3 (should be accepted), A4, A3 and B1 (should be revised into a staged rollout). That's exactly the "accept a compatible change" case the original evaluation plan asked for.
 
 ## Not done
-- **Catalogue rows not attempted:** A2, A6, A7, and all of C (needs a concurrency and lock harness).
+- **Catalogue rows not attempted:** none; all 25 are implemented. C2 and C6 did not exceed the budget at 1M rows on this machine (measured, not hidden). A2, A6 and A7 ran only on the Olist seed.
 - **A8 caveat:** the runner rejects the unsafe plan through the ORM failure, but it cannot observe the raw-SQL code path. Finding that is the Investigator's job.
 - **UI follow-up (Owner 3):** show `scenario` and `recommendation` on the Overview and Runs pages.

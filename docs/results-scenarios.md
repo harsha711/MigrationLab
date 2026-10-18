@@ -1,4 +1,10 @@
-# Scenario catalogue results (Olist 10k seed)
+# Scenario catalogue results
+
+**All 25 catalogue rows are implemented** (23 scenarios plus the original rename and its raw-SQL variant). Results by group:
+- A, B and D below; tier 3 (A2, A6, A7) and tier 4 (C1 to C6, 1M-row table under write load) at the end.
+- Every expected verdict was written before its run. Mismatches are reported, never re-labelled.
+
+# Part 1: A, B, D scenarios on the Olist 10k seed
 
 Branch `scenarios/catalogue` (based on `seed/olist`, which is based on `runner/verification-v1`). Measured on 2026-10-17 in WSL2 Ubuntu 24.04 with Docker Desktop on one laptop.
 - **Data:** `migproto baseline --seed-source olist --seed-limit 10000`, which gives 10,045 `account_user` rows: 10,000 Olist customers plus Saleor's demo users.
@@ -12,7 +18,7 @@ Branch `scenarios/catalogue` (based on `seed/olist`, which is based on `runner/v
 - sequential old/new interleaving only
 - one machine
 - no concurrency, lock or timing claims
-- **not attempted:** A2, A6, A7, and all of group C (C1 to C6)
+- A2, A6, A7 and group C are covered in Parts 2 and 3 below
 
 ## Summary
 - **14 scenarios (13 new plus the original rename), 22 scripted plans: 22 of 22 matched** their expected verdict and recommendation.
@@ -94,3 +100,77 @@ uv run migproto baseline --rebuild-seed --skip-pytest --seed-source olist --olis
 uv run migproto staged --scenario <scenario> --plan proposals/scripted/<scenario>/<plan>.json [--keep-db]
 ```
 Patches are regenerated with `python3 scripts/make_scenario_patches.py`. Scenario definitions are in `migproto/scenarios.py`.
+
+# Part 2: tier 3 (A2, A6, A7) on the Olist 10k seed
+
+**6 of 6 plans match** (runs 2026-10-17 19:33 to 19:39). All three are on the Olist seed only; they have not been run on the synthetic seed.
+
+| # | Scenario | Plan | Verdict | Recommendation | Decisive evidence |
+|---|---|---|---|---|---|
+| A2 | rename-table | unsafe | FAIL | reject | `AlterModelTable`: `ALTER TABLE "account_customerevent" RENAME TO "account_customer_event"`. The old app's inserts fail: `relation "account_customerevent" does not exist` |
+| A2 | rename-table | safe | PASS | staged_rollout | rename the table plus an auto-updatable **view** under the old name (the old app inserts and reads through it), state-only deploy, retire, `DROP VIEW` |
+| A6 | split-note | unsafe | FAIL | reject | data migration plus new-app-only reads. Old writes never reach `note_title`/`note_body`: `read 'Tudo em ordem.', expected 'old wrote this'` (real Olist review text) |
+| A6 | split-note | safe | PASS | staged_rollout | a two-way sync trigger (split on the first `': '`, compose `title || ': ' || body`), batched backfill. After the contract, `preservation.composed_note` matches every original note |
+| A7 | new-language-value | unsafe | FAIL | reject | the new app writes `TLH`; the old app crashes reading it: `KeyError: 'TLH'` (its `LanguageCodeEnum` has no such member) |
+| A7 | new-language-value | readers-first | PASS | accept_as_is | the deployed version can read `tlh` but rejects writing it. Limitation: the follow-up "enable writers" release is not exercised |
+
+**Incident (test design, fixed):** the first A2 safe run failed with `saw 0 events` in both directions. Saleor attaches `NAME_ASSIGNED` events to the **acting staff user**, not the renamed customer; the events existed with `user_id` = staff. The cases now read `me { events }`. Expected verdicts unchanged.
+
+# Part 3: tier 4 (C1 to C6): 1,010,045-row table under concurrent write load
+
+**Data:** template `migproto_seed_scale` (`MIGPROTO_SEED_DB=migproto_seed_scale migproto baseline --seed-source olist --seed-limit 10000 --seed-scale 1000000`).
+- **Contents:** the same 10,000 Olist customers plus 1,000,000 bulk rows reusing their review text and cities.
+- **Size:** 837 MB.
+- **Build time:** 4 min 44 s in total; the bulk insert took 72 s.
+
+**Harness** (`migproto/load.py`):
+- During every stage, 4 threads issue `customerUpdate(note)` against the old app (the new app after retirement). Each write sets a row's note to its existing value, so row locks are taken but data never changes.
+- `pg_stat_activity` is polled every 100 ms for lock waits.
+- **Pass rule (fixed before any run):** a stage fails if any load write takes more than **500 ms** or errors.
+- **Baseline before migration:** max about 100 to 230 ms, p95 about 85 to 140 ms.
+
+**Results:** final runs 2026-10-17, 21:19 to 21:43, after the harness fix below. **10 of 13 plans match.**
+
+| # | Scenario | Plan | Verdict (expected) | Worst stage: max write latency / longest lock wait | Notes |
+|---|---|---|---|---|---|
+| C1 | big-backfill | unsafe | FAIL (FAIL) ✓ | single `UPDATE`: **14,812 ms** / 16,340 ms, 4 sessions blocked | the `UPDATE` also hit the runner's 60 s statement timeout and was cancelled, so the backfill could not complete |
+| C1 | big-backfill | safe | **FAIL (PASS) ✗** | all stages ≤ 465 ms | **flaw in my plan, caught by the runner:** rows inserted by the old version after the backfill were NULL, and the new version refused to save them (`"None" value must be either True or False`). Same trap as A5 |
+| C1 | big-backfill | safe-with-default | PASS (PASS) ✓ | ≤ 329 ms | revised plan, added after that evidence: `SET DEFAULT false` (new rows only) plus 10k-row batches with 50 ms pauses |
+| C2 | plain-index | unsafe | **PASS (FAIL) ✗** | deploy: 378 ms / 0 ms | **measured mismatch, flagged as a risk before running:** a plain `CREATE INDEX` on 1M `last_name` values finished too fast on this machine to push a write past 500 ms |
+| C2 | plain-index | safe | PASS (PASS) ✓ | deploy: 384 ms | `CREATE INDEX CONCURRENTLY` (non-atomic migration) |
+| C3 | int-to-bigint | unsafe | FAIL (FAIL) ✓ | deploy: **15,310 ms** / 16,942 ms | `ALTER COLUMN TYPE bigint USING ...` rewrites the table under ACCESS EXCLUSIVE |
+| C3 | int-to-bigint | safe | PASS (PASS) ✓ | ≤ 329 ms | new column, sync trigger, batched backfill, one short swap transaction, `CHECK NOT VALID` → `VALIDATE` → `SET NOT NULL`. `unchanged.number_of_orders` passes |
+| C4 | long-transaction | unsafe | FAIL (FAIL) ✓ | expand: **10,058 ms** / 11,654 ms, 5 sessions blocked | a 10 s transaction holds the table; the `ALTER` queues and every write queues behind it |
+| C4 | long-transaction | safe | PASS (PASS) ✓ | expand: 283 ms / 192 ms | `SET lock_timeout = '200ms'` plus `retry_on_lock_timeout` |
+| C5 | schema-and-backfill | unsafe | FAIL (FAIL) ✓ | deploy: **49,862 ms** / 53,088 ms | one atomic migration: `ADD COLUMN` plus a RunPython update of every row holds ACCESS EXCLUSIVE for the whole backfill |
+| C5 | schema-and-backfill | safe | PASS (PASS) ✓ | ≤ 390 ms | metadata-only `ADD COLUMN`, batched backfill, state-only deploy |
+| C6 | set-not-null | unsafe | **PASS (FAIL) ✗** | contract: 264 ms / 78 ms | **measured mismatch, flagged as a risk before running:** at 1M rows the `SET NOT NULL` scan held writers for well under 500 ms on this machine |
+| C6 | set-not-null | safe | PASS (PASS) ✓ | contract: 228 ms | `CHECK NOT VALID` → `VALIDATE` → `SET NOT NULL` → drop the check |
+
+**Incidents (reported, not hidden):**
+1. **Harness bug → false PASS (fixed).** In the first C matrix (20:56 to 21:17), C5 unsafe "passed": the lock monitor showed 4 sessions waiting 81.5 s, but the slowest recorded write was 140 ms.
+   - **Cause:** a write blocked past the 60 s HTTP client timeout raised `ReadTimeout`, which silently killed its load thread, so nothing was recorded.
+   - **Fix:** exceptions are now recorded as errors (regression test added) and all 13 plans were rerun. C5 unsafe now correctly fails at 49.9 s.
+2. **Scale-seed SQL bug (fixed):** the first scale build failed because `jwt_token_key` is `varchar(12)`.
+3. **Unexplained observation:** in C3 safe's backfill stage, the lock monitor reported one 14.3 s lock wait, while every load write stayed ≤ 223 ms with no errors.
+   - The waiting session was not one of the load writes.
+   - Verdicts use write latency, not the lock monitor; the lock-wait column is reported as observed.
+
+**What these results mean:**
+- **Scope:** latency evidence for these plans on one laptop. They are **not** a proof of concurrency safety.
+- **Scale dependence:** the plain index (C2) and `SET NOT NULL` (C6) risks depend on table size and hardware; at 1M rows here they stayed under the budget.
+- **The unsafe patterns that did bite:**
+  - a single huge `UPDATE` (C1)
+  - a type change that rewrites the table (C3)
+  - a DDL statement waiting behind a long transaction with no lock timeout (C4)
+  - schema change plus backfill in one migration (C5)
+
+  They blocked writers for 10 to 50 seconds each. Their safe counterparts never exceeded 465 ms.
+
+## Overall
+| Group | Scenarios | Plans | Matching expected verdict |
+|---|---|---|---|
+| A, B, D (Olist 10k; also synthetic seed) | 14 | 22 | 22 / 22 on both seeds |
+| Tier 3 (A2, A6, A7, Olist 10k) | 3 | 6 | 6 / 6 |
+| Tier 4 (C1 to C6, 1M rows under load) | 6 | 13 | 10 / 13 (1 plan flaw caught, 2 measured scale mismatches) |
+| **Total** | **23 + rename** | **41** | **38 / 41** |
