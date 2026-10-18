@@ -331,16 +331,19 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
     return Handler
 
 
-def serve(host="127.0.0.1", port=8765, db=None, runs_root=None) -> None:
-    """`runs_root` (default runs/) is read for runs to ingest and for brev-batch-* records."""
+def serve(host="127.0.0.1", port=8765, db=None, runs_root=None, read_only=False) -> None:
+    """`runs_root` (default runs/) is read for runs to ingest and for brev-batch-* records.
+
+    `read_only` (public hosting): no ReviewManager, so nothing can start a review or record a
+    decision; replay pages and evidence chat only."""
     runs_root = Path(runs_root) if runs_root is not None else store.ROOT / "runs"
     conn = store.connect(db)
     lock = threading.Lock()
     ingested = store.ingest_all(conn, sources=(store.ROOT / "examples", runs_root))
-    review = ReviewManager(conn, lock, runs_root=runs_root)
+    review = None if read_only else ReviewManager(conn, lock, runs_root=runs_root)
     server = ThreadingHTTPServer((host, port), make_handler(conn, lock, review, runs_root))
     print(f"evidence store: {db or store.DEFAULT_DB} ({len(ingested)} runs ingested)")
-    avail = review.available()
+    avail = review.available() if review else {"ok": False, "reason": "read-only deployment"}
     print(f"Run Review: {'available' if avail['ok'] else 'disabled: ' + avail['reason']}")
     print(f"Replay Recorded Run: http://{host}:{port}/")
     try:

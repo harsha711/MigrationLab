@@ -1,0 +1,13 @@
+# Render Blueprint: public, read-only replay of the review UI over the frozen fixtures in
+# examples/. No Docker, Postgres, Saleor or model is available there, so reviews cannot be
+# started (--read-only); the evidence chat answers from recorded facts only.
+services:
+  - type: web
+    name: migrationlab
+    runtime: python
+    plan: free
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run migproto ui --host 0.0.0.0 --port $PORT --read-only --db /tmp/migrationlab.sqlite
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"

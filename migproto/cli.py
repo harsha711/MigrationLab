@@ -94,7 +94,7 @@ def cmd_all(args) -> int:
 
 def cmd_ui(args) -> int:
     from .ui import server
-    server.serve(port=args.port, db=args.db)
+    server.serve(host=args.host, port=args.port, db=args.db, read_only=args.read_only)
     return 0
 
 
@@ -132,7 +132,11 @@ def main(argv=None) -> int:
     al.add_argument("--rebuild-seed", action="store_true")
     al.add_argument("--skip-pytest", action="store_true")
     u = sub.add_parser("ui", help="read-only Replay Recorded Run screen over examples/ and runs/")
+    u.add_argument("--host", default="127.0.0.1",
+                   help="bind address (0.0.0.0 only for hosting, together with --read-only)")
     u.add_argument("--port", type=int, default=8765)
+    u.add_argument("--read-only", action="store_true",
+                   help="replay only: starting reviews and recording decisions are disabled")
     u.add_argument("--db", default=None, help="evidence store path (default data/memory.sqlite)")
     args = p.parse_args(argv)
     handlers = {"setup": cmd_setup, "baseline": cmd_baseline, "unsafe": cmd_unsafe,

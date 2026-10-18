@@ -16,6 +16,15 @@ only the runner decides pass or fail.
 - **Review UI:** replay any recorded review, submit new ones, add human feedback, compare
   topologies and batches.
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Migration activities: recorded outcomes per scenario, model and topology](docs/images/ui-activities.png) | ![Compatibility checks for run 20261017-214321, attempt 1: which old/new reads and writes broke](docs/images/ui-matrix.png) |
+| **Migration activities:** recorded outcomes per scenario, model and topology | **Compatibility checks:** run `20261017-214321`, attempt 1 (FAIL), before the agents revised the plan |
+| ![Brev batches: per-scenario results of configuration K](docs/images/ui-batches.png) | ![New review: choose a scenario, topology, mode and budget](docs/images/ui-review.png) |
+| **Brev batches:** configuration K, scored against labels the agents never see | **New review:** submit a review job to the controller |
+
 ## Quick start
 
 Prerequisites: Linux, Docker, `git`, [`uv`](https://docs.astral.sh/uv/) (provides Python
@@ -54,6 +63,10 @@ Each command writes `runs/<timestamp>-<command>/` (`events.jsonl`, `summary.json
 server logs, agent transcripts). Exit code 0 = PASS, 1 = FAIL, 2 = ERROR.
 
 ## Architecture and tech stack
+
+![Architecture: the controller sends role prompts to Nemotron 3.5 Lightning on vLLM (Brev H100); pre-runner tools profile the schema and dry-run the plan; the deterministic runner executes the plan against old and new Saleor on one Postgres database and its checks flow back to the planner and into the evidence store](docs/images/architecture.png)
+
+The same flow as a text diagram:
 
 ```mermaid
 flowchart LR
@@ -99,6 +112,14 @@ review request -> investigator (searches old-version code) -> planner (staged SQ
 - **Fixing problems without retraining.** When a failure pattern showed up in the runner
   records, we added a deterministic tool or pre-check instead of a bigger model. Examples:
   the backfill pre-check, the schema/data profile, and the dry run with write probe.
+
+## Hosting the review UI (read-only)
+
+`render.yaml` is a [Render](https://render.com) Blueprint for a public, read-only copy of
+the UI: in Render, **New → Blueprint**, pick this repository, deploy. It serves the frozen
+fixtures in `examples/` with `migproto ui --host 0.0.0.0 --read-only`, so visitors can replay
+runs and ask the evidence chat (recorded facts only), but cannot start reviews. Live reviews
+need Docker, Postgres, the Saleor worktrees and a model endpoint, so they run locally (below).
 
 ## How to reproduce the demo
 

@@ -101,7 +101,7 @@ uv run migproto agent-loop --proposals llm      # live model, see configuration
 uv run migproto all [--skip-pytest]             # setup + baseline + unsafe + scripted loop
 uv run pytest                                   # 406 tests (90 runner, 130 agents, 122 memory/UI, 64 gym), under 30 s, needs local Postgres for trigger tests
 uv run pytest -q tests/memory                   # 122 memory/UI tests, no Docker or Postgres needed
-uv run migproto ui [--port 8765] [--db PATH]    # Replay UI at http://127.0.0.1:8765/ (reads examples/ and runs/)
+uv run migproto ui [--port 8765] [--db PATH] [--host H --read-only]   # Replay UI at http://127.0.0.1:8765/ (reads examples/ and runs/); render.yaml hosts it read-only
 ```
 
 Live model configuration through environment variables (see `.env.example`; the code reads the process environment and does **not** auto-load `.env`):
