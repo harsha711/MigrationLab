@@ -233,7 +233,7 @@ Every review used 13 of 16 calls and ended at `max_revisions` within the token a
 - **Shorten-note:** the planner recommended `reject` at once; the runner also rejected the
   plan, so the revision was skipped.
 
-## Configuration F: runner facts first, earlier attempts as facts, backfill pre-check (RUNNING)
+## Configuration F: runner facts first, earlier attempts as facts, backfill pre-check
 
 Batch `runs/brev-batch-20261017-223954` (rename: 3 `roles` + 3 `single`). Code `3e7e73f`
 (branch `fix/feedback-ranking`), run from the main checkout. Settings are E's with the planner
@@ -248,7 +248,38 @@ feedback changed (decision D3 in `docs/decisions/single-history.md`):
   flagged all 18 whose backfill hit the runner's 10,000-batch stop, none of the 25 whose backfill
   converged, and 8 whose backfill never ran.
 
-No runner check changed. Results pending.
+No runner check changed.
+
+**Rename: 1 of 6 passed** (the first `single` rename pass outside configuration G, which ran at
+the same time).
+
+| Run | Topology | Attempts (failed checks) | Tokens | Verdict |
+|---|---|---|---|---|
+| `20261017-224014-agent-loop-llm` | roles | none executed (planner-1 invalid) | 70,146 | ERROR |
+| `20261017-224458-agent-loop-llm` | roles | 2 → 13 → 11 → 9 | 187,824 | FAIL |
+| `20261017-225329-agent-loop-llm` | roles | 15 → 1 → 1 → 1 | 175,145 | FAIL |
+| `20261017-224017-agent-loop-llm` | single | 16 → 15 → 10 → 8 | 262,686 | FAIL |
+| `20261017-224645-agent-loop-llm` | single | 1 → 17 → 1 → 16 | 222,629 | FAIL |
+| `20261017-230949-agent-loop-llm` | single | 14 → 9 → 1 → **0** | 260,320 | PASS |
+
+**What F shows:**
+- **The `single` pass improved at every attempt:** `230949` went 14 → 9 → 1 → 0 within the
+  default 3 revisions. Each tester report matched the runner evidence: a one-way `COALESCE`
+  trigger, then INSERT and NULL-clear handling, then a trigger function still referencing
+  `note` after the contract stage dropped it, then a pass. It used 260,320 of 300,000 tokens.
+  One review: not a rate.
+- **First attempts got past the backfill more often:** in 3 of the 4 reviews that executed a
+  plan, attempt 1 ran past the backfill (E: 1 of 6). Each still failed cross-version reads or
+  the retirement gate.
+- **Steadier revisions in two reviews:** `224017` (16 → 15 → 10 → 8) and `224458`
+  (2 → 13 → 11 → 9) improved after their worst attempt instead of swinging back. Both ran out of
+  revisions.
+- **Low counts are still not near-misses:** `225329`'s three 1-failure attempts each halted on
+  the same SQL error, `INSERT trigger's WHEN condition cannot reference OLD values` (one
+  `INSERT OR UPDATE` trigger with `WHEN (NEW.note IS DISTINCT FROM COALESCE(OLD.note, ...))`).
+  The SQL parses, so the syntax pre-check would not catch it; PostgreSQL rejects it when the
+  trigger is created. `224645`'s 1-failure attempts were a retirement-gate refusal and a stage
+  that failed to execute.
 
 **Side effect seen in F:** `20261017-224014` (roles) ended ERROR: planner-1's three replies each failed validation (unbalanced `$$`, an empty `sql` list, then the backfill pre-check), so no plan reached the runner. Without the backfill pre-check the third plan would have run. Fixed on `fix/next` (pre-checks are advisory on the final retry).
 
