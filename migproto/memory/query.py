@@ -11,9 +11,17 @@ query fixture runs (pass `source_kind="local_run"`).
 """
 
 import json
+import re
 import sqlite3
+from pathlib import Path
 
 APP_ORDER = ["old", "new-staged", "new-unsafe"]
+BATCH_PREFIX = "brev-batch-"
+BATCH_VERDICTS = ("PASS", "FAIL", "INCOMPLETE", "ERROR")
+_BATCH_ID = re.compile(r"brev-batch-[\w.-]+")
+_RUN_ID = re.compile(r"\w[\w.-]*")  # one path component, never "." or ".."
+# Run stamps in INFRA-NOTE: "20261017-192959" or, after a full one, the short form "-193746".
+_INFRA_STAMP = re.compile(r"(?<!\d)(\d{8})?-(\d{6})(?!\d)")
 
 
 def _obj(value):
@@ -244,3 +252,182 @@ def results_panel(conn, run_id) -> dict:
         "start_states": meta.get("start_states") or [],
         "gym": None,  # NeMo Gym results not connected (gym/results/ does not exist)
     }
+
+
+# ---- Brev batches: read-only views of runs/brev-batch-*/ and their runs' files ----
+#
+# Batches are read from disk, not from the store: runs.jsonl, CONFIG-NOTE and INFRA-NOTE are
+# supervisor records, not runner observations. Nothing here writes files or store rows.
+# Expected verdicts (proposals/manual) are evaluation data and are never read here.
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _read_json(path: Path):
+    text = _read_text(path)
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        return None
+
+
+def _read_jsonl(path: Path) -> tuple[list[dict], int]:
+    """Records and the number of unreadable lines (a batch still running may end mid-line)."""
+    records, bad = [], 0
+    for line in (_read_text(path) or "").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            bad += 1
+            continue
+        if isinstance(rec, dict):
+            records.append(rec)
+        else:
+            bad += 1
+    return records, bad
+
+
+def infra_run_stamps(note: str | None, default_date: str | None = None) -> set[str]:
+    """Run stamps (YYYYMMDD-HHMMSS) named in an INFRA-NOTE.
+
+    A short "-HHMMSS" takes the date of the previous full stamp, else `default_date`.
+    Batch directory names ("brev-batch-...") are not runs and are skipped.
+    """
+    stamps, date = set(), default_date
+    for m in _INFRA_STAMP.finditer(note or ""):
+        if (note or "")[max(0, m.start() - len(BATCH_PREFIX)):m.start()] == BATCH_PREFIX:
+            continue
+        date = m.group(1) or date
+        if date:
+            stamps.add(f"{date}-{m.group(2)}")
+    return stamps
+
+
+def _is_infra(run_id, stamps) -> bool:
+    return bool(run_id) and any(run_id == s or run_id.startswith(s + "-") for s in stamps)
+
+
+def _attempt_outcomes(summary: dict) -> list[dict] | None:
+    """v1 outcome counts per attempt, every attempt kept in order; None when not recorded.
+
+    A recorded but empty `outcome_counts` means no attempt executed and returns [].
+    """
+    counts = summary.get("outcome_counts")
+    if not isinstance(counts, dict):
+        return None
+
+    def number(key):
+        m = re.search(r"/a(\d+)$", key)
+        return int(m.group(1)) if m else 10 ** 6
+
+    return [{"attempt": key.rsplit("/", 1)[-1],
+             **{k: (c or {}).get(k) for k in ("pass", "fail", "refused", "error", "skipped")}}
+            for key, c in sorted(counts.items(), key=lambda kv: number(kv[0]))]
+
+
+def _first(*values):
+    return next((v for v in values if v is not None), None)
+
+
+def _batch_run(rec: dict, runs_root: Path, stamps: set[str], stored: set[str]) -> dict:
+    run_id = rec.get("run_id") if isinstance(rec.get("run_id"), str) else None
+    run_dir = runs_root / run_id if run_id and _RUN_ID.fullmatch(run_id) else None
+    summary = _read_json(run_dir / "summary.json") if run_dir else None
+    s = summary if isinstance(summary, dict) else {}
+    totals = s.get("agent_totals") or {}
+    trace = _read_json(run_dir / "agents" / "trace.json") if run_dir else None
+    url = trace.get("url") if isinstance(trace, dict) else None
+    if not (isinstance(url, str) and url.startswith(("https://", "http://"))):
+        url = None
+    return {
+        "n": rec.get("n"),
+        "run_id": run_id,
+        "scenario": _first(rec.get("scenario"), s.get("scenario")),
+        "topology": _first(s.get("topology"), rec.get("topology")),
+        "verdict": _first(s.get("verdict"), rec.get("verdict")),
+        "verdict_source": "summary.json" if s.get("verdict") else "runs.jsonl",
+        "recommendation": s.get("recommendation"),
+        "recommendation_recorded": "recommendation" in s,  # absent (older runs) = unknown
+        "runner_recommendation": s.get("runner_recommendation"),
+        "recommendation_agrees": s.get("recommendation_agrees"),
+        "attempts": _attempt_outcomes(s),
+        "total_tokens": _first(totals.get("total_tokens"), rec.get("total_tokens")),
+        "model_calls": _first(totals.get("model_calls"), rec.get("model_calls")),
+        "wall_seconds": _first(totals.get("wall_seconds"), s.get("elapsed_s"), rec.get("seconds")),
+        "stopped": _first(totals.get("exhausted_reason"), s.get("reason"), rec.get("reason")),
+        "model": s.get("model"),
+        "has_summary": bool(s),
+        "in_store": run_id in stored,
+        "trace_url": url,
+        "infrastructure_failure": _is_infra(run_id, stamps),
+    }
+
+
+def _stored_run_ids(conn) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT run_id FROM runs")} if conn is not None else set()
+
+
+def _batch(path: Path, runs_root: Path, stored: set[str]) -> dict:
+    batch_id = path.name
+    infra_note = _read_text(path / "INFRA-NOTE")
+    m = re.match(r"brev-batch-(\d{8})-", batch_id)
+    stamps = infra_run_stamps(infra_note, m.group(1) if m else None)
+    records, bad = _read_jsonl(path / "runs.jsonl")
+    runs = sorted((_batch_run(r, runs_root, stamps, stored) for r in records),
+                  key=lambda r: (r["n"] if isinstance(r["n"], int) else 10 ** 6, r["run_id"] or ""))
+    cells = {}
+    for r in runs:
+        if r["infrastructure_failure"]:
+            continue
+        cell = cells.setdefault((r["scenario"], r["topology"]), {
+            "scenario": r["scenario"], "topology": r["topology"],
+            **{v: 0 for v in BATCH_VERDICTS}, "other": {}})
+        verdict = str(r["verdict"]).upper() if r["verdict"] else "not recorded"
+        if verdict in BATCH_VERDICTS:
+            cell[verdict] += 1
+        else:
+            cell["other"][verdict] = cell["other"].get(verdict, 0) + 1
+    counts = sorted(cells.values(), key=lambda c: (c["scenario"] is None, c["scenario"] or "",
+                                                   c["topology"] or ""))
+    return {
+        "batch_id": batch_id,
+        "config_note": _read_text(path / "CONFIG-NOTE"),
+        "infra_note": infra_note,
+        "has_runs_jsonl": (path / "runs.jsonl").is_file(),
+        "unreadable_lines": bad,
+        "stop_file": (path / "STOP").exists(),
+        "models": sorted({r["model"] for r in runs if r["model"]}),
+        "run_count": len(runs),
+        "model_result_count": sum(not r["infrastructure_failure"] for r in runs),
+        "counts": counts,
+        "infrastructure_failures": [r for r in runs if r["infrastructure_failure"]],
+        "runs": runs,
+    }
+
+
+def _batch_dirs(runs_root: Path) -> list[Path]:
+    if not runs_root.is_dir():
+        return []
+    return sorted((p for p in runs_root.glob(BATCH_PREFIX + "*")
+                   if p.is_dir() and _BATCH_ID.fullmatch(p.name)),
+                  key=lambda p: p.name, reverse=True)
+
+
+def list_batches(runs_root, conn=None) -> list[dict]:
+    """Every batch under runs_root, newest first, with counts but without the run list."""
+    runs_root, stored = Path(runs_root), _stored_run_ids(conn)
+    return [{k: v for k, v in _batch(p, runs_root, stored).items() if k != "runs"}
+            for p in _batch_dirs(runs_root)]
+
+
+def batch_detail(runs_root, batch_id, conn=None) -> dict | None:
+    if not isinstance(batch_id, str) or not _BATCH_ID.fullmatch(batch_id):
+        return None
+    path = Path(runs_root) / batch_id
+    if not path.is_dir():
+        return None
+    return _batch(path, Path(runs_root), _stored_run_ids(conn))
