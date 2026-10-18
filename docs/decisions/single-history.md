@@ -128,3 +128,26 @@ trailing failed checks with a count, so the prompt slice never cuts the JSON.
   refused trigger three times), and `single` ran out of tokens in 5 of the last 6 G/M reviews.
   Separate contexts keep each call small; three lineages explore in parallel.
 - **Not changed:** runner checks, verdicts, the retirement gate, pre-checks and prompts.
+
+## D6. Revise from the best attempt; majority-reject stop; budget-sized rounds (configuration I)
+
+Three controller changes (`loop.REVISION_BASE = "best"`, `_revision_input`, `_affordable`):
+
+- **Best-attempt base (all topologies):** the next revision's "Previous plan" is the lineage's
+  executed attempt with the most progress, by runner facts only: most stages executed, then
+  fewest failed checks (latest wins ties). An early halt never outranks a plan that got further
+  (the run `220028` case that made D3 avoid a "best attempt"). The feedback names the base
+  attempt, lists every other attempt as runner facts, and adds one rule: keep stages no failed
+  check implicates, change only what the failed checks point to. The tester report is shown
+  only when it describes the base. Logged as `revision_base` events.
+- **Majority-reject stop (`parallel`):** a review stops when most executed plans in a round
+  were planner-recommended `reject` and runner-rejected (D5 required all of them).
+- **Budget-sized rounds (`parallel`):** from round 2, if the remaining tokens (at the review's
+  average tokens per call) or calls cannot pay a planner and a tester call for every lineage,
+  only the lineages that got furthest revise (`round_narrowed` event).
+- **Why:** in configuration H's first 64 revisions, 32 were worse than the best plan the review
+  already had, 15 the same and 17 better (rename-note single 1 -> 15 -> 17 -> 22); `parallel`
+  ran unique-last-name to the token cap because one lineage kept revising; parallel rounds
+  started with one call of budget left and overshot by up to 59k tokens.
+- **Not changed:** runner checks, verdicts, the retirement gate, pre-checks, prompts other than
+  the one revision rule, budgets.

@@ -399,6 +399,34 @@ whether more wall time changes the outcome on the rename-type scenarios.
 - **Reported:** matches per topology (same scorer as H), and which budget stopped each review.
   No significance test (too few reviews); no claim from H2 alone.
 
+### Configuration H2: cancelled
+
+Not run: replaced by configuration I (01:55), which addresses the same "close but out of
+budget" reviews more directly.
+
+## Configuration I: `parallel` versus `single`, both with D6 (pre-registered 02:20)
+
+Written and committed before the batch started; the results will be added below this paragraph
+without changing it. Decided after seeing part of H, so it is a separate experiment: it never
+changes H's verdict, and H's verdict never borrows from it.
+
+- **Arms:** `parallel` (D5 + D6) and `single` (D1 + D6 best-attempt base and revision rule).
+  Everything else as in H: model checkpoint, `serve_lightning.sh`, sampling (temperature 1.0,
+  top_p 0.95, `THINKING_BUDGET=16384`), prompts, pre-checks, plan rules, RAG off.
+- **Budget, identical for both and the same as H:** `max_revisions` 5, 40 calls, 450,000
+  tokens, 3,000 s.
+- **Infrastructure (differs from H):** a second Brev H100 (`defensive-green-cicada`, event
+  credits) serves Lightning with the same script, and the runner (Saleor, Postgres) runs on that
+  instance, reaching vLLM on 127.0.0.1. 8 workers.
+- **Scenarios:** H's 9. **Runs:** up to 4 per scenario per topology (72 reviews), interleaved
+  as in H (run index outermost). If the batch is stopped early, the analysis uses every
+  completed run index (18 reviews each, both arms equally), never a partial one.
+- **Primary metric and decision rule:** as in H (matches to Mahek's expected outcomes;
+  `parallel` better only with more matches and two-sided Fisher exact p < 0.05).
+- **Secondary:** as in H, plus revisions better / same / worse than the lineage's best attempt
+  (compare H), and reviews stopped by each budget.
+- **Exclusions:** as in H.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts

@@ -18,6 +18,13 @@ from .request import load_review_request, scenario_text
 MAX_REVISIONS = 1
 # Topology `parallel`: independent planners per round, each with its own isolated context.
 PARALLEL_PLANNERS = 3
+# Configuration I: a revision starts from the lineage's best executed attempt, not its latest.
+# In configuration H's first 64 revisions, 32 did worse than the best plan the review already
+# had (17 better, 15 same); e.g. rename-note single 1 -> 15 -> 17 -> 22 failed checks.
+REVISION_BASE = "best"
+REVISION_RULE = ("Keep every stage of the previous plan that no failed check implicates exactly "
+                 "as it is. Change only what the failed checks (step_id, expected, observed, "
+                 "error) point to, and say which stage you changed and why in revision_notes.")
 
 
 def _tag(obj: dict, attempt: int) -> dict:
@@ -58,13 +65,16 @@ def _evidence(result: dict, failed_checks: list[dict]) -> dict:
 
 
 def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
-              earlier: list[dict] | None = None) -> dict:
+              earlier: list[dict] | None = None, base: dict | None = None) -> dict:
     """Planner feedback: runner facts first, then the tester's model-written diagnosis labelled
     as unverified, then a factual record of each earlier executed attempt. Run 220028 showed
     both failure modes this order avoids: a wrong tester diagnosis read ahead of the runner
     evidence that contradicted it, and a controller-picked "best attempt" (most passed checks)
     that pointed at a regression instead of the attempt that halted early but was closer."""
-    out = _evidence(result, failed_checks)
+    out = {}
+    if base is not None:
+        out["revision_base"] = base
+    out.update(_evidence(result, failed_checks))
     if tester_report is not None:
         out["tester_hypothesis"] = {
             "note": ("Model-written diagnosis of the runner evidence above. It is not verified; "
@@ -74,8 +84,8 @@ def _feedback(result: dict, tester_report: dict, failed_checks: list[dict],
         }
     if earlier:
         out["earlier_attempts"] = {
-            "note": ("Runner facts for each earlier executed attempt (your latest plan is "
-                     "'Previous plan'). An attempt that halted early ran fewer checks, so its "
+            "note": ("Runner facts for the other executed attempts ('Previous plan' is not "
+                     "repeated here). An attempt that halted early ran fewer checks, so its "
                      "failure count is not comparable; you may revise from any of these plans."),
             "attempts": earlier,
         }
@@ -92,6 +102,32 @@ def _attempt_record(attempt: int, plan_obj: dict, result: dict,
         "failed_checks": [c["name"] for c in failed_checks],
         "plan": plan_obj,
     }
+
+
+def _progress(record: dict) -> tuple[int, int]:
+    """Runner facts only: how far the plan got (stages executed), then how few checks failed.
+    An attempt that halted early ran fewer checks, so it never outranks one that got further
+    on failure count alone (run 220028)."""
+    return len(record.get("stages_run") or []), -len(record.get("failed_checks") or [])
+
+
+def _revision_input(history: list[dict], tester_report: dict | None,
+                    others: list[dict] = ()) -> tuple[dict, dict]:
+    """(base plan, planner feedback) for the next revision of one lineage. `history` holds
+    {record, plan, result, failures} per executed attempt, oldest first. The base is the
+    attempt with the most progress (latest wins ties); the tester report describes the latest
+    attempt, so it is shown only when that is the base."""
+    best = max(reversed(history), key=lambda h: _progress(h["record"]))
+    latest = history[-1]
+    base = {"attempt": best["record"]["attempt"], "rule": REVISION_RULE}
+    if best is not latest:
+        base["note"] = (
+            f"'Previous plan' is your attempt {best['record']['attempt']}: of your executed "
+            "attempts it ran the most stages with the fewest failed checks. Your later "
+            "attempts did worse (see earlier_attempts). Revise from this plan.")
+    earlier = [dict(h["record"]) for h in history if h is not best] + [dict(o) for o in others]
+    return best["plan"], _feedback(best["result"], tester_report if best is latest else None,
+                                   best["failures"], earlier, base=base)
 
 
 def _fit(feedback: dict, limit: int | None = None) -> dict:
@@ -214,6 +250,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             "scenario": scenario_id,
             "history_compaction": single.POLICY if topology == "single" and llm else None,
             "parallel_planners": PARALLEL_PLANNERS if topology == "parallel" else None,
+            "revision_base": REVISION_BASE,
             **(llm.serving_metadata() if llm else {}),
         }
         log.event("agent_config", provenance=prov, **config)
@@ -306,7 +343,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
 
-        earlier: list[dict] = []   # runner facts of executed attempts before the latest
+        history: list[dict] = []   # every executed attempt: record, plan, result, failures
         for attempt in range(1, budget.max_revisions + 2):
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
                          **test_kwargs)
@@ -355,14 +392,18 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                 log.event("revision_skipped", provenance=prov, name=f"attempt {attempt}",
                           msg="planner recommended reject and the runner rejected the plan")
                 break
-            previous_id = plan_obj["plan_id"]
-            feedback = _feedback(result, report, complete_failures, [dict(r) for r in earlier])
-            earlier.append(_attempt_record(attempt, plan_obj, result, complete_failures))
+            history.append({"record": _attempt_record(attempt, plan_obj, result,
+                                                      complete_failures),
+                            "plan": plan_obj, "result": result, "failures": complete_failures})
+            base_plan, feedback = _revision_input(history, report)
+            previous_id = base_plan["plan_id"]
+            log.event("revision_base", provenance=prov, attempt=attempt + 1,
+                      base_attempt=feedback["revision_base"]["attempt"], plan_id=previous_id)
             try:
                 plan_obj = _tag(call(
                     f"planner-{attempt + 1}", roles.plan, investigation,
                     feedback=feedback,
-                    previous=plan_obj,
+                    previous=base_plan,
                     **plan_kwargs,
                 ), attempt + 1)
                 _validate_plan(plan_obj, sfacts, log, prov, attempt + 1)
@@ -430,12 +471,14 @@ def _run_parallel(log: RunLog, prov: str, solution_origin: str, call, llm: LLM |
     # One client per planner (same endpoint and shared budget) so each thread names its own
     # role in traces.
     clients = [copy.copy(llm) if llm else None for _ in range(k)]
-    lineages = [{"plan": None, "feedback": None, "earlier": []} for _ in range(k)]
+    lineages = [{"plan": None, "feedback": None, "history": []} for _ in range(k)]
     log.event("parallel_planners", provenance=prov, planners=k,
               msg=f"{k} planners per round; the runner executes every valid plan")
     attempt_no = 0
     last_result = None
     for rnd in range(1, budget.max_revisions + 2):
+        active = _affordable(lineages, budget, log, prov, rnd) if rnd > 1 else list(range(k))
+
         def plan_job(i: int):
             lin = lineages[i]
             extra = ({} if lin["plan"] is None
@@ -444,7 +487,7 @@ def _run_parallel(log: RunLog, prov: str, solution_origin: str, call, llm: LLM |
                                 client=clients[i], **extra, **plan_kwargs)
 
         candidates = []
-        for i, (obj, exc) in enumerate(_parallel([plan_job(i) for i in range(k)])):
+        for i, (obj, exc) in zip(active, _parallel([plan_job(i) for i in active])):
             if exc is None:
                 candidates.append((i, obj))
             elif isinstance(exc, (LLMError, plans.PlanError)):
@@ -518,20 +561,23 @@ def _run_parallel(log: RunLog, prov: str, solution_origin: str, call, llm: LLM |
             executed.append((i, attempt_no, plan_obj, result, failures))
         if rnd > budget.max_revisions:
             break
-        if all(p.get("recommendation") == "reject" and r.get("recommendation") == "reject"
-               for _, _, p, r, _ in executed):
-            log.event("revision_skipped", provenance=prov, round=rnd,
-                      msg="every planner recommended reject and the runner rejected each plan")
+        rejects = sum(p.get("recommendation") == "reject" and r.get("recommendation") == "reject"
+                      for _, _, p, r, _ in executed)
+        if executed and 2 * rejects > len(executed):
+            # Configuration I: a majority, not every planner (H: unique-last-name kept revising
+            # to the token cap because one lineage would not reject).
+            log.event("revision_skipped", provenance=prov, round=rnd, rejects=rejects,
+                      executed=len(executed),
+                      msg="most planners recommended reject and the runner rejected their plans")
             break
         records = {i: _attempt_record(n, p, r, f) for i, n, p, r, f in executed}
         for i, n, plan_obj, result, failures in executed:
             lin = lineages[i]
+            lin["history"].append({"record": records[i], "plan": plan_obj, "result": result,
+                                   "failures": failures})
             others = [dict(records[j], author="another planner, same round")
                       for j in records if j != i]
-            lin["feedback"] = _feedback(result, None, failures,
-                                        [dict(r) for r in lin["earlier"]] + others)
-            lin["earlier"].append(records[i])
-            lin["plan"] = plan_obj
+            lin["plan"], lin["feedback"] = _revision_input(lin["history"], None, others)
         # A planner whose reply was invalid this round keeps its lineage and retries; one
         # that has no executed plan yet continues from another planner's.
         done = [i for i, *_ in executed]
@@ -539,8 +585,31 @@ def _run_parallel(log: RunLog, prov: str, solution_origin: str, call, llm: LLM |
             if lin["plan"] is None:
                 src = lineages[done[n % len(done)]]
                 lin.update(plan=src["plan"], feedback=src["feedback"],
-                           earlier=list(src["earlier"]))
+                           history=list(src["history"]))
     return last_result, None
+
+
+def _affordable(lineages: list[dict], budget: ReviewBudget, log: RunLog, prov: str,
+                rnd: int) -> list[int]:
+    """Configuration I: indexes of the lineages to revise this round. A round costs a planner
+    and a tester call per lineage; when the remaining token or call budget (at this review's
+    average tokens per call) cannot pay for every lineage, revise only the ones that got
+    furthest, so the budget goes to the closest plans instead of a round cut off mid-way."""
+    k = len(lineages)
+    per_call = budget.total_tokens / budget.model_calls if budget.model_calls else 0
+    by_tokens = (int((budget.max_total_tokens - budget.total_tokens) // (2 * per_call))
+                 if per_call else k)
+    by_calls = (budget.max_model_calls - budget.model_calls) // 2
+    n = max(1, min(k, by_tokens, by_calls))
+    order = sorted(range(k), key=lambda i: max(
+        (_progress(h["record"]) for h in lineages[i]["history"]), default=(-1, 0)),
+        reverse=True)
+    active = sorted(order[:n])
+    if n < k:
+        log.event("round_narrowed", provenance=prov, round=rnd, planners=n,
+                  msg=f"remaining budget pays for {n} of {k} planners; revising the ones that "
+                      "got furthest")
+    return active
 
 
 def _validate_plan(plan_obj: dict, sfacts, log: RunLog | None = None,
