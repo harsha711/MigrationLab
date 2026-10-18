@@ -157,9 +157,13 @@ was still running at the time of writing.
 From the per-attempt failed checks and the plans (`agents/planner-*.json`) of every rename
 review:
 
-1. **Revisions regress.** Every failing `roles` review reached 1-3 failed checks at some attempt,
-   then the next revision got worse (for example 15 → 9 → **3** → 6 and 2 → 15 → **1** → 15).
-   The review verdict is the final attempt, and the revising planner saw only its latest plan.
+1. **Revisions regress.** Failing `roles` reviews often had an attempt with 1-3 failed checks,
+   then a worse revision (for example 15 → 9 → **3** → 6 in `192307` and 2 → 15 → **1** → 15 in
+   `204311`). The review verdict is the final attempt, and the revising planner saw only its
+   latest plan. **Caveat (found in an independent audit of these runs):** a low count is not
+   always a near-miss. Many 1-2 failure attempts halted early (a backfill that never reached 0
+   rows, a retirement-gate refusal or a failed `django_migrate`), so the cross-version checks
+   never ran; failure counts are only comparable between attempts that ran the same stages.
 2. **SQL that never executed.** Many attempts failed only `stage.*.executes`, so nothing else in
    them was tested:
    - backslash-escaped `\$\$`, although the prompt says not to;
@@ -171,7 +175,7 @@ review:
 
 Configuration E addresses 1 and 2. It leaves 3 to the model.
 
-## Configuration E: SQL quoting pre-check and best-attempt context (RUNNING)
+## Configuration E: SQL quoting pre-check and best-attempt context
 
 Batches `runs/brev-batch-20261017-220007` (rename: 3 `roles` + 3 `single`) and
 `runs/brev-batch-20261017-220011` (scenarios without a match: irreversible-data-migration,
@@ -185,7 +189,69 @@ raw-sql-rename, shorten-note). Code `c477869` (on `main` as PR #6). Settings are
   check names. Same for `roles` and `single`.
 - **Exclusive run directories.**
 
+No runner check changed.
+
+**Rename: 0 of 6 passed.**
+
+| Run | Topology | Attempts (failed checks) | Tokens | Verdict |
+|---|---|---|---|---|
+| `20261017-220028-agent-loop-llm` | roles | 1 → 19 → 18 → 1 | 175,763 | FAIL |
+| `20261017-220921-agent-loop-llm` | roles | 1 → 17 → 17 → 1 | 152,062 | FAIL |
+| `20261017-222313-agent-loop-llm` | roles | 1 → 17 → 15 → 16 | 154,580 | FAIL |
+| `20261017-220031-agent-loop-llm` | single | 18 → 14 → 17 → 15 | 260,669 | FAIL |
+| `20261017-221841-agent-loop-llm` | single | 1 → 18 → 15 → 12 | 218,793 | FAIL |
+| `20261017-222524-agent-loop-llm` | single | 1 → 1 → 1 → 1 | 151,631 | FAIL |
+
+Every review used 13 of 16 calls and ended at `max_revisions` within the token and wall budgets.
+
+**What E shows:**
+- **Attempt 1 rarely tested anything:** 5 of the 6 first attempts failed only
+  `stage.*.executes`, each a `repeat_until_zero_rows` backfill that never reached 0 rows.
+  `222524` then hit the retirement gate in attempts 2-4.
+- **The best-attempt context misled at least once:** in `220028`, attempt 1 had the sync trigger
+  in the right place (before `deploy_new`) and halted only on its backfill. The planner, also
+  told by the tester's report that the trigger was at fault, moved the trigger after
+  `deploy_new`; the evidence then showed `triggers: []` at `deploy_new` for every failed
+  cross-version check. The best-attempt context ranked by passed checks, so it pointed at
+  attempt 2 (20 passed, 18 failed) and never at attempt 1, which ran fewer checks.
+- **Last attempts were close twice:** `220028` ended on 1 failure (the trigger function still
+  referenced `NEW.note` after the contract stage dropped it), and `220921` on 1 (its backfill
+  again).
+
+**Scenarios: 0 of 3 matched.**
+
+| Scenario | Runner verdict | Runner / agent rec. | Attempts (failed checks) | Tokens | Matches |
+|---|---|---|---|---|---|
+| irreversible-data-migration | PASS | staged_rollout / staged_rollout | 1 → 1 → 1 → 0 | 133,972 | no: expected accept_as_is |
+| raw-sql-rename | FAIL | reject / staged_rollout | 17 → 1 → 1 → 16 | 153,035 | no |
+| shorten-note | FAIL | reject / reject | 2 (revision skipped) | 36,267 | no: expected a staged PASS |
+
+- **Irreversible-data-migration:** a safe plan, but with an unneeded backfill, so the
+  recommendation is `staged_rollout` rather than the expected `accept_as_is`.
+- **Raw-sql-rename:** attempts 2-3 failed on SQL errors (`EXECUTE FUNCTION f;` without `()`,
+  and a statement-level trigger with a `WHEN` condition).
+- **Shorten-note:** the planner recommended `reject` at once; the runner also rejected the
+  plan, so the revision was skipped.
+
+## Configuration F: runner facts first, earlier attempts as facts, backfill pre-check (RUNNING)
+
+Batch `runs/brev-batch-20261017-223954` (rename: 3 `roles` + 3 `single`). Code `3e7e73f`
+(branch `fix/feedback-ranking`), run from the main checkout. Settings are E's with the planner
+feedback changed (decision D3 in `docs/decisions/single-history.md`):
+- **Runner evidence first,** then the tester's report labelled as an unverified hypothesis that
+  loses to the runner evidence.
+- **Earlier attempts as facts:** every earlier attempt's halt, halted step, stages run, failed
+  check names and plan, with a note that counts are not comparable across attempts that halted
+  at different stages. The passed-checks "best attempt" is gone.
+- **Backfill pre-check:** an agent-side validator rejects a `repeat_until_zero_rows` column copy
+  whose `WHERE` the update does not make false. On the 203 recorded Lightning planner replies it
+  flagged all 18 whose backfill hit the runner's 10,000-batch stop, none of the 25 whose backfill
+  converged, and 8 whose backfill never ran.
+
 No runner check changed. Results pending.
+
+**Next (not in F, on branch `fix/next`):** a PostgreSQL syntax pre-check (`pglast`). On the same
+203 replies it flagged all 18 stages that failed with a syntax error and none of the 181 others.
 
 ## Scenario sweeps (`roles`, one review per scenario)
 
