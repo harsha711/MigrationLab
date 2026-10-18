@@ -47,6 +47,8 @@ def test_static_and_runs(base_url):
     assert {r["run_id"] for r in data["runs"]} == {
         "unsafe-rename", "scripted-sync-failure", "scripted-staged-success", "live-ordering-revision"}
     assert all("attempt_count" in run and "checks_failed" in run for run in data["runs"])
+    activities = get_json(base_url + "/api/scenario-activities")["activities"]
+    assert isinstance(activities, list)
 
 
 def test_run_and_observation_endpoints(base_url):
@@ -173,6 +175,15 @@ def test_topology_page_has_descriptive_resource_profile():
     assert "Token footprint" in js and "Tokens per call" in js
     assert "does not determine which approach is better" in js
     assert ".resource-metric-grid" in css
+
+
+def test_activity_library_assets_are_scenario_first():
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/activities" data-nav="activities"' in html
+    assert "SCENARIO-FIRST EVIDENCE" in js
+    assert "MODEL & TOPOLOGY PERFORMANCE" in js
+    assert "/api/scenario-activities" in js
 
 
 def test_batch_endpoints_over_http():

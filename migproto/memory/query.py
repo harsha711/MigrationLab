@@ -686,3 +686,71 @@ def topology_comparison(runs_root, conn=None) -> dict:
                                 "median_seconds": _median(rows, "wall_seconds"), "runs": rows}
         configurations.append({"configuration": config, "config_note": notes.get(config), "setups": setups})
     return {"configurations": configurations}
+
+
+def _scenario_label(scenario_id: str) -> str:
+    """A useful label even when this checkout does not know a newer scenario ID."""
+    return scenario_id.replace("-", " ").title()
+
+
+def scenario_activity_overview(conn) -> dict:
+    """Recorded reviews grouped by migration activity, never pooled across activities.
+
+    Scenario metadata is descriptive UI context. Verdicts and measurements remain derived from
+    each run's saved summary; a scenario introduced by another worktree gets a safe fallback.
+    """
+    try:
+        from ..scenarios import SCENARIOS
+    except ImportError:  # pragma: no cover - defensive for partial UI-only checkouts
+        SCENARIOS = {}
+    groups: dict[str, list[dict]] = {}
+    rows = conn.execute("SELECT run_id, source_kind, verdict, elapsed_s, model, topology, "
+                        "summary_json, meta_json, model_calls_json FROM runs ORDER BY run_id")
+    for row in rows:
+        summary = _obj(row["summary_json"]) or {}
+        scenario = summary.get("scenario")
+        if not isinstance(scenario, str) or not _SCENARIO_ID.fullmatch(scenario):
+            continue
+        totals = summary.get("agent_totals") or {}
+        meta = _obj(row["meta_json"]) or {}
+        calls = _obj(row["model_calls_json"]) or []
+        groups.setdefault(scenario, []).append({
+            "run_id": row["run_id"], "source_kind": row["source_kind"],
+            "verdict": summary.get("verdict") or row["verdict"],
+            "topology": summary.get("topology") or meta.get("topology") or row["topology"],
+            "model": summary.get("model") or meta.get("model") or row["model"],
+            "total_tokens": totals.get("total_tokens"),
+            "wall_seconds": totals.get("wall_seconds", summary.get("elapsed_s", row["elapsed_s"])),
+            "model_calls": totals.get("model_calls", len(calls) if calls else None),
+        })
+
+    activities = []
+    for scenario_id, activity_runs in groups.items():
+        definition = SCENARIOS.get(scenario_id)
+        verdicts = {v: 0 for v in BATCH_VERDICTS}
+        for run in activity_runs:
+            verdict = str(run.get("verdict") or "").upper()
+            if verdict in verdicts:
+                verdicts[verdict] += 1
+        groups_by_model: dict[tuple[str, str], list[dict]] = {}
+        for run in activity_runs:
+            key = (run["topology"] or "not recorded", run["model"] or "not recorded")
+            groups_by_model.setdefault(key, []).append(run)
+        performance = []
+        for (topology, model), subset in sorted(groups_by_model.items()):
+            counts = {v: sum(str(r.get("verdict") or "").upper() == v for r in subset)
+                      for v in BATCH_VERDICTS}
+            performance.append({"topology": topology, "model": model, "reviews": len(subset),
+                                "verdicts": counts, "median_tokens": _median(subset, "total_tokens"),
+                                "median_seconds": _median(subset, "wall_seconds"),
+                                "median_calls": _median(subset, "model_calls")})
+        change = definition.change if definition else {}
+        activities.append({
+            "scenario": scenario_id,
+            "title": definition.title if definition else _scenario_label(scenario_id),
+            "description": change.get("description") if definition else "Scenario definition is not available in this checkout.",
+            "tags": list(definition.tags) if definition else [], "table": change.get("table"),
+            "runs": activity_runs, "reviews": len(activity_runs), "verdicts": verdicts,
+            "performance": performance,
+        })
+    return {"activities": sorted(activities, key=lambda activity: activity["scenario"])}

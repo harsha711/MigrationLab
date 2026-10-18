@@ -122,6 +122,44 @@ function pageAsk() {
   </section>`;
 }
 
+// ---------- Migration activities (scenario-scoped evidence) ----------
+
+const activityMetric = (value, unit = "") => value == null ? "—" : `${fmt(Math.round(value))}${unit}`;
+const activityVerdicts = (counts) => BATCH_VERDICTS.filter((verdict) => counts?.[verdict]).map((verdict) =>
+  `<span class="badge ${verdict === "PASS" ? "pass" : verdict === "INCOMPLETE" ? "warn" : "fail"}">${counts[verdict]} ${verdict}</span>`).join(" ") || `<span class="muted">Verdict not recorded</span>`;
+
+function activityCards(activities) {
+  return activities.map((activity) => {
+    const groups = activity.performance.slice(0, 3).map((group) => `<div class="activity-mini-metric"><strong>${esc(group.topology)}</strong><span>${activityMetric(group.median_tokens)} tokens median</span><span>${activityMetric(group.median_seconds, " s")} median</span></div>`).join("");
+    return `<a class="activity-card" href="#/activities/${enc(activity.scenario)}"><header><span class="scenario-code">${esc(activity.scenario)}</span><span>${activity.reviews} recorded review${activity.reviews === 1 ? "" : "s"}</span></header><h2>${esc(activity.title)}</h2><p>${esc(activity.description || "Recorded migration activity.")}</p><div class="activity-tags">${(activity.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join("")}</div><div class="activity-outcomes">${activityVerdicts(activity.verdicts)}</div><div class="activity-mini-grid">${groups || `<span class="muted">Resource measurements not recorded</span>`}</div><footer>Inspect activity <b aria-hidden="true">→</b></footer></a>`;
+  }).join("");
+}
+
+function activityPerformanceRows(activity) {
+  return activity.performance.map((group) => `<tr><td><strong>${esc(group.topology)}</strong></td><td>${esc(group.model)}</td><td>${group.reviews}</td><td>${activityVerdicts(group.verdicts)}</td><td>${activityMetric(group.median_tokens)}</td><td>${activityMetric(group.median_seconds, " s")}</td><td>${activityMetric(group.median_calls)}</td></tr>`).join("");
+}
+
+async function pageActivities(scenarioId = null) {
+  const data = await api("/api/scenario-activities");
+  const activities = data.activities || [];
+  const selected = scenarioId ? activities.find((activity) => activity.scenario === scenarioId) : null;
+  if (scenarioId && !selected) return `<p>Migration activity not found. <a href="#/activities">View recorded activities</a></p>`;
+  if (selected) {
+    crumbs([["Migration activities", "#/activities"], [selected.title]]);
+    const runs = selected.runs.map((run) => `<a class="activity-run" href="#/run/${enc(run.run_id)}"><span>${esc(run.topology || "topology not recorded")}</span><strong>${esc(run.run_id)}</strong>${verdictBadge(run.verdict)}<small>${activityMetric(run.total_tokens)} tokens · ${activityMetric(run.wall_seconds, " s")} · ${activityMetric(run.model_calls)} calls</small><b aria-hidden="true">›</b></a>`).join("");
+    return `<header class="activity-detail-head"><a href="#/activities" class="back-link">← All migration activities</a><span class="eyebrow">RECORDED MIGRATION ACTIVITY</span><h1>${esc(selected.title)}</h1><p>${esc(selected.description || "Scenario definition is not recorded in this checkout.")}</p><div class="activity-detail-meta"><span>${esc(selected.scenario)}</span>${selected.table ? `<span>Table · ${esc(selected.table)}</span>` : ""}${(selected.tags || []).map((tag) => `<span>${esc(tag)}</span>`).join("")}</div></header>
+      <section class="activity-detail-summary"><div><span>Recorded reviews</span><strong>${selected.reviews}</strong></div><div><span>Outcome mix</span><p>${activityVerdicts(selected.verdicts)}</p></div><div><span>Comparison rule</span><p>Models and topologies remain separated by this activity.</p></div></section>
+      <section class="activity-performance"><header><div><span class="eyebrow">MODEL & TOPOLOGY PERFORMANCE</span><h2>How each setup performed on this activity</h2></div><p>Median resource values summarize only the listed recorded reviews. They are not a quality score.</p></header><div class="table-wrap"><table><tr><th>Approach</th><th>Model</th><th>Reviews</th><th>Recorded outcomes</th><th>Median tokens</th><th>Median wall time</th><th>Median calls</th></tr>${activityPerformanceRows(selected)}</table></div></section>
+      <section class="activity-run-list"><header><span class="eyebrow">EVIDENCE TRAIL</span><h2>Recorded reviews</h2></header>${runs}</section>`;
+  }
+  crumbs([["Migration activities"]]);
+  const reviewed = activities.reduce((total, activity) => total + activity.reviews, 0);
+  const passing = activities.filter((activity) => activity.verdicts.PASS).length;
+  return `<header class="activity-overview-head"><div><span class="eyebrow">SCENARIO-FIRST EVIDENCE</span><h1>Migration activities</h1><p>Start with the database change, then see how each recorded model and agent setup performed under that activity’s checks.</p></div><aside><strong>${activities.length}</strong><span>activities with evidence</span><strong>${reviewed}</strong><span>recorded reviews</span><strong>${passing}</strong><span>activities with a pass</span></aside></header>
+    <section class="activity-principles"><div><b>1</b><span><strong>Choose an activity</strong><small>Column change, constraint, backfill, or index operation.</small></span></div><div><b>2</b><span><strong>Compare scoped evidence</strong><small>Read outcomes per model and topology—not a pooled leaderboard.</small></span></div><div><b>3</b><span><strong>Open a recorded run</strong><small>Verify the runner checks behind every result.</small></span></div></section>
+    <section class="activity-library"><header><div><span class="eyebrow">ACTIVITY LIBRARY</span><h2>What migrations have we tested?</h2></div><p>Cards only appear after a finished run records that activity.</p></header><div class="activity-card-grid">${activityCards(activities) || `<p class="muted">No scenario-labelled finished runs are in the evidence store.</p>`}</div></section>`;
+}
+
 async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
@@ -933,6 +971,7 @@ async function route() {
   clearTimeout(state.batchPoll);
   const activeNav = !parts.length ? "runs"
     : parts[0] === "ask" ? "ask"
+    : parts[0] === "activities" ? "activities"
     : parts[0] === "batches" ? "batches"
     : parts[0] === "topologies" ? "topologies"
     : parts[0] === "compare" ? "compare"
@@ -948,6 +987,7 @@ async function route() {
     let html;
     if (!parts.length) html = await pageRuns();
     else if (parts[0] === "ask" && parts.length === 1) html = pageAsk();
+    else if (parts[0] === "activities" && parts.length <= 2) html = await pageActivities(parts[1]);
     else if (parts[0] === "demo" && parts.length === 2) html = await pageDemo(parts[1]);
     else if (parts[0] === "workspace" && parts.length === 2) html = await pageWorkspace(parts[1]);
     else if (parts[0] === "run" && parts.length === 2) html = await pageOverview(parts[1]);

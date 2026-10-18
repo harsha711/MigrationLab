@@ -58,6 +58,8 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
                 return query.batch_detail(runs_root, p("id"), conn)
             if path == "/api/topology-comparison":
                 return query.topology_comparison(runs_root, conn)
+            if path == "/api/scenario-activities":
+                return query.scenario_activity_overview(conn)
         raise KeyError(path)
 
     class Handler(BaseHTTPRequestHandler):

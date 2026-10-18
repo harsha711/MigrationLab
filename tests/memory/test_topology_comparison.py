@@ -2,12 +2,13 @@
 
 import json
 
-from migproto.memory import query
+from migproto.memory import query, store
 
 
 def write_run(root, run_id, topology, verdict, *, tokens, seconds, calls, failed):
     path = root / run_id
     path.mkdir()
+    (path / "events.jsonl").write_text("")
     (path / "summary.json").write_text(json.dumps({
         "run_id": run_id, "scenario": "rename-note", "topology": topology,
         "verdict": verdict,
@@ -58,3 +59,23 @@ def test_configuration_letter_requires_a_supported_configuration():
     assert query._configuration_letter("CONFIGURATION F full feedback") == "F"
     assert query._configuration_letter("CONFIGURATION A older settings") is None
     assert query._configuration_letter("no configuration") is None
+
+
+def test_activity_overview_keeps_models_and_unknown_scenarios_visible(tmp_path):
+    known = "20260102-100001-agent-loop-llm"
+    unknown = "20260102-100002-agent-loop-llm"
+    write_run(tmp_path, known, "roles", "PASS", tokens=120, seconds=20, calls=3, failed=[1, 0])
+    write_run(tmp_path, unknown, "single", "FAIL", tokens=240, seconds=30, calls=4, failed=[2, 1])
+    for run_id, scenario, model in ((known, "rename-note", "model-a"),
+                                    (unknown, "future-migration", "model-b")):
+        path = tmp_path / run_id / "summary.json"
+        summary = json.loads(path.read_text())
+        summary["scenario"] = scenario
+        summary["model"] = model
+        path.write_text(json.dumps(summary))
+    conn = store.connect(":memory:")
+    store.ingest_all(conn, sources=(tmp_path,))
+    activities = {item["scenario"]: item for item in query.scenario_activity_overview(conn)["activities"]}
+    assert activities["rename-note"]["performance"][0]["model"] == "model-a"
+    assert activities["future-migration"]["title"] == "Future Migration"
+    assert activities["future-migration"]["runs"][0]["topology"] == "single"

@@ -56,6 +56,7 @@ Every page is read-only unless it says otherwise.
 | Page | Address | What it shows |
 |---|---|---|
 | Ask evidence | `#/ask` | Recommended starting point: ask a plain-language question and follow its supporting run links. |
+| Migration activities | `#/activities` | Scenario-first overview of recorded migration changes, with model/topology outcomes and resource use kept scoped to each activity. |
 | Browse runs | `#/` | A summary of one selected run and a table of all runs. Tick two runs to compare them. |
 | Run overview | `#/run/<run>` | The requested change and every attempt, failed ones included. |
 | Plan | `#/run/<run>/plan/<attempt>` | The plan's stages and SQL, and which stages actually ran. |
