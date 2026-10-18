@@ -1,0 +1,38 @@
+# MigrationLab migration review (NeMo Gym 0.7.0 layout, modelled on resources_servers/bird_sql).
+# Copy or symlink this directory into a NeMo Gym checkout as resources_servers/migproto_review,
+# and gym/tasks/migration_review.jsonl to resources_servers/migproto_review/data/.
+# Implemented, not run against a NeMo Gym trainer or `gym env start`.
+migproto_review_resources_server:
+  resources_servers:
+    migproto_review:
+      entrypoint: app.py
+      migproto_root: /home/harsha/Documents/hackathon-gym
+      uv_bin: uv
+      verify_timeout_s: 900
+      max_concurrency: 1
+      domain: agent
+      verified: false
+      description: Database migration review on Saleor. The policy answers with one staged migration plan (JSON); a deterministic runner executes it against old and new app versions running side by side. Binary reward from the runner verdict and recommendation.
+
+migproto_review_simple_agent:
+  responses_api_agents:
+    simple_agent:
+      entrypoint: app.py
+      resources_server:
+        type: resources_servers
+        name: migproto_review_resources_server
+      model_server:
+        type: responses_api_models
+        name: policy_model
+      datasets:
+        - name: migration_review
+          type: example
+          jsonl_fpath: resources_servers/migproto_review/data/migration_review.jsonl
+
+migproto_review_environment_server:
+  environment_servers:
+    legacy_agent:
+      entrypoint: app.py
+      agent_server:
+        type: responses_api_agents
+        name: migproto_review_simple_agent
