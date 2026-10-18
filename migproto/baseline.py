@@ -52,7 +52,8 @@ SCALE_SQL = [
     "first_name, last_name, jwt_token_key, language_code, search_document, updated_at, uuid, note, "
     "private_metadata, metadata, is_confirmed, number_of_orders) "
     "SELECT false, 'scale-' || g || '@" + SEED_EMAIL_DOMAIN + "', false, true, '!', now(), 'Scale', "
-    "s.last_name, md5(g::text), 'en', '', now(), gen_random_uuid(), s.note, '{}', '{}', true, 0 "
+    "s.last_name, left(md5(g::text), 12), 'en', '', now(), gen_random_uuid(), s.note, '{}', '{}', "
+    "true, 0 "
     "FROM generate_series(1, %(n)s) AS g "
     "JOIN scale_src s ON s.rn = ((g - 1) %% (SELECT count(*) FROM scale_src)) + 1",
     "ANALYZE account_user",

@@ -1,0 +1,55 @@
+From 14c25aaa590e3c55d38a311254bb484b6d1afaf0 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 20:46:57 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): add User.loyalty_score and
+ backfill it in the same atomic migration
+
+---
+ .../migrations/0107_user_loyalty_score.py     | 22 +++++++++++++++++++
+ saleor/account/models.py                      |  1 +
+ 2 files changed, 23 insertions(+)
+ create mode 100644 saleor/account/migrations/0107_user_loyalty_score.py
+
+diff --git a/saleor/account/migrations/0107_user_loyalty_score.py b/saleor/account/migrations/0107_user_loyalty_score.py
+new file mode 100644
+index 0000000..ff40fd9
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_loyalty_score.py
+@@ -0,0 +1,22 @@
++# EXPERIMENT (manual, not upstream): add User.loyalty_score and backfill it in the same atomic migration
++
++from django.db import migrations, models
++
++
++def fill_scores(apps, schema_editor):
++    User = apps.get_model("account", "User")
++    User.objects.update(loyalty_score=0)
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.AddField(
++            model_name="user", name="loyalty_score",
++            field=models.IntegerField(blank=True, null=True),
++        ),
++        migrations.RunPython(fill_scores),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..0918584 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -180,6 +180,7 @@ class User(
+     is_confirmed = models.BooleanField(default=True)
+     last_confirm_email_request = models.DateTimeField(null=True, blank=True)
+     note = models.TextField(null=True, blank=True)
++    loyalty_score = models.IntegerField(null=True, blank=True)
+     date_joined = models.DateTimeField(default=timezone.now, editable=False)
+     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+     last_password_reset_request = models.DateTimeField(null=True, blank=True)
+-- 
+2.43.0
+

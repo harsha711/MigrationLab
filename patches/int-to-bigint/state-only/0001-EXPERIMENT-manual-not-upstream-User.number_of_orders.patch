@@ -1,0 +1,55 @@
+From 8529aede714a2a5e5b7f0bb96575374363c454e4 Mon Sep 17 00:00:00 2001
+From: migproto <migproto@local>
+Date: Sat, 17 Oct 2026 20:46:54 -0400
+Subject: [PATCH] EXPERIMENT (manual, not upstream): User.number_of_orders ->
+ PositiveBigIntegerField (state-only)
+
+---
+ .../0107_user_number_of_orders_bigint.py      | 21 +++++++++++++++++++
+ saleor/account/models.py                      |  2 +-
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+ create mode 100644 saleor/account/migrations/0107_user_number_of_orders_bigint.py
+
+diff --git a/saleor/account/migrations/0107_user_number_of_orders_bigint.py b/saleor/account/migrations/0107_user_number_of_orders_bigint.py
+new file mode 100644
+index 0000000..ae32448
+--- /dev/null
++++ b/saleor/account/migrations/0107_user_number_of_orders_bigint.py
+@@ -0,0 +1,21 @@
++# EXPERIMENT (manual, not upstream): User.number_of_orders -> PositiveBigIntegerField (state-only)
++
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++    dependencies = [
++        ("account", "0106_merge_20260807_0748"),
++    ]
++
++    operations = [
++        migrations.SeparateDatabaseAndState(
++            state_operations=[
++                migrations.AlterField(
++                    model_name="user", name="number_of_orders",
++                    field=models.PositiveBigIntegerField(db_default=0, default=0),
++                ),
++            ],
++            database_operations=[],
++        ),
++    ]
+diff --git a/saleor/account/models.py b/saleor/account/models.py
+index 79da5bd..c4dbe42 100644
+--- a/saleor/account/models.py
++++ b/saleor/account/models.py
+@@ -215,7 +215,7 @@ class User(
+     )
+ 
+     # Denormalized number of orders placed by the user
+-    number_of_orders = models.PositiveIntegerField(default=0, db_default=0)
++    number_of_orders = models.PositiveBigIntegerField(default=0, db_default=0)
+ 
+     USERNAME_FIELD = "email"
+     NEWLY_CREATED_USER = False
+-- 
+2.43.0
+
