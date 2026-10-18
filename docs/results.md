@@ -626,6 +626,38 @@ will be added below this paragraph without changing it.
   conditions over time would be confounded with the flag. The server is the same, and its
   serving record is kept in each batch directory.
 
+## Configuration KB: one big model (gpt-oss-120b, `single`) versus K's Lightning `roles` (pre-registered 07:50)
+
+Written and committed before the baseline batch started; the results will be added below this
+paragraph without changing it.
+
+- **Question:** do several Lightning agents (`roles`, 30B total parameters) match more
+  scenarios than one large model working alone, with the same tools and budget?
+- **Baseline arm (new):** `single` topology served by `openai/gpt-oss-120b` (revision
+  `b5c939de`, about 117B total parameters, MXFP4) on vLLM 0.27.1 (`scripts/brev/serve_gptoss.sh`,
+  reasoning parser `openai_gptoss`), on a separate 1x H100 instance (`extra-sapphire-baboon`,
+  event credits). This is a comparison baseline only. It is not part of the submitted system,
+  and it is outside the 33B budget.
+- **Comparison arm:** K's `roles` reviews (Lightning on `human-brown-mollusk`), unchanged.
+- **Same as K:** code commit `fc0aed7`, the flags `MIGPROTO_SCHEMA_PROFILE=1`,
+  `MIGPROTO_REPEAT_NOTICE=1` and `MIGPROTO_PREFLIGHT=1`, sampling (temperature 1.0, top_p
+  0.95), the `thinking_token_budget` of 16384 if vLLM accepts it for gpt-oss (recorded either
+  way), prompts, and budgets (`max_revisions` 5, 40 calls, 450,000 tokens, 3,000 s). Also 8
+  workers with the runner on the instance, H's 9 scenarios, and 2 runs per scenario (18
+  reviews), run index outermost. If stopped early, only completed run indexes are compared,
+  over the same run indexes of K.
+- **Primary metric and decision rule:** matched reviews (as in H), K `roles` versus KB
+  baseline, 18 versus 18, two-sided Fisher exact test. Either side is reported as better only
+  with p < 0.05. With 18 per arm, p < 0.05 needs a gap of roughly 9 versus 2, so we expect
+  to report the counts descriptively.
+- **Secondary:** K `single` (Lightning) versus KB, per-scenario matches, tokens and wall time
+  per matched review.
+- **Confounds, disclosed:**
+  - Different instance hardware (same instance type), and the batches overlap in time but
+    are not interleaved on one server.
+  - The model's reasoning format differs (harmony), so token counts are not like for like.
+  - "Same budget" means the same token and call caps, not the same compute.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
