@@ -169,3 +169,13 @@ def test_scenario_schema_rejects_variant_contradicting_migration():
     assert not matches(schema, plan)
     del plan["stages"][0]["variant"]
     assert matches(schema, plan)
+
+
+def test_rename_contract_explains_both_builds_like_other_scenarios():
+    # Configuration D: rename prompts state what "migration" deploys, in VARIANT_TEXT's words.
+    from migproto.agents import facts, roles
+    flat = " ".join(roles.PLAN_CONTRACT.split())
+    for key, text in facts.VARIANT_TEXT.items():
+        assert f'"{key}" (set "migration": "{key}"' in flat
+        assert " ".join(text.split()) in flat
+    assert '"migration": "state_only" | "apply"' in roles.PLAN_CONTRACT

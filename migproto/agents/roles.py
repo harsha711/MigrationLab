@@ -245,6 +245,12 @@ Facts about the deployment (all true, all enforced by the runner):
 - NEW app version: code is already written and cannot be changed by your plan. Its model only
   knows column "customer_note"; it never reads or writes "note". Its Django migration for this
   rename is state-only (it issues no SQL), so all schema changes must come from your plan.
+  Builds you can deploy in the deploy_new stage:
+  - "state_only" (set "migration": "state_only"; also the default when omitted): the new
+    version's Django migration only records Django state and issues no SQL; your plan's SQL
+    stages own the whole schema change.
+  - "apply" (set "migration": "apply"): deploy_new runs the new version's own Django migration
+    (its real SQL) on the database, then starts the new version.
 - Between your `deploy_new` and `retire_old` stages BOTH versions serve traffic concurrently
   against the same database (reads and writes of the same rows, interleaved).
 - The runner checks after each stage that both live versions read the value most recently
@@ -261,7 +267,8 @@ Plan JSON schema (unknown keys are rejected):
     {"id": "unique", "kind": "sql", "phase": "expand" | "backfill" | "contract",
      "description": "...", "sql": ["one SQL statement per string", "..."],
      "repeat_until_zero_rows": false},
-    {"id": "unique", "kind": "deploy_new", "description": "..."},
+    {"id": "unique", "kind": "deploy_new", "description": "...",
+     "migration": "state_only" | "apply"},
     {"id": "unique", "kind": "retire_old", "description": "..."}
   ]
 }

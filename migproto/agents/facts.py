@@ -6,7 +6,9 @@ Never read scripted plans (proposals/scripted/), expected verdicts (proposals/ma
 patches/ or examples/ here: those are answers, and prompts must not contain them.
 
 `rename-note` keeps its original, hand-written prompt text (roles.SCENARIO-era facts and
-roles.PLAN_CONTRACT) so the live rename runs stay comparable.
+roles.PLAN_CONTRACT). Since configuration D, PLAN_CONTRACT also lists the two deployable builds
+in VARIANT_TEXT's words, as every other scenario's prompt does; rename runs before that change
+(configurations A-C) are not comparable with later ones.
 """
 
 import json
