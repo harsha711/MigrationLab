@@ -51,7 +51,8 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
 | `docs/contracts.md` | shared data contracts and gap register | Harsha (coordinator) |
 | `migproto/memory/adapter.py`, `store.py`, `query.py` | run directory to scoped records (v0 derivation rules, v1 pass-through, Owner 2 claims), append-only SQLite store `data/memory.sqlite`, exact-scope queries and compatibility matrix | Owner 3 |
 | `migproto/memory/retrieval.py` | `prior_evidence(change, model=, scenario=)` for the controller: earlier agent runs of the same model and change only, never `examples/` or scripted runs | Owner 3 (Owner 2 wires the call) |
-| `migproto/ui/server.py`, `review.py`, `static/` | `migproto ui`: read-only Replay pages, plus Run Review through `agents.controller.run_review` under `migproto.lock` (lazy, disabled until both exist) | Owner 3 |
+| `migproto/memory/batches.py` | read-only view of `runs/brev-batch-*/` (`runs.jsonl`, `CONFIG-NOTE`, `INFRA-NOTE`, `environment.txt`, each run's `summary.json` and `agents/trace.json`) for the Batches page. Runs named in `INFRA-NOTE` (run ID or `NN-<scenario>-<topology>` stem) are listed apart and never counted | Owner 3 |
+| `migproto/ui/server.py`, `review.py`, `static/` | `migproto ui`: read-only Replay pages, a Batches page (`#/batches`), plus Run Review through `agents.controller.run_review` under `migproto.lock` (lazy, disabled until both exist) | Owner 3 |
 | `gym/` (planned, not created) | NeMo Gym resources server wrapping the runner, frozen tasks, results | Harsha |
 | `docs/serving.md`, `docs/results.md` (planned), `docs/model-inventory.md` | vLLM serving record, measured results, model and parameter inventory | Owner 2 |
 | `docs/bounties.md` | bounty requirements (verified versus unverified), owners, status, open questions | Harsha (coordinator) |

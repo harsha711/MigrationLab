@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from ..memory import query, store
+from ..memory import batches, query, store
 from .review import Busy, ReviewManager, Unavailable
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -21,7 +21,7 @@ CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; c
 MAX_BODY = 4096
 
 
-def make_handler(conn, lock, review: ReviewManager | None = None):
+def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None):
     def availability():
         return review.available() if review else {"ok": False, "reason": "controller not available"}
 
@@ -33,6 +33,11 @@ def make_handler(conn, lock, review: ReviewManager | None = None):
             if not review:
                 return None
             return review.events(p("run"), int(p("after") or 0))
+        # Brev batches are read from runs/brev-batch-*/ files, not from the store.
+        if path == "/api/batches":
+            return {"batches": batches.list_batches(runs_root)}
+        if path == "/api/batch":
+            return batches.batch_detail(p("name"), runs_root)
         with lock:
             if path == "/api/runs":
                 avail = availability()

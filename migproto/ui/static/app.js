@@ -457,6 +457,70 @@ async function pageMetrics(id) {
     <h2>NeMo Gym</h2><p class="muted">Not connected (no gym/results/ yet).</p>`;
 }
 
+// ---------- Brev measurement batches (runs/brev-batch-*/, read from files) ----------
+
+const VERDICT_COLS = ["PASS", "FAIL", "INCOMPLETE", "ERROR", "other"];
+
+function countsTable(counts) {
+  if (!counts.length) return `<p class="muted">No model runs recorded.</p>`;
+  return `<div class="table-wrap"><table><thead><tr><th scope="col">Scenario</th><th scope="col">Topology</th>${
+    VERDICT_COLS.map((v) => `<th scope="col">${esc(v)}</th>`).join("")}<th scope="col">Runs</th></tr></thead><tbody>${
+    counts.map((c) => `<tr><th scope="row"><code>${esc(c.scenario)}</code></th><td>${esc(c.topology)}</td>${
+      VERDICT_COLS.map((v) => `<td>${c[v] ? `<strong>${esc(c[v])}</strong>` : "0"}</td>`).join("")}<td>${esc(c.runs)}</td></tr>`).join("")
+  }</tbody></table></div>`;
+}
+
+const note = (text, label) => text ? `<pre class="batch-note">${esc(text.trim())}</pre>` : `<p>${unknown(`no ${label}`)}</p>`;
+
+async function pageBatches() {
+  const { batches } = await api("/api/batches");
+  crumbs([["Runs", "#/"], ["Batches"]]);
+  const cards = batches.map((b) => `<div class="card">
+      <div class="batch-head"><h2><a href="#/batch/${enc(b.name)}">${esc(b.name)}</a></h2>
+        <span class="badge">${esc(b.model_runs)} model run${b.model_runs === 1 ? "" : "s"}</span>
+        ${b.infra_runs ? `<span class="badge warn">${esc(b.infra_runs)} infrastructure failure${b.infra_runs === 1 ? "" : "s"}, not counted</span>` : ""}
+        ${b.unparsed_lines ? `<span class="badge warn">${esc(b.unparsed_lines)} unreadable runs.jsonl line(s)</span>` : ""}</div>
+      <details><summary>Configuration note</summary>${note(b.config_note, "CONFIG-NOTE")}</details>
+      ${countsTable(b.counts)}</div>`).join("");
+  return `<div class="row"><h1>Lightning measurement batches</h1></div>
+    <p class="muted">Read from <code>runs/brev-batch-*/</code>. Counts are per scenario and topology and are not a superiority claim. Runs named in a batch's <code>INFRA-NOTE</code> are shown separately and never counted as model results.</p>
+    ${cards || `<div class="card muted">No <code>runs/brev-batch-*</code> directories found.</div>`}`;
+}
+
+function batchRunRows(runs) {
+  return runs.map((r) => {
+    const attempts = r.attempts.length ? r.attempts.map((a) =>
+      `<span class="badge ${a.ok ? "pass" : "fail"}" title="${esc(a.failed_checks.join(", "))}">a${esc(a.attempt)} ${a.ok ? "PASS" : "FAIL"}${a.failed_count ? ` · ${esc(a.failed_count)} failed` : ""}</span>`).join(" ")
+      : unknown("none");
+    const trace = r.trace?.url ? `<a href="${esc(r.trace.url)}" target="_blank" rel="noopener noreferrer">trace</a>`
+      : r.trace ? unknown("no URL") : unknown("not traced");
+    const id = r.run_id ? (r.run_dir_found ? `<a href="#/run/${enc(r.run_id)}"><code>${esc(r.run_id)}</code></a>` : `<code>${esc(r.run_id)}</code> ${unknown("run dir missing")}`)
+      : unknown(`no run dir (${r.stem || "?"})`);
+    return `<tr><td>${val(r.n)}</td><th scope="row">${id}</th><td><code>${esc(r.scenario)}</code></td><td>${val(r.topology)}</td>
+      <td>${verdictBadge(r.verdict)}${r.verdict_source === "runs.jsonl" ? ` <small class="muted">(runs.jsonl)</small>` : ""}${r.exhausted_reason ? ` <small class="muted">${esc(r.exhausted_reason)}</small>` : ""}</td>
+      <td>${r.total_tokens == null ? nr(null) : fmt(r.total_tokens)}</td><td>${nr(r.model_calls)}</td><td>${nr(r.wall_seconds)}</td>
+      <td>${attempts}</td><td>${trace}</td></tr>`;
+  }).join("");
+}
+
+function batchRunTable(runs) {
+  return `<div class="table-wrap"><table><thead><tr><th scope="col">#</th><th scope="col">Run</th><th scope="col">Scenario</th><th scope="col">Topology</th><th scope="col">Verdict</th><th scope="col">Tokens</th><th scope="col">Model calls</th><th scope="col">Wall (s)</th><th scope="col">Attempts (all, failed included)</th><th scope="col">Langfuse</th></tr></thead><tbody>${batchRunRows(runs)}</tbody></table></div>`;
+}
+
+async function pageBatch(name) {
+  const b = await api(`/api/batch?name=${enc(name)}`);
+  crumbs([["Runs", "#/"], ["Batches", "#/batches"], [name]]);
+  return `<div class="row"><h1>${esc(b.name)}</h1></div>
+    ${b.has_runs_jsonl ? "" : `<div class="card">${unknown("no runs.jsonl in this batch")}</div>`}
+    <div class="card"><h2>Configuration note</h2>${note(b.config_note, "CONFIG-NOTE")}
+      <details><summary>Serving environment (environment.txt)</summary>${note(b.environment, "environment.txt")}</details></div>
+    <h2>Model results</h2>${countsTable(b.counts)}
+    <h2>Runs</h2>${b.runs.length ? batchRunTable(b.runs) : `<p class="muted">No model runs.</p>`}
+    <h2>Infrastructure failures (not model results)</h2>
+    ${b.infra_runs.length ? `${note(b.infra_note, "INFRA-NOTE")}${batchRunTable(b.infra_runs)}` : `<p class="muted">None listed${b.infra_note ? " (INFRA-NOTE names no run of this batch)" : ""}.</p>`}
+    ${b.unparsed_lines ? `<p><span class="badge warn">${esc(b.unparsed_lines)} runs.jsonl line(s) could not be read</span></p>` : ""}`;
+}
+
 async function pageEvidence(oid) {
   const o = await api(`/api/observation?id=${enc(oid)}`);
   if (!o) return `<p>${unknown("observation not found")}</p>`;
@@ -641,12 +705,14 @@ async function route() {
     else if (parts[0] === "run" && parts[2] === "metrics") html = await pageMetrics(parts[1]);
     else if (parts[0] === "obs") html = await pageEvidence(parts.slice(1).join("/"));
     else if (parts[0] === "compare" && parts.length === 3) html = await pageCompare(parts[1], parts[2]);
+    else if (parts[0] === "batches" && parts.length === 1) html = await pageBatches();
+    else if (parts[0] === "batch" && parts.length === 2) html = await pageBatch(parts[1]);
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "review" && parts.length === 2) html = await pageReviewLive(parts[1]);
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     document.querySelectorAll("[data-nav]").forEach((link) => link.classList.remove("active"));
-    const navKey = parts[0] === "workspace" ? "workspace" : parts[0] === "compare" ? "compare" : parts[0] === "demo" ? "demo" : "runs";
+    const navKey = parts[0] === "workspace" ? "workspace" : parts[0] === "compare" ? "compare" : parts[0] === "demo" ? "demo" : ["batches", "batch"].includes(parts[0]) ? "batches" : "runs";
     document.querySelector(`[data-nav="${navKey}"]`)?.classList.add("active");
     window.scrollTo(0, 0);
     if (parts[0] === "workspace" && !localStorage.getItem("migrationlab-tour-seen")) requestAnimationFrame(openTour);
