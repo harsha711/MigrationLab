@@ -27,6 +27,15 @@ only the runner decides pass or fail.
 | ![Brev batches: per-scenario results of configuration K](docs/images/ui-batches.png) | ![New review: choose a scenario, topology, mode and budget](docs/images/ui-review.png) |
 | **Brev batches:** configuration K, scored against labels the agents never see | **New review:** submit a review job to the controller |
 
+![Compare page: rename-note, roles PASS (attempt 2, 0 of 35 checks failed) next to single INCOMPLETE (closest attempt 15 of 31 checks failed)](docs/images/ui-compare-roles-single.png)
+
+**Compare two reviews:** one rename-note example from configuration M
+(`brev-batch-20261017-230355`), started 3 seconds apart with the same budget. `roles` passed
+in 8 model calls and 105,450 tokens; `single` stopped INCOMPLETE after 20 calls when it ran
+out of its 450,000-token budget (473,861 used). This is one example, not a rate: in that
+batch `roles` passed 1 of 3 and `single` 0 of 3, and the pre-registered comparisons (H, K)
+found no significant difference between topologies.
+
 ## Quick start
 
 Prerequisites: Linux, Docker, `git`, [`uv`](https://docs.astral.sh/uv/) (provides Python
