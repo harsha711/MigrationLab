@@ -60,7 +60,7 @@ All model serving and live model calls for bounty work run on GPU instances paid
 | Owner | Owner 1 (Harsha) |
 | Verified organizer requirements | Track name only. Whether the bounty requires model training (RL or SFT) or accepts an environment plus evaluation: **unknown** |
 | Planned integration | Wrap the existing migration task and deterministic verifier as a NeMo Gym resources server that calls the existing runner (no second execution path). Tools: investigation search, plan submission, test execution. `verify()` scores final-plan completion and mandatory compatibility and data-preservation checks, and reports setup errors separately. Evaluate baseline and final systems on the same frozen tasks |
-| Current status | **planned, not started.** Blocked on the stable runner interface (`docs/team/01-runner.md` task 2) and on per-session port and database allocation (the runner uses fixed ports 8001 and 8002 today) |
+| Current status | **implemented, not run against a NeMo Gym trainer.** `gym/`: resources server for nemo-gym 0.7.0, 14 frozen single-step tasks, `/verify` through `runner_api.execute_plan`. Verified only with scripted plans and server unit tests (`gym/README.md`). One verification at a time: per-session port allocation is still open (`gym/HANDOFF.md`) |
 | Claim limits | An evaluation environment does not by itself show training or weight improvement. Report measured system or prompt improvements as such |
 | Evidence locations (planned) | `gym/` (resources server, config, frozen task JSONL), `gym/results/` (trajectories, scores, config), reproduction steps in `gym/README.md` |
 
