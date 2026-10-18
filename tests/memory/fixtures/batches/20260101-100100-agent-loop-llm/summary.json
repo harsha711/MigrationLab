@@ -1,0 +1,23 @@
+{
+  "command": "agent-loop-llm",
+  "verdict": "PASS",
+  "elapsed_s": 301.0,
+  "checks_total": 41,
+  "checks_failed": [],
+  "ok": true,
+  "scenario": "rename-note",
+  "recommendation": "staged_rollout",
+  "runner_recommendation": "staged_rollout",
+  "recommendation_agrees": true,
+  "source": "llm",
+  "topology": "roles",
+  "model": "fixture-model",
+  "provenance": "agent:fixture-model",
+  "agent_totals": {"model_calls": 4, "total_tokens": 20500, "wall_seconds": 299.5, "exhausted_reason": null},
+  "reason": null,
+  "contract_version": "migproto.contracts/v1",
+  "run_id": "20260101-100100-agent-loop-llm",
+  "outcome_counts": {
+    "20260101-100100-agent-loop-llm/a1": {"pass": 41, "fail": 0, "refused": 0, "error": 0, "skipped": 0}
+  }
+}

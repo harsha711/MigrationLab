@@ -1,0 +1,1 @@
+{"plans": {"unsafe.json": {"verdict": "FAIL", "recommendation": "reject"}, "safe.json": {"verdict": "PASS", "recommendation": "staged_rollout"}}}

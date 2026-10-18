@@ -4,21 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MigrationLab | Replay Recorded Run</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
       <a href="#/" class="brand-lockup" aria-label="MigrationLab home">
-        <span class="brand-mark">M</span>
-        <span><strong>MigrationLab</strong><small>Migration intelligence</small></span>
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Migration<span>Lab</span></strong></span>
       </a>
       <nav class="side-nav" aria-label="Primary navigation">
-        <a href="#/" data-nav="runs"><span class="nav-icon">&#9638;</span> Reviews</a>
-        <a href="#/workspace/live-ordering-revision" data-nav="workspace"><span class="nav-icon">&#9672;</span> Review workspace</a>
-        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Compare</a>
-        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided demo</a>
+        <a href="#/run/live-ordering-revision" data-nav="overview"><span class="nav-icon">&#8962;</span> Overview</a>
+        <a href="#/" data-nav="runs" class="primary-nav"><span class="nav-icon">&#9638;</span> Migration evidence</a>
+        <a href="#/batches" data-nav="batches"><span class="nav-icon">&#9776;</span> Batches</a>
+        <a href="#/compare/scripted-sync-failure/scripted-staged-success" data-nav="compare"><span class="nav-icon">&#8644;</span> Comparisons</a>
+        <a href="#/demo/live-ordering-revision" data-nav="demo"><span class="nav-icon">&#9655;</span> Guided replay<span class="sr-only">Guided demo</span></a>
       </nav>
       <div class="sidebar-foot"><span class="status-dot"></span><span><strong>Evidence store</strong><small>Read-only replay</small></span></div>
     </aside>
@@ -26,9 +26,7 @@
       <header class="topbar">
         <nav id="crumbs" class="crumbs"></nav>
         <div class="top-actions">
-          <span class="environment-chip">Saleor lab <b>v0</b></span>
-          <span class="recorded-label"><span class="pulse-dot"></span> Recorded evidence</span>
-          <button id="theme-toggle" class="icon-button" aria-label="Toggle theme" title="Toggle theme">&#9788;</button>
+          <button id="theme-toggle" class="theme-button" aria-label="Use dark theme" title="Use dark theme">&#9790;</button>
         </div>
       </header>
       <main id="view" class="view" aria-live="polite"></main>
@@ -51,17 +49,6 @@
     </section>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <div id="command-palette" class="command-overlay" hidden>
-    <section class="command-card" role="dialog" aria-modal="true" aria-labelledby="command-title">
-      <h2 id="command-title" class="sr-only">Quick navigation</h2>
-      <label><span>&#8981;</span><input id="command-search" type="search" placeholder="Jump to a review or page..." autocomplete="off"></label>
-      <div id="command-results"><a href="#/"><span>Dashboard</span><kbd>Home</kbd></a><a href="#/workspace/live-ordering-revision"><span>Interactive review workspace</span><kbd>Review</kbd></a><a href="#/demo/live-ordering-revision"><span>Guided replay</span><kbd>Demo</kbd></a><a href="#/compare/scripted-sync-failure/scripted-staged-success"><span>Compare reviews</span><kbd>Compare</kbd></a></div>
-      <footer><span><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate</span><span><kbd>esc</kbd> close</span></footer>
-    </section>
-  </div>
-  <script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
   <script src="app.js"></script>
-  <script src="reactive-jquery.js"></script>
 </body>
 </html>

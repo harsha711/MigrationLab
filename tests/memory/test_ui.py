@@ -15,6 +15,7 @@ from migproto.memory import store
 from migproto.ui import server
 
 ROOT = Path(__file__).resolve().parents[2]
+BATCH_FIXTURES = Path(__file__).parent / "fixtures" / "batches"
 
 
 @pytest.fixture(scope="module")
@@ -41,9 +42,6 @@ def test_static_and_runs(base_url):
     assert status == 200 and b"Replay Recorded Run" in body
     assert b"Guided demo" in body and b"evidence-drawer" in body
     assert b"welcome-tour" in body and b'id="toast"' in body
-    assert b"jquery-3.7.1.min.js" in body
-    assert b"bootstrap@5.3.8" in body
-    assert b"reactive-jquery.js" in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
@@ -139,25 +137,41 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "evidence-drawer" in css
     assert "prefers-reduced-motion" in css
     assert "INTERACTIVE COMPATIBILITY REVIEW" in js
-    assert "PLAN COMPARISON" in js and "Why did the first attempt fail?" in js
+    assert "FAILED PLAN &#8594; REVISED PLAN" in js and "The failure stays visible" in js
     assert "workspace-layout" in css
     assert "data-workspace-row" in js
     assert "migrationlab-tour-seen" in js
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
-    assert "Recorded migration review" in js
-    assert "Revised plan passed" in js
-    assert "Restart replay" in js
-    assert "trapFocus" in js
-    assert "scope=\"col\"" in js and "scope=\"row\"" in js
-    assert "progressive-card" in css
-    assert "data-nav" in js and "navKey" in js
-    assert "Seamless dashboard theme" in css
-    assert "REVIEW COMMAND CENTER" in js
-    assert "data-attempt-select" in js
-    assert "command-palette" in js
-    assert "workspaceAttempt" in js
-    assert "Rebuilt dashboard command center" in css
-    reactive = (ROOT / "migproto" / "ui" / "static" / "reactive-jquery.js").read_text(encoding="utf-8")
-    assert "window.jQuery" in reactive and "MutationObserver" in reactive
-    assert "data-bs-theme" in js
+    assert "editorial-layout" in css and "Migration evidence" in js
+
+
+def test_batch_endpoints_over_http():
+    batch = "brev-batch-20260101-100000"
+    handler = server.make_handler(store.connect(":memory:"), threading.Lock(),
+                                  runs_root=BATCH_FIXTURES)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        assert batch in [b["batch_id"] for b in get_json(base + "/api/batches")["batches"]]
+        detail = get_json(base + f"/api/batch?id={batch}")
+        assert detail["infrastructure_failures"][0]["run_id"] == "20260101-100300-agent-loop-llm"
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(base + "/api/batch?id=..%2Fexamples")
+        assert e.value.code == 404
+    finally:
+        httpd.shutdown()
+
+
+def test_batches_page_assets():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'href="#/batches"' in html
+    assert "pageBatches" in js and "pageBatch(" in js
+    assert "Infrastructure failures" in js and "not model results" in js
+    assert "Langfuse trace" in js and 'rel="noopener noreferrer"' in js
+    assert "scored against manual expected verdicts (never shown to agents)" in js
+    assert "Running now" in js and "BATCH_POLL_MS = 20000" in js
+    # Polling only re-reads: no non-GET request anywhere near the batch pages.
+    assert "method:" not in js[js.index("// ---------- Brev batches"):js.index("async function openEvidence")]

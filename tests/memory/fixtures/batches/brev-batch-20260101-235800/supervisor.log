@@ -1,0 +1,6 @@
+23:58:00 INFO  fixture supervisor log (still running, crosses midnight)
+23:59:10 RUN   1/4 add-table roles starting on worker 1 (~$2.00)
+23:59:12 RUN   2/4 unique-last-name single starting on worker 2 (~$2.00)
+00:02:00 RUN   1/4 add-table roles PASS run=20260101-235910-agent-loop-llm 170.0 s, calls=4 tokens=20000 stopped=None (~$2.20)
+00:02:01 RUN   3/4 drop-column roles starting on worker 1 (~$2.20)
+00:03:00 RUN   2/4 unique-last-name single FAIL run=20260101-235912-agent-loop-llm 228.0 s, calls=6 tokens=40000 stopped=None (~$2.25)

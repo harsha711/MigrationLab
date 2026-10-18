@@ -1,0 +1,2 @@
+{"n": 1, "worker": 1, "workers": 2, "scenario": "add-table", "topology": "roles", "verdict": "PASS", "exit": 0, "run_id": "20260101-235910-agent-loop-llm", "seconds": 170.0, "model_calls": 4, "total_tokens": 20000, "reason": null}
+{"n": 2, "worker": 2, "workers": 2, "scenario": "unique-last-name", "topology": "single", "verdict": "FAIL", "exit": 1, "run_id": "20260101-235912-agent-loop-llm", "seconds": 228.0, "model_calls": 6, "total_tokens": 40000, "reason": null}
