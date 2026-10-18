@@ -250,6 +250,8 @@ feedback changed (decision D3 in `docs/decisions/single-history.md`):
 
 No runner check changed. Results pending.
 
+**Side effect seen in F:** `20261017-224014` (roles) ended ERROR: planner-1's three replies each failed validation (unbalanced `$$`, an empty `sql` list, then the backfill pre-check), so no plan reached the runner. Without the backfill pre-check the third plan would have run. Fixed on `fix/next` (pre-checks are advisory on the final retry).
+
 **Next (not in F, on branch `fix/next`):** a PostgreSQL syntax pre-check (`pglast`). On the same
 203 replies it flagged all 18 stages that failed with a syntax error and none of the 181 others.
 

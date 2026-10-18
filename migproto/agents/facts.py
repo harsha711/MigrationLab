@@ -256,6 +256,14 @@ def old_version(scenario_id: str | None) -> str:
     return sc.old_version
 
 
+class PreCheckError(plans.PlanError):
+    """An agent-side pre-check was not met: a SQL shape that failed on the runner before.
+    `chat_json` sends it back for correction while retries remain; on the final retry the plan
+    goes to the runner anyway (the runner decides), so a pre-check can never turn a plan the
+    runner would have judged into an ERROR."""
+    advisory = True
+
+
 _DOLLAR_TAG = re.compile(r"\$[A-Za-z_]*\$")
 
 
@@ -268,10 +276,10 @@ def check_sql_quoting(plan_obj: dict) -> None:
         for i, sql in enumerate(st.get("sql") or []):
             where = f"stage {st.get('id')!r}, sql[{i}]"
             if "\\$" in sql:
-                raise plans.PlanError(f"{where}: write dollar quotes literally as $$, never "
+                raise PreCheckError(f"{where}: write dollar quotes literally as $$, never "
                                       "\\$\\$ (the string is sent to PostgreSQL as written)")
             if len(_DOLLAR_TAG.findall(sql)) % 2:
-                raise plans.PlanError(f"{where}: unbalanced $$ quoting. Each sql string is "
+                raise PreCheckError(f"{where}: unbalanced $$ quoting. Each sql string is "
                                       "executed as one statement, so a function body must open "
                                       "and close its $$ in the same string")
 
@@ -312,7 +320,7 @@ def check_backfill_terminates(plan_obj: dict) -> None:
             if not m or _copy_terminates(*m.groups()):
                 continue
             target, source = m.group(1), m.group(2)
-            raise plans.PlanError(
+            raise PreCheckError(
                 f"stage {st.get('id')!r}, sql[{i}]: this repeat_until_zero_rows backfill never "
                 f"reaches 0 rows, because its WHERE still matches rows after the update (a row "
                 f"counts as updated even when its value does not change). Use a condition the "
@@ -341,25 +349,29 @@ def check_sql_syntax(plan_obj: dict) -> None:
                 if _PLPGSQL.search(sql):
                     pglast.parse_plpgsql(sql)
             except pglast.parser.ParseError as exc:
-                raise plans.PlanError(
+                raise PreCheckError(
                     f"stage {st.get('id')!r}, sql[{i}]: PostgreSQL syntax error: {exc}. "
                     "Fix the statement; each sql string is sent to PostgreSQL as written"
                 ) from None
 
 
+def run_prechecks(plan_obj: dict) -> None:
+    check_sql_quoting(plan_obj)
+    check_sql_syntax(plan_obj)
+    check_backfill_terminates(plan_obj)
+
+
 def plan_validator(sc_facts: ScenarioFacts):
     """Agent-side plan check: plans.validate_plan on the plan without `recommendation`, plus
     the recommendation's consistency with the plan shape and the scenario's variants.
-    Raises plans.PlanError (a ValueError), so chat_json asks the model to correct it."""
+    Raises plans.PlanError (a ValueError), so chat_json asks the model to correct it. The
+    agent-side SQL pre-checks run last and raise PreCheckError (advisory, see there)."""
 
-    def validate(obj: dict) -> dict:
+    def hard(obj: dict) -> dict:
         if not isinstance(obj, dict):
             raise plans.PlanError("plan must be a JSON object")
         rec = obj.get("recommendation")
         plans.validate_plan(runner_plan(obj))
-        check_sql_quoting(obj)
-        check_sql_syntax(obj)
-        check_backfill_terminates(obj)
         deploy = next(st for st in obj["stages"] if st.get("kind") == "deploy_new")
         named = deploy.get("variant")
         if named is not None and (named in VARIANT_TEXT or named not in sc_facts.variants):
@@ -387,6 +399,11 @@ def plan_validator(sc_facts: ScenarioFacts):
                                   "sql stages")
         if rec == "staged_rollout" and not has_sql:
             raise plans.PlanError("staged_rollout needs at least one sql stage")
+        return obj
+
+    def validate(obj: dict) -> dict:
+        hard(obj)
+        run_prechecks(obj)    # last, so an advisory miss never hides a hard error
         return obj
 
     return validate

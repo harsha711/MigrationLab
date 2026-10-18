@@ -90,3 +90,11 @@ trailing failed checks with a count, so the prompt slice never cuts the JSON.
   203 recorded Lightning planner replies it flagged all 18 whose stage failed with a syntax
   error, none of the 181 others whose stages ran, and 4 in stages that never ran; no plan under
   `proposals/` or `examples/` is rejected. It executes nothing and checks no names or types.
+- **Pre-checks are advisory (`fix/next`):** the SQL quoting, syntax and backfill pre-checks raise
+  `facts.PreCheckError` and run after every hard check. `chat_json` sends a miss back for
+  correction while retries remain; if only a pre-check fails on the final retry, the reply is
+  accepted (transcript `error` says "advisory pre-check not met"), the controller logs
+  `precheck_not_met`, and the runner judges the plan. Reason: in configuration F, run
+  `20261017-224014` ended ERROR because planner-1's three replies failed three different
+  validations, the last one the backfill pre-check; that plan would otherwise have reached the
+  runner. Hard errors (schema, variant, recommendation) still fail the call.

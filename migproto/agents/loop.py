@@ -285,7 +285,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                       msg=f"no investigator ground truth for scenario {scenario_id}; not scored")
 
         plan_obj = _tag(call("planner-1", roles.plan, investigation, **plan_kwargs), 1)
-        _validate_plan(plan_obj, sfacts)
+        _validate_plan(plan_obj, sfacts, log, prov, 1)
         log.event("proposal", provenance=prov, role="planner", attempt=1,
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
@@ -349,7 +349,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                     previous=plan_obj,
                     **plan_kwargs,
                 ), attempt + 1)
-                _validate_plan(plan_obj, sfacts)
+                _validate_plan(plan_obj, sfacts, log, prov, attempt + 1)
             except (LLMError, plans.PlanError) as exc:
                 # The runner already failed every executed plan; an unusable revision does
                 # not make that an infrastructure error. BudgetExceeded still means INCOMPLETE.
@@ -378,8 +378,16 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                    score, attempts, budget, scenario=scenario_id)
 
 
-def _validate_plan(plan_obj: dict, sfacts) -> None:
-    scenario_facts.plan_validator(sfacts)(plan_obj)
+def _validate_plan(plan_obj: dict, sfacts, log: RunLog | None = None,
+                   prov: str | None = None, attempt: int | None = None) -> None:
+    try:
+        scenario_facts.plan_validator(sfacts)(plan_obj)
+    except scenario_facts.PreCheckError as exc:
+        # chat_json already let this plan through after its last retry; record it and let
+        # the runner judge the plan.
+        if log is not None:
+            log.event("precheck_not_met", provenance=prov, attempt=attempt,
+                      plan_id=plan_obj.get("plan_id"), msg=str(exc)[:500])
 
 
 def _finish(ok: bool, verdict: str, source: str, topology: str, model: str | None,
