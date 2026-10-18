@@ -19,10 +19,32 @@ CONTEXT_LINES = 2
 MAX_HITS = 80
 
 
+# Experiment annotations in scenario old builds (patches/<scenario>/old) explain the trap; they
+# are answers, not code under review.
+_ANNOTATION_RE = re.compile(r"#.*\b(EXPERIMENT|not upstream)\b")
+
+
+def _annotation_lines(lines: list[str]) -> set[int]:
+    """Indices of experiment comment blocks: a matching comment line and the comment lines
+    that directly continue it."""
+    masked, in_block = set(), False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if _ANNOTATION_RE.search(line) and stripped.startswith("#"):
+            in_block = True
+        elif not (in_block and stripped.startswith("#")):
+            in_block = False
+        if in_block:
+            masked.add(i)
+    return masked
+
+
 def gather_hits(worktree: Path = WORKTREES["old"], pattern: re.Pattern = SEARCH_RE,
                 max_hits: int = MAX_HITS) -> list[dict]:
-    """Deterministic search tool (runner side), no model involved. Searches only the pinned
-    upstream code (never patched scenario builds, which are generated from patches/)."""
+    """Deterministic search tool (runner side), no model involved. Searches one OLD app
+    version: the pinned upstream code, or a scenario's own old build (the code under review);
+    the caller never passes a new-version or state-only build. Experiment annotation comments
+    are removed from hits and context."""
     hits = []
     for root in SEARCH_ROOTS:
         base = worktree / root
@@ -32,11 +54,13 @@ def gather_hits(worktree: Path = WORKTREES["old"], pattern: re.Pattern = SEARCH_
             if "/migrations/" in rel:
                 continue
             lines = path.read_text(errors="replace").splitlines()
+            masked = _annotation_lines(lines)
             for i, line in enumerate(lines):
-                if pattern.search(line):
+                if i not in masked and pattern.search(line):
                     lo, hi = max(0, i - CONTEXT_LINES), min(len(lines), i + CONTEXT_LINES + 1)
                     hits.append({"ref": f"{rel}:{i + 1}", "line": line.strip(),
-                                 "context": "\n".join(lines[lo:hi])})
+                                 "context": "\n".join(lines[j] for j in range(lo, hi)
+                                                      if j not in masked)})
                     if len(hits) >= max_hits:
                         return hits
     return hits
