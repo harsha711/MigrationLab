@@ -38,28 +38,20 @@ before touching them.
 
 ## Tasks, in priority order
 
-### 1. Refresh the frozen tasks after Harsha's push (blocking; about 15 min)
+### 1. Refresh the frozen tasks: DONE (Harsha, `42a5197`)
 
-Harsha will push two prompt changes to `origin/brev/lightning-serving`:
-- **The deploy-variant guard** (`30a6304`): adds one line to every non-rename scenario prompt.
-- **Configuration D** (`ebe6f40`): the rename contract lists the `state_only` and `apply`
-  builds.
-
-Both make `tests/gym/test_task_isolation.py::test_frozen_tasks_are_current` fail until the
-tasks are rebuilt. This was already checked in a trial merge with the local
-`feat/rename-build-line` branch: before the rebuild, only that test fails; after it, all 301
-tests pass (the count can differ slightly in the real merge).
+PR #5 was merged into `brev/lightning-serving` together with the variant guard, configuration D
+and configuration E, and the tasks were rebuilt there (335 tests passed). Before working, update
+your branch:
 
 ```bash
 git fetch origin && git merge origin/brev/lightning-serving
-uv run python gym/build_tasks.py && uv run python gym/build_tasks.py --check
-uv run pytest -q
-git status --short        # vendor and migproto.lock must NOT be staged ("A"); never use -a
-git add gym/tasks/migration_review.jsonl
-git commit -m "gym: rebuild frozen tasks for the variant guard and rename build lines"
+uv run python gym/build_tasks.py --check     # must exit 0
 ```
 
-Ask Harsha whether the push has happened. Until it has, skip to task 3.
+If later prompt changes make `--check` fail, rebuild with `uv run python gym/build_tasks.py`,
+stage only `gym/tasks/migration_review.jsonl` (never `vendor` or `migproto.lock`, never
+`git commit -a`) and commit.
 
 ### 2. First real measurement: Lightning on the 14 tasks (Harsha's go-ahead needed)
 
