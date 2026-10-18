@@ -1,6 +1,20 @@
 # Agent and Serving Results: Nemotron 3.5 Lightning on vLLM (Brev)
 
-DRAFT, 2026-10-17 22:10 EDT. Configurations A-D and scenario sweeps 1-2 are complete; configuration E is running.
+DRAFT, 2026-10-18 00:30 EDT. Configurations A-G, M and scenario sweeps 1-2 are complete;
+configuration H (`parallel` versus `single`, pre-registered) is running.
+
+**Where things stand (rename scenario, reviews that passed):**
+
+| Configurations | `roles` | `single` | Notes |
+|---|---|---|---|
+| A-E | 3 of 14 valid | 0 of 20 | configurations differed between topologies |
+| F | 0 of 3 | 1 of 3 | runner facts first |
+| G | 0 of 3 | 1 of 3 | syntax pre-check, larger budget; `single` out of tokens once |
+| M (G + RAG) | 1 of 3 | 0 of 3 | every `single` review out of tokens |
+
+Small samples under changing configurations: counts, not rates, and not a topology
+comparison. Configuration H is the pre-registered comparison. Scenario sweeps: 10 of the 13
+catalogue scenarios matched the expected outcome in at least one `roles` review.
 
 Every number below comes from saved run directories (`runs/<run_id>/summary.json`,
 `events.jsonl`) and batch records (`runs/brev-batch-*/runs.jsonl`, `CONFIG-NOTE`,
@@ -250,8 +264,8 @@ feedback changed (decision D3 in `docs/decisions/single-history.md`):
 
 No runner check changed.
 
-**Rename: 1 of 6 passed** (the first `single` rename pass outside configuration G, which ran at
-the same time).
+**Rename: 1 of 6 passed.** Configuration G's `single` review `230418`, running at the same
+time, also passed.
 
 | Run | Topology | Attempts (failed checks) | Tokens | Verdict |
 |---|---|---|---|---|
@@ -286,6 +300,56 @@ the same time).
 **Next (not in F, on branch `fix/next`):** a PostgreSQL syntax pre-check (`pglast`). On the same
 203 replies it flagged all 18 stages that failed with a syntax error and none of the 181 others.
 
+## Configuration G: syntax pre-check, advisory pre-checks, larger budget
+
+Batch `runs/brev-batch-20261017-230351` (rename: 3 `roles` + 3 `single`). Code `fix/next`
+(`feec876`), run from worktree `../hackathon-fixes` (workers 2-3); runs copied unchanged into
+`runs/`. Settings are F's plus the PostgreSQL syntax pre-check (`pglast`), pre-checks advisory
+on the final retry, and a larger budget: `max_revisions` 5, 22 calls, 450,000 tokens, 2,700 s,
+`THINKING_BUDGET=16384`. Up to 6 reviews (F's last two, G, M) shared the vLLM server.
+
+**Rename: 1 of 6 passed.**
+
+| Run | Topology | Attempts (failed checks) | Tokens | Verdict |
+|---|---|---|---|---|
+| `20261017-230415-agent-loop-llm` | roles | 1 → 15 → 15 → 17 → 15 → 17 | 335,465 | FAIL |
+| `20261017-232229-agent-loop-llm` | roles | 15 → 20 → 1 → 1 → 1 | 326,478 | INCOMPLETE (22 calls) |
+| `20261017-234853-agent-loop-llm` | roles | 18 → 16 → 18 → 19 → 15 → 18 | 342,542 | FAIL |
+| `20261017-230418-agent-loop-llm` | single | 16 → 1 → 1 → 1 → 1 → **0** | 369,295 | PASS |
+| `20261017-233733-agent-loop-llm` | single | 1 → 15 → 20 → 1 → 17 → 15 | 374,632 | FAIL |
+| `20261017-234913-agent-loop-llm` | single | 17 → 21 → 22 → 17 → 17 | 461,976 | INCOMPLETE (tokens) |
+
+- **More revisions did not settle the reviews:** four of the six swung between 1 and 15-22
+  failures across attempts.
+- **`single` hit the token budget once** with the larger budget (450k).
+
+## Configuration M: G plus prior evidence (RAG) for planner-1
+
+Batch `runs/brev-batch-20261017-230355`. Code: G plus `feat/prior-evidence` (`e649e85`, decision
+D4 on that branch, not on `main`): planner-1 also gets failed, refused and errored runner
+observations from earlier Lightning runs of the same change (cutoff `20261017-230351`; the first
+review loaded 27 runs, 757 observations, 5,525 characters). Run from worktree `../hackathon-rag`
+(workers 4-5); runs copied unchanged into `runs/`. Same budget as G.
+
+**Rename: 1 of 6 passed.**
+
+| Run | Topology | Attempts (failed checks) | Tokens | Verdict |
+|---|---|---|---|---|
+| `20261017-230419-agent-loop-llm` | roles | 1 → **0** | 105,450 | PASS |
+| `20261017-231816-agent-loop-llm` | roles | 16 → 2 → 23 → 17 → 15 → 18 | 286,796 | FAIL |
+| `20261017-232905-agent-loop-llm` | roles | 16 → 16 → 8 → 9 → 7 → 8 | 261,510 | FAIL |
+| `20261017-230422-agent-loop-llm` | single | 15 → 21 → 16 → 17 → 17 | 473,861 | INCOMPLETE (tokens) |
+| `20261017-231832-agent-loop-llm` | single | 17 → 24 → 20 → 19 → 19 | 455,968 | INCOMPLETE (tokens) |
+| `20261017-234232-agent-loop-llm` | single | 19 → 16 → 19 → 18 → 16 | 466,967 | INCOMPLETE (tokens) |
+
+- **`roles` `230419` passed on attempt 2** with the fewest tokens of any rename pass (105,450).
+- **Every `single` review ran out of tokens.** Prompts averaged 20-22k tokens per call (G
+  `single`: 13-21k), consistent with the prior-evidence section staying in the single agent's
+  history; not verified further.
+- **G and M together:** `single` exhausted the token budget in 4 of its 6 reviews; `roles` never
+  did (one stopped on the call budget). One review per cell differs between G and M, so these
+  are counts, not a comparison of RAG.
+
 ## Configuration H: `parallel` versus `single` (pre-registered)
 
 Written and committed before the batch started; the results will be added below this
@@ -315,6 +379,9 @@ paragraph without changing it.
 - **Exclusions:** none, except runs recorded in the batch's INFRA-NOTE as infrastructure
   failures (listed with their cause). Every other review is reported, including failed
   attempts.
+
+**Status (2026-10-18 00:30):** running, batch `runs/brev-batch-20261018-000918` from worktree
+`../hackathon-final` (workers 4-8), code `19dd71f`. No results yet.
 
 ## Scenario sweeps (`roles`, one review per scenario)
 
