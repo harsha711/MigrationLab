@@ -186,6 +186,15 @@ def test_activity_library_assets_are_scenario_first():
     assert "/api/scenario-activities" in js
 
 
+def test_compatibility_checks_use_plain_language_before_the_grid():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
+    assert '"Compatibility checks"' in js
+    assert "COMPATIBILITY SUMMARY" in js and "WHAT NEEDS ATTENTION" in js
+    assert "Old app" in js and "Show all compatibility checks" in js
+    assert ".compat-summary-grid" in css and ".compat-failure-grid" in css
+
+
 def test_batch_endpoints_over_http():
     batch = "brev-batch-20260101-100000"
     handler = server.make_handler(store.connect(":memory:"), threading.Lock(),

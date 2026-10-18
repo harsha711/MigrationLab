@@ -63,7 +63,7 @@ function runHeader(run, active) {
   const first = short(run.attempts[0]?.attempt_id) || "a1";
   const tabs = [["Overview", `#/run/${enc(id)}`, "overview"],
                 ["Plan", `#/run/${enc(id)}/plan/${first}`, "plan"],
-                ["Matrix", `#/run/${enc(id)}/matrix/${first}`, "matrix"],
+                ["Compatibility checks", `#/run/${enc(id)}/matrix/${first}`, "matrix"],
                 ["Agents", `#/run/${enc(id)}/agents`, "agents"],
                 ["Metrics", `#/run/${enc(id)}/metrics`, "metrics"]];
   return `<section class="run-page-header"><span class="eyebrow">RECORDED MIGRATION REVIEW</span><div class="row"><h1>${esc(id)}</h1>${verdictBadge(run.meta?.verdict)}</div>
@@ -484,28 +484,40 @@ async function pagePlan(id, s) {
 
 async function pageMatrix(id, s) {
   const run = await getRun(id);
-  crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], [`Matrix ${s}`]]);
+  crumbs([["Runs", "#/"], [id, `#/run/${enc(id)}`], [`Compatibility checks ${s}`]]);
   const a = findAttempt(run, s);
   if (!a) return `${runHeader(run, "matrix")}<p>${unknown("no such attempt")}</p>`;
   const m = await api(`/api/matrix?run=${enc(id)}&attempt=${enc(a.attempt_id)}`);
-  let grid = `<p class="muted">No app-level cases with step scope in this attempt.</p>`;
-  if (m.rows.length) {
+  const appName = (name) => name === "old" ? "Old app" : name === "new-staged" ? "New app" : name === "new-unsafe" ? "New app (unsafe)" : humanize(name);
+  const readablePath = (column) => {
+    const [writer, reader] = String(column || "").split(" -> ");
+    return writer && reader ? `${appName(writer)} writes → ${appName(reader)} reads` : "Application path not recorded";
+  };
+  const readableCheck = (check) => humanize(String(check || "").replace(/^case\./, ""));
+  const failures = m.rows.filter(isBad);
+  const passes = m.rows.filter((row) => kindOf(row) === "PASS").length;
+  const grid = (rows, title) => {
+    if (!rows.length) return `<p class="muted">No app-level cases with step scope in this attempt.</p>`;
     let body = "", last;
-    for (const r of m.rows) {
+    for (const r of rows) {
       if (r.stage_id !== last) {
         body += `<tr class="stage-row"><td colspan="${m.columns.length + 1}">${val(r.stage_id)}</td></tr>`;
         last = r.stage_id;
       }
-      body += `<tr><td title="${esc(r.path.join(" → "))}"><code>${esc(r.check_name.replace(/^case\./, ""))}</code></td>${
+      body += `<tr><td title="${esc(readablePath(r.column))}"><strong>${esc(readableCheck(r.check_name))}</strong><small>${esc(readablePath(r.column))}</small></td>${
         m.columns.map((c) => `<td class="cell">${c === r.column
           ? `<button class="mark ${esc(kindOf(r))}" data-obs="${esc(r.observation_id)}" title="${esc(r.outcome || r.status)}">${MARKS[kindOf(r)] || "?"}</button>`
           : `<span class="dot">·</span>`}</td>`).join("")}</tr>`;
     }
-    grid = `<div class="card table-wrap"><table class="matrix">
-      <tr><th>case</th>${m.columns.map((c) => `<th class="col">${esc(c.replace(" -> ", " → "))}</th>`).join("")}</tr>
+    return `<section class="compat-detail"><h2>${title}</h2><div class="table-wrap"><table class="matrix">
+      <tr><th>Compatibility check</th>${m.columns.map((c) => `<th class="col">${esc(readablePath(c))}</th>`).join("")}</tr>
       ${body}</table>
-      <p class="legend">Columns: writer → reader app version. ✓ pass, ✗ fail, ⊘ refused, ! error, – skipped, · not tested. Click a mark for its evidence.</p></div>`;
-  }
+      </div><p class="legend">Green ✓ worked. Red ✗ broke. Gray · was not tested for that exact application path. Click a result to inspect the runner evidence.</p></section>`;
+  };
+  const failureCards = failures.slice(0, 6).map((row) => `<button class="compat-failure" data-obs="${esc(row.observation_id)}"><span>What broke</span><strong>${esc(readablePath(row.column))}</strong><small>${esc(readableCheck(row.check_name))} · ${esc(stageTitle({stage_id: row.stage_id}))}</small><b>Open evidence →</b></button>`).join("");
+  const outcome = a.status || run.meta?.verdict || "not recorded";
+  const overview = `<section class="compat-overview"><header><span class="eyebrow">COMPATIBILITY SUMMARY</span><h2>Can old and new application versions coexist during this attempt?</h2><p>These checks exercise writes and reads across both application versions while the migration is in progress.</p></header><div class="compat-summary-grid"><article><span>Attempt outcome</span><strong>${esc(outcome)}</strong><small>The runner’s recorded result for this attempt.</small></article><article class="${failures.length ? "problem" : "success"}"><span>Compatibility checks</span><strong>${failures.length ? `${failures.length} broken` : "No breaks recorded"}</strong><small>${passes} app-level interaction${passes === 1 ? "" : "s"} worked in this attempt.</small></article><article><span>How to read this</span><strong>Old writes → new reads</strong><small>Tests whether data written by one version remains usable by the other.</small></article></div></section>`;
+  const answer = failures.length ? `<section class="compat-answer"><header><span class="eyebrow">WHAT NEEDS ATTENTION</span><h2>The rollout still breaks cross-version behavior</h2><p>Open a failed interaction to see the deterministic runner steps, expected result, and observed failure.</p></header><div class="compat-failure-grid">${failureCards}</div></section>` : `<section class="compat-answer good"><header><span class="eyebrow">WHAT THE RUNNER OBSERVED</span><h2>No app-level compatibility break was recorded for this attempt</h2><p>This applies only to the checks and application paths shown below. Gray cells remain untested, not passed.</p></header></section>`;
   const dbBad = m.db_checks.filter(isBad);
   const dbPass = m.db_checks.filter((d) => kindOf(d) === "PASS").length;
   const dbSkip = m.db_checks.filter((d) => kindOf(d) === "SKIP").length;
@@ -515,7 +527,8 @@ async function pageMatrix(id, s) {
       `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${MARKS[kindOf(d)] || ""} ${esc(d.check_name)} (${val(d.stage_id)})</a>`).join("")}</div>
     <details><summary>Show all</summary><div class="chips" style="margin-top:6px">${m.db_checks.map((d) =>
       `<a class="chip ${esc(kindOf(d))}" href="#/obs/${enc(d.observation_id)}">${esc(d.check_name)}</a>`).join("")}</div></details>` : "";
-  return `${runHeader(run, "matrix")}${attemptPills(run, "matrix", s)}${grid}${db}`;
+  const details = failures.length ? `<details class="compat-all"><summary>Show all compatibility checks (${m.rows.length})</summary>${grid(m.rows, "All recorded compatibility checks")}</details>` : grid(m.rows, "Recorded compatibility checks");
+  return `${runHeader(run, "matrix")}${attemptPills(run, "matrix", s)}${overview}${answer}${failures.length ? grid(failures, "Failed compatibility checks") : ""}${details}${db}`;
 }
 
 async function pageAgents(id) {
@@ -561,7 +574,7 @@ async function pageEvidence(oid) {
   if (!o) return `<p>${unknown("observation not found")}</p>`;
   const s = short(o.attempt_id);
   crumbs([["Runs", "#/"], [o.run_id, `#/run/${enc(o.run_id)}`],
-          ...(s ? [[`Matrix ${s}`, `#/run/${enc(o.run_id)}/matrix/${s}`]] : []), [o.check_name]]);
+          ...(s ? [[`Compatibility checks ${s}`, `#/run/${enc(o.run_id)}/matrix/${s}`]] : []), [o.check_name]]);
   const hist = await api(`/api/history?check=${enc(o.check_name)}`);
   const steps = o.steps.length ? `<div class="table-wrap"><table>
       <tr><th>#</th><th>app</th><th>op</th><th>ok</th><th>value / error</th></tr>
