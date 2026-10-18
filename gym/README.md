@@ -85,7 +85,7 @@ Anything that starts Saleor uses `migration_review/env.py`, which overrides the 
 ## Commands
 
 ```bash
-uv run pytest -q tests/gym                  # 58 tests, no Docker (staged.run mocked)
+uv run pytest -q tests/gym                  # 64 tests, no Docker (staged.run mocked)
 uv run python gym/smoke.py                  # real runner, add-table, scripted accept plan
 uv run python gym/smoke.py --scenario drop-column \
     --plan proposals/scripted/drop-column/safe.json --recommendation staged_rollout
@@ -96,9 +96,32 @@ cd gym/resources_server/migproto_review && <venv>/bin/python -m pytest tests -q
 
 Installing into a NeMo Gym checkout (planned, not done): copy or symlink `gym/resources_server/migproto_review` to `resources_servers/migproto_review`, copy `gym/tasks/migration_review.jsonl` to `resources_servers/migproto_review/data/`, set `migproto_root` in the config, then follow the NeMo Gym docs (`gym env test --resources-server migproto_review`, `gym env start ...`, `gym eval run ...`). The scripted plan in `smoke.py` stands in for a policy; scripted plans are never shown to a policy.
 
+## Evaluating a policy model (`gym/eval_policy.py`)
+
+```bash
+MIGPROTO_LLM_BASE_URL=http://localhost:8000/v1 MIGPROTO_LLM_MODEL=nemotron-3.5-lightning \
+MIGPROTO_LLM_THINKING_BUDGET=4096 uv run python gym/eval_policy.py [--tasks add-table,drop-column]
+uv run python gym/eval_policy.py --dry-run --tasks add-table    # fake local endpoint, no model
+```
+
+One task at a time: it sends the task's `responses_create_params.input` to `<base_url>/chat/completions` with the settings `migproto/agents/llm.py` reads from `MIGPROTO_LLM_*` (read through `LLM` itself: temperature, top_p, `chat_template_kwargs`, `thinking_token_budget`). It then scores the reply with `scoring.verify`. Defaults:
+- `--response-format schema` sends the controller planner's guided-decoding schema for the scenario's builds. The alternatives are `json_object` and `none`.
+- One answer per task, with no correction turn. Transport failures are retried (`--retries 2`) and then recorded as `model_error` with `mask_sample: true`.
+
+It calls the endpoint directly, not through a NeMo Gym agent or model server.
+
+Output in `gym/results/<timestamp>/`:
+- `config.json`: model, endpoint, sampling, thinking budget, serving metadata, nemo-gym version, task file sha256, runner env and git commit. The API key is never written.
+- `results.jsonl`: `task_id`, `reward`, `status`, `mask_sample`, `run_id`, `failed_checks`, `tokens`, `latency_s`, recommendations and runner verdict.
+- `answers/<task_id>.json`: the raw reply and reasoning.
+- `summary.json`.
+
+`--dry-run` answers every task with a fixed direct-deploy plan (`accept_as_is`) from a fake endpoint on 127.0.0.1. Its results go to `<timestamp>-dry-run/`, which is git-ignored. The runner still executes that plan, so each task starts Saleor (ports 8081/8082, Redis DB 8, this checkout's lock, about 50 s). A dry-run reward measures the plumbing, not a model.
+
 ## What was verified (2026-10-17, this machine)
 
-- `uv run pytest -q`: 292 passed, including 58 in `tests/gym`.
+- `uv run pytest -q`: 298 passed, including 64 in `tests/gym` (6 for `eval_policy.py` against a fake endpoint).
+- `uv run python gym/eval_policy.py --dry-run --tasks add-table`: fake endpoint, real runner, reward 1.0, run `20261017-213741-gym-verify`. `eval_policy.py` has not been run against a real model.
 - Server tests (`tests/test_app.py`, 6 passed) with nemo-gym 0.7.0 on Python 3.13.11 (see the version note above): verify forwards the answer and returns runner info, verifier crashes are masked, `POST /verify` and `GET /reverify_mode` through the server's own FastAPI app, and the real `uv run gym/verify_cli.py` bridge on answers that never reach the runner.
 - `uv run python gym/smoke.py` (add-table, scripted accept plan): runner PASS, 18 of 18 checks passed, reward 1.0, run `20261017-212153-gym-verify` (52.0 s).
 - Full path, server `verify()` → `uv run` bridge → real runner (drop-column, scripted unsafe plan with `accept_as_is`): reward 0.0, runner `fail`/`reject`, failed checks `case.deploy_new.old_smoke`, `case.old_write_old_read`, `case.old_create_old_read`, `case.new_create_plain_old_read` (4 of 12 checks failed), run `20261017-212259-gym-verify` (54.4 s). This agrees with the manual label for that plan (FAIL, reject).
