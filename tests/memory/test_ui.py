@@ -151,6 +151,7 @@ def test_first_use_navigation_is_task_oriented():
     html = (ROOT / "migproto" / "ui" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
     assert 'href="#/ask" data-nav="ask"' in html
+    assert 'data-nav="runs" class="primary-nav"' not in html
     assert "Ask evidence" in html and "Browse runs" in html
     assert "Track batches" in html and "Compare approaches" in html
     assert "What do you want to understand?" in js
