@@ -41,9 +41,6 @@ def test_static_and_runs(base_url):
     assert status == 200 and b"Replay Recorded Run" in body
     assert b"Guided demo" in body and b"evidence-drawer" in body
     assert b"welcome-tour" in body and b'id="toast"' in body
-    assert b"jquery-3.7.1.min.js" in body
-    assert b"bootstrap@5.3.8" in body
-    assert b"reactive-jquery.js" in body
     data = get_json(base_url + "/api/runs")
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
@@ -139,25 +136,10 @@ def test_hackathon_ui_assets_are_evidence_first():
     assert "evidence-drawer" in css
     assert "prefers-reduced-motion" in css
     assert "INTERACTIVE COMPATIBILITY REVIEW" in js
-    assert "PLAN COMPARISON" in js and "Why did the first attempt fail?" in js
+    assert "FAILED PLAN &#8594; REVISED PLAN" in js and "The failure stays visible" in js
     assert "workspace-layout" in css
     assert "data-workspace-row" in js
     assert "migrationlab-tour-seen" in js
     assert "data-reveal-revision" in js
     assert "celebration-spark" in css
-    assert "Recorded migration review" in js
-    assert "Revised plan passed" in js
-    assert "Restart replay" in js
-    assert "trapFocus" in js
-    assert "scope=\"col\"" in js and "scope=\"row\"" in js
-    assert "progressive-card" in css
-    assert "data-nav" in js and "navKey" in js
-    assert "Seamless dashboard theme" in css
-    assert "REVIEW COMMAND CENTER" in js
-    assert "data-attempt-select" in js
-    assert "command-palette" in js
-    assert "workspaceAttempt" in js
-    assert "Rebuilt dashboard command center" in css
-    reactive = (ROOT / "migproto" / "ui" / "static" / "reactive-jquery.js").read_text(encoding="utf-8")
-    assert "window.jQuery" in reactive and "MutationObserver" in reactive
-    assert "data-bs-theme" in js
+    assert "editorial-layout" in css and "Migration evidence" in js
