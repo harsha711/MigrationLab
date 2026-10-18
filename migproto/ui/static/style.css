@@ -370,4 +370,12 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 .att-chip.bad { background: var(--fail-bg); color: var(--fail); }
 .att-chip.ok { background: var(--pass-bg); color: var(--pass); }
 .att-chip small { margin-left: 3px; font-weight: 500; opacity: .85; }
+.badge.running { background: var(--none-bg); color: var(--accent); border: 1px solid var(--accent); }
+.badge.running::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; animation: batch-pulse 1.6s ease-in-out infinite; }
+@keyframes batch-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .badge.running::before { animation: none; } }
+.score-head { min-width: 13em; }
+.score-head small { display: block; max-width: 16em; font-weight: 400; font-size: 11px; color: var(--muted); text-transform: none; letter-spacing: 0; white-space: normal; }
+.run-dir-warning { color: var(--warn); max-width: 26em; white-space: normal; }
+.poll-note { font-size: 12px; margin: 4px 0 12px; }
 .infra-section { margin-top: 26px; padding: 4px 16px 16px; border: 1px dashed var(--warn); border-radius: 10px; background: var(--warn-bg); }

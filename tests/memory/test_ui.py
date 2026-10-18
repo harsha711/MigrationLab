@@ -171,3 +171,7 @@ def test_batches_page_assets():
     assert "pageBatches" in js and "pageBatch(" in js
     assert "Infrastructure failures" in js and "not model results" in js
     assert "Langfuse trace" in js and 'rel="noopener noreferrer"' in js
+    assert "scored against manual expected verdicts (never shown to agents)" in js
+    assert "Running now" in js and "BATCH_POLL_MS = 20000" in js
+    # Polling only re-reads: no non-GET request anywhere near the batch pages.
+    assert "method:" not in js[js.index("// ---------- Brev batches"):js.index("async function openEvidence")]

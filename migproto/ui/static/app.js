@@ -10,7 +10,7 @@ const nr = (v) => val(v, "not recorded");
 const enc = encodeURIComponent;
 const short = (attemptId) => attemptId ? attemptId.split("/").pop() : null;
 const fmt = (n) => new Intl.NumberFormat().format(n || 0);
-const state = { replayTimer: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
+const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 1400, workspaceStage: null, tourStep: 0, dashboardRunId: null };
 
 async function api(path) {
   const r = await fetch(path);
@@ -524,16 +524,55 @@ async function pageCompare(a, b) {
 // ---------- Brev batches (supervisor records, read-only) ----------
 
 const BATCH_VERDICTS = ["PASS", "FAIL", "INCOMPLETE", "ERROR"];
+const BATCH_POLL_MS = 20000;
+const SCORE_LABEL = "scored against manual expected verdicts (never shown to agents)";
+const scoreHead = `<th scope="col" class="score-head">matches expected<small>${SCORE_LABEL}</small></th>`;
+
+const duration = (s) => {
+  if (s == null) return unknown("not recorded");
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h} h ${m} min` : m ? `${m} min ${sec} s` : `${sec} s`;
+};
+const clock = (iso) => iso ? esc(iso.replace("T", " ")) : unknown("not recorded");
+
+function scoreCell(r) {
+  if (r.matches_expected == null) return `<span class="muted" title="No manual expected verdict for this scenario, or an infrastructure failure">not scored</span>`;
+  const t = r.expected ? `expected ${r.expected.verdict} with ${r.expected.recommendations.join(" or ")}; runner: ${r.verdict ?? "?"} with ${r.runner_recommendation ?? "?"}` : "";
+  return `<span class="badge ${r.matches_expected ? "pass" : "fail"}" title="${esc(t)}">${r.matches_expected ? "yes" : "no"}</span>`;
+}
 
 function batchCounts(counts) {
   if (!counts.length) return `<p class="muted">No model results in this batch.</p>`;
   const other = (c) => Object.entries(c.other).map(([k, n]) => `${n} ${esc(k)}`).join(", ");
   return `<div class="table-wrap"><table class="batch-counts">
-    <tr><th scope="col">scenario</th><th scope="col">topology</th>${BATCH_VERDICTS.map((v) => `<th scope="col" class="count">${v}</th>`).join("")}<th scope="col">other</th></tr>
+    <tr><th scope="col">scenario</th><th scope="col">topology</th>${BATCH_VERDICTS.map((v) => `<th scope="col" class="count">${v}</th>`).join("")}<th scope="col">other</th>${scoreHead}</tr>
     ${counts.map((c) => `<tr><th scope="row">${val(c.scenario, "not recorded")}</th><td>${val(c.topology, "not recorded")}</td>
-      ${BATCH_VERDICTS.map((v) => `<td class="count ${c[v] ? v.toLowerCase() : "zero"}">${c[v]}</td>`).join("")}<td>${other(c) || ""}</td></tr>`).join("")}
+      ${BATCH_VERDICTS.map((v) => `<td class="count ${c[v] ? v.toLowerCase() : "zero"}">${c[v]}</td>`).join("")}<td>${other(c) || ""}</td>
+      <td class="count">${c.scored ? `${c.matched} of ${c.scored}` : `<span class="muted">not scored</span>`}</td></tr>`).join("")}
   </table></div>`;
 }
+
+function inProgressTable(b) {
+  if (!b.in_progress.length) return "";
+  const running = b.in_progress.filter((r) => r.status === "running");
+  const lost = b.in_progress.filter((r) => r.status !== "running");
+  const rows = (list) => list.map((r) => `<tr>
+    <td>${val(r.n, "?")}</td><td>${val(r.scenario, "not recorded")}</td><td>${val(r.topology, "not recorded")}</td>
+    <td>${val(r.worker, "not recorded")}</td><td>${clock(r.started_at)}</td>
+    <td>${r.status === "running" ? `<span class="badge running">running</span> ${duration(r.elapsed_seconds)}` : `<span class="badge warn">no runs.jsonl row</span>`}</td></tr>`).join("");
+  const table = (list) => `<div class="card table-wrap"><table class="batch-runs">
+    <tr><th>#</th><th>scenario</th><th>topology</th><th>worker</th><th>started (supervisor clock)</th><th>status</th></tr>${rows(list)}</table></div>`;
+  return `${running.length ? `<h2>Running now</h2><p class="muted">Started in supervisor.log, no runs.jsonl row yet. No verdict exists until the run finishes; these are not counted.</p>${table(running)}` : ""}
+    ${lost.length ? `<h2>Started without a result</h2><p class="muted">supervisor.log says these started and the batch logged DONE, but runs.jsonl has no readable row for them.</p>${table(lost)}` : ""}`;
+}
+
+function batchStatusBadge(b) {
+  if (b.status === "running") return `<span class="badge running" title="supervisor.log has no DONE line yet; last line ${esc(b.log_last_line_at || "?")}">running${b.planned_runs ? ` · ${b.run_count} of ${b.planned_runs} recorded` : ""}${b.running_count ? ` · ${b.running_count} in progress` : ""}</span>`;
+  if (b.status === "finished") return `<span class="badge">finished (DONE logged)</span>`;
+  return `<span class="badge">${unknown("no supervisor.log")}</span>`;
+}
+
+const pollNote = (b) => `<p class="muted poll-note">Read at ${clock(b.checked_at)}${b.status === "running" && b.log_last_line_at ? `; last supervisor.log line ${clock(b.log_last_line_at)}` : ""}. Refreshes every ${BATCH_POLL_MS / 1000} s.</p>`;
 
 function attemptChain(attempts) {
   if (!attempts) return unknown("not recorded");
@@ -552,33 +591,47 @@ function recommendationCell(r) {
   return `<span class="rec">agent: ${val(r.recommendation, r.recommendation_recorded ? "none" : "not recorded")}</span><span class="rec">runner: ${val(r.runner_recommendation, "not recorded")}</span>${agrees}`;
 }
 
+function runDirWarning(r) {
+  const parts = [];
+  if (r.summary_conflict?.length) parts.push(`summary.json disagrees with runs.jsonl on ${r.summary_conflict.join(", ")}: it was written by another run, so only the runs.jsonl row is shown`);
+  if (r.shared_with?.length) parts.push(`run directory also named by ${r.shared_with.map((o) => `${o.batch_id} run ${o.n ?? "?"}`).join(", ")} (same-second run ID); its files may mix both runs`);
+  return parts.length ? `<small class="cell-sub run-dir-warning" title="${esc(parts.join(". "))}">&#9888; ${esc(parts.join(". "))}. Not scored.</small>` : "";
+}
+
 function batchRunRows(runs) {
-  return runs.map((r) => `<tr>
+  return runs.map((r) => {
+    const suspect = r.summary_conflict?.length || r.shared_with?.length;
+    return `<tr>
     <td>${val(r.n, "?")}</td>
-    <td>${r.run_id ? `<code>${esc(r.run_id)}</code>` : unknown("no run directory")}${r.has_summary ? "" : `<small class="cell-sub">no summary.json</small>`}</td>
+    <td>${r.run_id ? `<code>${esc(r.run_id)}</code>` : unknown("no run directory")}${r.has_summary || r.summary_conflict?.length ? "" : `<small class="cell-sub">no summary.json</small>`}${runDirWarning(r)}</td>
     <td>${val(r.scenario, "not recorded")}</td><td>${val(r.topology, "not recorded")}</td>
     <td>${verdictBadge(r.verdict)}${r.stopped ? `<small class="cell-sub" title="${esc(r.stopped)}">${esc(String(r.stopped).slice(0, 60))}</small>` : ""}</td>
     <td>${recommendationCell(r)}</td>
     <td class="attempts">${attemptChain(r.attempts)}</td>
+    <td>${scoreCell(r)}</td>
     <td class="num">${r.total_tokens == null ? nr(null) : fmt(r.total_tokens)}</td>
     <td class="num">${nr(r.model_calls)}</td>
     <td class="num">${r.wall_seconds == null ? nr(null) : Number(r.wall_seconds).toFixed(0)}</td>
-    <td class="links">${r.in_store ? `<a href="#/run/${enc(r.run_id)}">Replay</a>` : `<span class="muted" title="Run is not in the evidence store">not ingested</span>`}
-      ${r.trace_url ? `<a href="${esc(r.trace_url)}" target="_blank" rel="noopener noreferrer" title="Langfuse trace (viewer only; summary.json and events.jsonl are the evidence)">Trace &#8599;</a>` : `<span class="muted">no trace</span>`}</td>
-  </tr>`).join("");
+    <td class="links">${suspect ? `<span class="muted" title="The run directory holds another run's files">no link (shared directory)</span>`
+      : `${r.in_store ? `<a href="#/run/${enc(r.run_id)}">Replay</a>` : `<span class="muted" title="Run is not in the evidence store">not ingested</span>`}
+      ${r.trace_url ? `<a href="${esc(r.trace_url)}" target="_blank" rel="noopener noreferrer" title="Langfuse trace (viewer only; summary.json and events.jsonl are the evidence)">Trace &#8599;</a>` : `<span class="muted">no trace</span>`}`}</td>
+  </tr>`;
+  }).join("");
 }
 
 function batchRunsTable(runs) {
   return `<div class="card table-wrap"><table class="batch-runs">
-    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th><th>tokens</th><th>calls</th><th>wall (s)</th><th>links</th></tr>
+    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th>${scoreHead}<th>tokens</th><th>calls</th><th>wall (s)</th><th>links</th></tr>
     ${batchRunRows(runs)}</table></div>`;
 }
 
 const BATCH_LEGEND = `<p class="legend">Failed checks per attempt, a1 → last: the number counts failed assertions; refusals (⊘) and execution errors (!) are counted separately. Every attempt stays visible, including failed ones. Hover a chip for full outcome counts.</p>`;
 
 function batchBadges(b) {
-  return `${b.models.map((m) => `<span class="badge">model: ${esc(m)}</span>`).join(" ") || `<span class="badge">${unknown("model not recorded")}</span>`}
+  const s = b.scenario_score;
+  return `${batchStatusBadge(b)} ${b.models.map((m) => `<span class="badge">model: ${esc(m)}</span>`).join(" ") || `<span class="badge">${unknown("model not recorded")}</span>`}
     <span class="badge">${b.model_result_count} model result${b.model_result_count === 1 ? "" : "s"}</span>
+    ${s.scored ? `<span class="badge" title="${SCORE_LABEL}">matches expected: ${s.matched} of ${s.scored} scored</span>` : ""}
     ${b.infrastructure_failures.length ? `<span class="badge warn">${b.infrastructure_failures.length} infrastructure failure${b.infrastructure_failures.length === 1 ? "" : "s"}, not counted</span>` : ""}
     ${b.stop_file ? `<span class="badge">STOP set</span>` : ""}
     ${b.unreadable_lines ? `<span class="badge warn">${b.unreadable_lines} unreadable runs.jsonl line(s)</span>` : ""}`;
@@ -589,15 +642,16 @@ const configNote = (b) => b.config_note ? `<pre class="batch-note">${esc(b.confi
 async function pageBatches() {
   crumbs([["Runs", "#/"], ["Batches"]]);
   const { batches } = await api("/api/batches");
-  const withRuns = batches.filter((b) => b.has_runs_jsonl);
-  const empty = batches.filter((b) => !b.has_runs_jsonl);
+  const withRuns = batches.filter((b) => b.has_runs_jsonl || b.in_progress.length);
+  const empty = batches.filter((b) => !b.has_runs_jsonl && !b.in_progress.length);
   const cards = withRuns.map((b) => `<section class="card batch-card">
     <div class="row spread"><h2><a href="#/batches/${enc(b.batch_id)}">${esc(b.batch_id)}</a></h2><a class="button ghost" href="#/batches/${enc(b.batch_id)}">Open batch &#8594;</a></div>
     <div class="row">${batchBadges(b)}</div>
     ${configNote(b)}
     ${batchCounts(b.counts)}
   </section>`).join("");
-  return `<header class="editorial-head"><div><h1>Brev batches</h1><p>Supervisor records from <code>runs/brev-batch-*</code>, newest first. Counts are per scenario and topology. Runs named in a batch's INFRA-NOTE are infrastructure failures and are never counted as model results. A pass applies only to the conditions that batch tested.</p></div></header>
+  return `<header class="editorial-head"><div><h1>Brev batches</h1><p>Supervisor records from <code>runs/brev-batch-*</code>, newest first. Counts are per scenario and topology. Runs named in a batch's INFRA-NOTE are infrastructure failures and are never counted as model results. A pass applies only to the conditions that batch tested. A batch is finished only when its supervisor.log has a DONE line.</p></div></header>
+    ${batches.length ? pollNote(batches[0]) : ""}
     ${cards || `<p class="muted">No batch with runs.jsonl under runs/.</p>`}
     ${empty.length ? `<details class="card"><summary>${empty.length} batch director${empty.length === 1 ? "y" : "ies"} without runs.jsonl (no review completed)</summary><ul>${empty.map((b) => `<li><code>${esc(b.batch_id)}</code>${b.config_note ? `: ${esc(b.config_note)}` : ""}</li>`).join("")}</ul></details>` : ""}`;
 }
@@ -607,10 +661,11 @@ async function pageBatch(id) {
   const b = await api(`/api/batch?id=${enc(id)}`);
   const modelRuns = b.runs.filter((r) => !r.infrastructure_failure);
   return `<div class="row"><h1>${esc(b.batch_id)}</h1></div>
-    <div class="row">${batchBadges(b)}</div>
+    <div class="row">${batchBadges(b)}</div>${pollNote(b)}
     <h2>Configuration</h2>${configNote(b)}
     <h2>Model results by scenario and topology</h2>${batchCounts(b.counts)}
-    <h2>Runs</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}
+    ${inProgressTable(b)}
+    <h2>Finished runs</h2>${modelRuns.length ? batchRunsTable(modelRuns) + BATCH_LEGEND : `<p class="muted">No model-result runs.</p>`}
     ${b.infrastructure_failures.length ? `<section class="infra-section"><h2>Infrastructure failures</h2>
       <p class="muted">Listed in INFRA-NOTE. These are not model results and are excluded from the counts above.</p>
       <pre class="batch-note">${esc(b.infra_note)}</pre>${batchRunsTable(b.infrastructure_failures)}</section>`
@@ -696,9 +751,38 @@ function rerenderReplay(delta = 0, exact = null) {
 
 // ---------- router ----------
 
+const routeParts = () => location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+const batchPage = (parts) => parts[0] === "batches" && parts.length <= 2
+  ? (parts.length === 1 ? pageBatches : () => pageBatch(parts[1])) : null;
+
+// Batches pages re-read the supervisor files every BATCH_POLL_MS (GET only), keeping scroll
+// position and open <details>.
+function scheduleBatchPoll() {
+  clearTimeout(state.batchPoll);
+  if (!batchPage(routeParts())) return;
+  state.batchPoll = setTimeout(async () => {
+    const hash = location.hash;
+    const page = batchPage(routeParts());
+    if (!page) return;
+    if (document.hidden) { scheduleBatchPoll(); return; }
+    try {
+      const html = await page();
+      if (location.hash !== hash) return;
+      const view = $("#view");
+      const open = [...view.querySelectorAll("details")].map((d) => d.open);
+      const y = window.scrollY;
+      view.innerHTML = html;
+      view.querySelectorAll("details").forEach((d, i) => { if (open[i]) d.open = true; });
+      window.scrollTo(0, y);
+    } catch (err) { /* keep the last rendering; the next poll retries */ }
+    scheduleBatchPoll();
+  }, BATCH_POLL_MS);
+}
+
 async function route() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  const parts = routeParts();
   const view = $("#view");
+  clearTimeout(state.batchPoll);
   try {
     let html;
     if (!parts.length) html = await pageRuns();
@@ -718,6 +802,7 @@ async function route() {
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     window.scrollTo(0, 0);
+    scheduleBatchPoll();
     if (parts[0] === "workspace" && !localStorage.getItem("migrationlab-tour-seen")) requestAnimationFrame(openTour);
   } catch (err) {
     view.innerHTML = `<div class="card">Failed to load: ${esc(err.message)}</div>`;
