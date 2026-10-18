@@ -7,7 +7,8 @@ from . import db
 
 STAGE_KINDS = {"sql", "deploy_new", "retire_old", "rollback_check"}
 SQL_PHASES = {"expand", "backfill", "contract"}
-PLAN_KEYS = {"plan_id", "summary", "write_consistency", "stages", "provenance", "revision_notes"}
+PLAN_KEYS = {"plan_id", "summary", "write_consistency", "stages", "provenance", "revision_notes",
+             "addressed_feedback"}
 STAGE_KEYS = {"id", "kind", "phase", "description", "sql", "repeat_until_zero_rows", "migration",
               "variant"}
 DEPLOY_MIGRATIONS = {"state_only", "apply"}
@@ -36,6 +37,16 @@ def validate_plan(plan: dict) -> dict:
     for key in ("plan_id", "stages"):
         if key not in plan:
             raise PlanError(f"missing plan key {key!r}")
+    addressed = plan.get("addressed_feedback")
+    if addressed is not None:
+        if not isinstance(addressed, list):
+            raise PlanError("addressed_feedback must be a list")
+        for item in addressed:
+            if (not isinstance(item, dict) or set(item) != {"index", "action", "reason"}
+                    or not isinstance(item["index"], int) or item["index"] < 0
+                    or item["action"] not in {"adopted", "adapted", "declined"}
+                    or not isinstance(item["reason"], str)):
+                raise PlanError("addressed_feedback items need index, action and reason")
     stages = plan["stages"]
     if not isinstance(stages, list) or not 1 <= len(stages) <= MAX_STAGES:
         raise PlanError(f"stages must be a list of 1..{MAX_STAGES}")

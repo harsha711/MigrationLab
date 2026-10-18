@@ -158,6 +158,15 @@ def plan_schema(variants: tuple[str, ...] | None = None) -> dict:
                 "summary": {"type": "string"},
                 "write_consistency": {"type": "string"},
                 "revision_notes": {"type": "string"},
+                "addressed_feedback": {
+                    "type": "array",
+                    "items": {"type": "object", "properties": {
+                        "index": {"type": "integer", "minimum": 0},
+                        "action": {"enum": ["adopted", "adapted", "declined"]},
+                        "reason": {"type": "string"},
+                    }, "required": ["index", "action", "reason"],
+                     "additionalProperties": False},
+                },
                 "stages": {
                     "type": "array",
                     "items": {"anyOf": [
@@ -325,6 +334,7 @@ def investigate(source: str, llm: LLM | None, hits: list[dict], transcript: list
 
 def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
          feedback: dict | None = None, previous: dict | None = None,
+         human_feedback: list[dict] | None = None,
          scenario: str = SCENARIO, history: list | None = None,
          system: str = PLANNER_SYSTEM, contract: str = PLAN_CONTRACT,
          validator=plans.validate_plan, schema: dict = PLAN_SCHEMA,
@@ -362,6 +372,12 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
             f"Previous plan:\n{json.dumps(previous, indent=1)}\n\n"
             f"Execution feedback:\n{json.dumps(feedback, indent=1, ensure_ascii=False)[:EVIDENCE_CHARS]}\n"
         )
+        if human_feedback:
+            user += (
+                "\nReviewer feedback (human, unverified; the runner will check any change you make):\n"
+                f"{json.dumps(human_feedback, indent=1, ensure_ascii=False)}\n"
+                "Record how you handled each item in addressed_feedback.\n"
+            )
     else:
         user += "Propose the plan."
     return _llm_call(llm, system, user, transcript, validator=validator,
@@ -371,7 +387,8 @@ def plan(source: str, llm: LLM | None, investigation: dict, transcript: list,
 def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list,
                   scenario: str = SCENARIO, history: list | None = None,
                   system: str = TESTER_SYSTEM, contract: str = PLAN_CONTRACT,
-                  cases: dict | None = None, notes: str = "") -> dict:
+                  cases: dict | None = None, notes: str = "",
+                  human_tests: list[dict] | None = None) -> dict:
     if source == "scripted":
         return json.loads((PROPOSALS / "scripted" / "tester.json").read_text())
     # The cases the runner runs for this scenario (rename-note: the original 8).
@@ -386,7 +403,11 @@ def propose_tests(source: str, llm: LLM | None, plan_obj: dict, transcript: list
         "\"user\": \"label\", \"value\": \"string (write/create only)\"}. Labels map to fresh "
         "existing customers, or to the customer created by a `create` step with that label. "
         "Reads are compared by the runner against the last value written to that label.\n"
-        + (f"{notes}\n" if notes else "") +
+        + (f"{notes}\n" if notes else "")
+        + ("Reviewer-requested extra test proposals (human, unverified). Consider these in "
+           "your additional cases; they do not replace the mandatory catalogue:\n"
+           f"{json.dumps(human_tests, indent=1, ensure_ascii=False)}\n"
+           if human_tests else "") +
         f"At most {plans.MAX_CASES} cases with at most {plans.MAX_STEPS} steps each.\n"
         'Reply as {"rationale": "...", "checks": ["catalogue ids to emphasize"], '
         '"custom_cases": [{"id": "snake_case", "description": "...", "steps": [...]}]}'

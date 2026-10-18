@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from migproto.agents.budget import BudgetExceeded, ReviewBudget
@@ -60,8 +62,50 @@ def test_request_may_not_contradict_its_scenario():
         load_review_request(None, "llm", scenario="no-such-scenario")
 
 
+def test_human_feedback_is_marked_as_human_assisted():
+    raw = {"scenario": "rename-note", "change": {"description": "x"},
+           "human_feedback": [{"kind": "issue", "text": "keep old readers",
+                               "author": "reviewer", "at": "2026-10-18T00:00:00Z"}]}
+    assert load_review_request(raw, "llm")["source_tags"] == ["human-assisted"]
+    raw["human_feedback"][0]["at"] = "tomorrow"
+    with pytest.raises(ValueError, match="ISO timestamp"):
+        load_review_request(raw, "llm")
+
+
 def test_rename_scenario_text_is_unchanged():
     from migproto.agents.request import scenario_text
     text = scenario_text(load_review_request(None, "llm"))
     assert "Table: account_user; old column: note; new column: customer_note.\n" in text
     assert "Application versions: old=old, new=new-staged.\n" in text
+
+
+def test_human_feedback_is_logged_without_colliding_with_the_event_kind(tmp_path):
+    from migproto.agents import loop
+    from migproto.runlog import RunLog
+
+    log = RunLog("test", root=tmp_path)
+    item = {"kind": "issue", "text": "batch the backfill", "author": "reviewer",
+            "at": "2026-10-18T00:00:00Z"}
+    loop._log_human_feedback(log, {"human_feedback": [item]})
+    events = [json.loads(line) for line in (log.dir / "events.jsonl").read_text().splitlines()]
+    fb = [e for e in events if e["kind"] == "human_feedback"]
+    assert fb and fb[0]["feedback_kind"] == "issue" and fb[0]["provenance"] == "human"
+
+
+def test_continue_from_loads_the_selected_plan_and_runner_outcome(tmp_path):
+    from migproto.agents import loop
+    from migproto.runlog import RunLog
+
+    parent = tmp_path / "20261018-010101-agent-loop-llm"
+    parent.mkdir()
+    (parent / "summary.json").write_text(json.dumps({"attempts": [{
+        "attempt": 2, "plan_id": "a2-parent", "ok": False, "halted": "contract skipped",
+        "failed_checks": ["case.old_write_new_read"],
+    }]}))
+    (parent / "plan-a2-parent.json").write_text(json.dumps({"plan_id": "a2-parent"}))
+    log = RunLog("child", root=tmp_path)
+    plan, feedback = loop._continuation_base(log, {"continue_from": {
+        "run_id": parent.name, "attempt": 2,
+    }})
+    assert plan["plan_id"] == "a2-parent"
+    assert feedback["failed_checks"] == [{"name": "case.old_write_new_read"}]

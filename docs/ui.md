@@ -3,6 +3,8 @@
 The UI is a small local web app for looking at recorded migration runs. It lets you replay
 past runs and look through their evidence, and it can start a new review.
 
+The visual layout draws on CodePen examples for a [compact dashboard sidebar and card rhythm](https://codepen.io/Ahmod-Musa/pen/zxvOaBY) and a [responsive light and dark dashboard](https://codepen.io/whosajid/pen/dPPLddZ). The repository uses its own CSS and evidence-specific components; no example code or assets were copied.
+
 ## Start it
 
 ```bash
@@ -15,6 +17,25 @@ uv run migproto ui --port 8766 --db /tmp/scratch.sqlite
   scratch file if you don't want to touch the shared one.
 
 No Docker, Postgres or model is needed to look at recorded runs.
+
+## Ask evidence
+
+Open **Ask evidence** from the first sidebar item (`#/ask`). This is the recommended starting
+point for someone who does not yet know a run ID or the evidence schema. It presents one plain-
+language question box and a library of editable example questions. It reads only the evidence
+store and batch records under the configured runs root. Questions may name a run, batch,
+scenario, check, observation, or topology; without an ID, retrieval uses the latest batch.
+
+When both `MIGPROTO_LLM_BASE_URL` and `MIGPROTO_LLM_MODEL` are set, one budgeted request
+(plus one retry) asks the shared model to phrase an answer from a compact facts block. With no
+endpoint, an unavailable endpoint, or any invalid model response, the panel returns a
+deterministic facts-only summary. Every response identifies its mode, exposes the facts used,
+and links cited run and observation IDs. The UI never holds the evidence-store lock during a
+model call and never writes the store or run directories.
+
+Chat answers are claims grounded in recorded facts, not evidence or new runner verdicts, and
+can still be wrong. Missing facts are reported as not recorded. A successful check covers only
+the recorded conditions; the chat cannot establish zero downtime or concurrency safety.
 
 ## Where the data comes from
 
@@ -34,7 +55,9 @@ Every page is read-only unless it says otherwise.
 
 | Page | Address | What it shows |
 |---|---|---|
-| Migration evidence | `#/` | Home page: a summary of one selected run and a table of all runs. Tick two runs to compare them. |
+| Ask evidence | `#/ask` | Recommended starting point: ask a plain-language question and follow its supporting run links. |
+| Migration activities | `#/activities` | Scenario-first overview of recorded migration changes, with model/topology outcomes and resource use kept scoped to each activity. |
+| Browse runs | `#/` | A summary of one selected run and a table of all runs. Tick two runs to compare them. |
 | Run overview | `#/run/<run>` | The requested change and every attempt, failed ones included. |
 | Plan | `#/run/<run>/plan/<attempt>` | The plan's stages and SQL, and which stages actually ran. |
 | Matrix | `#/run/<run>/matrix/<attempt>` | Old app vs new app: which reads and writes worked across versions, stage by stage. |
@@ -45,6 +68,7 @@ Every page is read-only unless it says otherwise.
 | Data checks | `#/workspace/<run>` | Guided view of one run: stages, compatibility table, agent handoffs, failed plan next to revised plan. |
 | Guided demo | `#/demo/<run>` | Step-by-step replay of a recorded run. |
 | Batches | `#/batches` | Brev test batches, explained below. |
+| Roles vs single | `#/topologies` | Rename-only, within-configuration observations for the two agent topologies. |
 | Run Review | `#/review` | Starts a new review. This is the only page that runs anything. |
 
 ## Batches
