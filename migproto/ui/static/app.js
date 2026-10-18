@@ -901,6 +901,7 @@ async function route() {
   const activeNav = !parts.length ? "runs"
     : parts[0] === "ask" ? "ask"
     : parts[0] === "batches" ? "batches"
+    : parts[0] === "topologies" ? "topologies"
     : parts[0] === "compare" ? "compare"
     : parts[0] === "demo" ? "demo"
     : parts[0] === "run" && parts.length === 2 ? "overview" : "runs";

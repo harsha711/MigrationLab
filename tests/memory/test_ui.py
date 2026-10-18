@@ -155,6 +155,7 @@ def test_first_use_navigation_is_task_oriented():
     assert "Track batches" in html and "Compare approaches" in html
     assert "What do you want to understand?" in js
     assert "How to read these answers" in js
+    assert 'parts[0] === "topologies" ? "topologies"' in js
 
 
 def test_run_library_does_not_hydrate_every_run():
