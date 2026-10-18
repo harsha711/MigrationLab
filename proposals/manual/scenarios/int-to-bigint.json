@@ -1,0 +1,17 @@
+{
+  "scenario": "int-to-bigint",
+  "provenance": "manual",
+  "note": "Expected runner verdicts, written before the runs. Never shown to evaluated agents. Large-table scenario: run on MIGPROTO_SEED_DB=migproto_seed_scale; budget 500 ms per load write.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "ALTER COLUMN TYPE bigint rewrites the table under ACCESS EXCLUSIVE, blocking reads and writes for the rewrite."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "No table rewrite under ACCESS EXCLUSIVE; every exclusive step is metadata-only."
+    }
+  }
+}

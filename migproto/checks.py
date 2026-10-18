@@ -101,6 +101,14 @@ class Context:
     new_app_note_ops: bool = True   # False when the new app has no `note` field (scenario A3)
     baseline: dict = field(default_factory=dict)  # column -> {id: value} at S0 (`unchanged`)
     events_min: dict = field(default_factory=dict)  # "staff" -> CustomerEvents this run caused
+    load_targets: dict = field(default_factory=dict)  # pk -> note, rewritten unchanged by load
+    long_tx_done: bool = False
+
+    def reserve_load_targets(self, n: int = 40) -> None:
+        """Seeded users only the load generator touches (cases never pick them)."""
+        for _ in range(min(n, max(0, len(self._free_seed) - 40))):
+            pk = self._free_seed.pop(0)
+            self.load_targets[pk] = self.expected.get(pk)
 
     @classmethod
     def create(cls, log: RunLog, dbname: str, servers: dict[str, AppServer],

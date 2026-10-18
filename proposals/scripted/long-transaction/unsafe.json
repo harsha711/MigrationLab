@@ -1,0 +1,36 @@
+{
+  "plan_id": "c4-unsafe",
+  "summary": "Add the column with no lock timeout.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Waits for the lock as long as it takes.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN nickname varchar(256)"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-noop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Metadata-only.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN nickname DROP DEFAULT"
+      ]
+    }
+  ]
+}

@@ -19,22 +19,52 @@ PYTEST_SUBSET = [
 PYTEST_VERSIONS = ["old", "new-unsafe"]
 
 
-def seed_ready(source: str = "synthetic", expected: int = SEED_CUSTOMERS) -> bool:
-    """The template holds exactly the requested seed: right source and customer count."""
+SCALE_PREFIX = "scale-"
+
+
+def seed_ready(source: str = "synthetic", expected: int = SEED_CUSTOMERS, scale: int = 0) -> bool:
+    """The template holds exactly the requested seed: source, customer count and scale rows."""
     if not db.exists(SEED_DB):
         return False
     try:
-        total, from_olist = db.query(
+        total, from_olist, scaled = db.query(
             SEED_DB,
-            "SELECT count(*), count(*) FILTER (WHERE email LIKE %s) FROM account_user "
-            "WHERE email LIKE %s",
-            (f"{olist.EMAIL_PREFIX}%", f"%@{SEED_EMAIL_DOMAIN}"),
+            "SELECT count(*), count(*) FILTER (WHERE email LIKE %s), "
+            "count(*) FILTER (WHERE email LIKE %s) FROM account_user WHERE email LIKE %s",
+            (f"{olist.EMAIL_PREFIX}%", f"{SCALE_PREFIX}%", f"%@{SEED_EMAIL_DOMAIN}"),
         )[0]
     except Exception:
         return False
+    if scaled != scale:
+        return False
+    total -= scaled
     if source == "olist":
         return total == from_olist == expected
     return total == expected and from_olist == 0
+
+
+# Bulk rows for the large-table scenarios (C1-C6): one INSERT ... SELECT, copying last names and
+# notes cyclically from the Olist customers, so the extra rows carry real review text.
+SCALE_SQL = [
+    "CREATE TEMP TABLE scale_src AS SELECT row_number() OVER (ORDER BY id) AS rn, last_name, note "
+    "FROM account_user WHERE email LIKE 'olist-%%'",
+    "INSERT INTO account_user (is_superuser, email, is_staff, is_active, password, date_joined, "
+    "first_name, last_name, jwt_token_key, language_code, search_document, updated_at, uuid, note, "
+    "private_metadata, metadata, is_confirmed, number_of_orders) "
+    "SELECT false, 'scale-' || g || '@" + SEED_EMAIL_DOMAIN + "', false, true, '!', now(), 'Scale', "
+    "s.last_name, md5(g::text), 'en', '', now(), gen_random_uuid(), s.note, '{}', '{}', true, 0 "
+    "FROM generate_series(1, %(n)s) AS g "
+    "JOIN scale_src s ON s.rn = ((g - 1) %% (SELECT count(*) FROM scale_src)) + 1",
+    "ANALYZE account_user",
+]
+
+
+def add_scale_rows(log: RunLog, n: int) -> None:
+    t0 = time.monotonic()
+    with db.connect(SEED_DB) as conn:
+        for statement in SCALE_SQL:
+            conn.execute(statement, {"n": n} if "%(n)s" in statement else None)
+    log.event("seed_step", name="scale_rows", rows=n, seconds=round(time.monotonic() - t0, 1))
 
 
 def prepare_seed(source: str, olist_dir=None, limit: int | None = None) -> tuple[str, dict]:
@@ -51,7 +81,8 @@ def prepare_seed(source: str, olist_dir=None, limit: int | None = None) -> tuple
             {"source": "synthetic", "customers": SEED_CUSTOMERS})
 
 
-def build_seed(log: RunLog, script: str | None = None, provenance: dict | None = None) -> None:
+def build_seed(log: RunLog, script: str | None = None, provenance: dict | None = None,
+               scale: int = 0) -> None:
     log.set_step("seed")
     if script is None:
         script, provenance = prepare_seed("synthetic")
@@ -70,8 +101,11 @@ def build_seed(log: RunLog, script: str | None = None, provenance: dict | None =
                   seconds=round(time.monotonic() - t0, 1))
         if proc.returncode:
             raise RuntimeError(f"BLOCKER: seed step {name} failed, see {log.dir}/seed/{name}.log")
+    if scale:
+        add_scale_rows(log, scale)
     counts = db.query(SEED_DB, "SELECT count(*), count(note) FROM account_user")[0]
-    log.event("seed_ready", users=counts[0], users_with_note=counts[1])
+    log.event("seed_ready", users=counts[0], users_with_note=counts[1], template=SEED_DB,
+              scale_rows=scale)
 
 
 def smoke_old(log: RunLog) -> bool:
@@ -137,10 +171,12 @@ def run_pytest(log: RunLog, version: str) -> bool:
 
 
 def run(log: RunLog, rebuild_seed: bool = False, skip_pytest: bool = False,
-        seed_source: str = "synthetic", olist_dir=None, seed_limit: int | None = None) -> dict:
+        seed_source: str = "synthetic", olist_dir=None, seed_limit: int | None = None,
+        seed_scale: int = 0) -> dict:
     script, provenance = prepare_seed(seed_source, olist_dir, seed_limit)
-    if rebuild_seed or not seed_ready(seed_source, provenance["customers"]):
-        build_seed(log, script, provenance)
+    provenance = {**provenance, "scale_rows": seed_scale, "template": SEED_DB}
+    if rebuild_seed or not seed_ready(seed_source, provenance["customers"], seed_scale):
+        build_seed(log, script, provenance, scale=seed_scale)
     else:
         log.event("seed_reused", name=SEED_DB, **provenance)
     ok = smoke_old(log)

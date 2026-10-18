@@ -7,7 +7,9 @@ default, `rename-note`, keeps the original rename-specific checks unchanged.
 
 import time
 
-from . import checks, db, plans, scenarios, scope
+import psycopg
+
+from . import checks, db, load, plans, scenarios, scope
 from .config import PORTS, SEED_DB
 from .runlog import MANUAL, SCOPE_KEYS, RunLog
 from .saleor_app import AppServer, manage, port_open
@@ -15,30 +17,84 @@ from .saleor_app import AppServer, manage, port_open
 FAILED_OUTCOMES = ("fail", "refused", "error")
 
 
+LOCK_RETRY_DELAY_S = 0.25
+
+
+def _run_once(dbname: str, statements: list[str], retries: int) -> tuple[list, int]:
+    """run_guarded, retried on lock timeouts (`SET lock_timeout` plans). Returns (results, retries used)."""
+    for attempt in range(retries + 1):
+        try:
+            return db.run_guarded(dbname, statements), attempt
+        except psycopg.errors.LockNotAvailable:
+            if attempt == retries:
+                raise
+            time.sleep(LOCK_RETRY_DELAY_S)
+    raise AssertionError("unreachable")
+
+
 def _exec_sql_stage(log: RunLog, dbname: str, stage: dict, prov: str) -> tuple[bool, list]:
     statements = stage["sql"]
-    results = []
+    retries = stage.get("retry_on_lock_timeout", 0)
+    pause_s = stage.get("pause_ms", 0) / 1000
+    results, lock_retries = [], 0
     try:
         if stage.get("repeat_until_zero_rows"):
             for i in range(10_000):
-                batch = db.run_guarded(dbname, statements)
+                batch, used = _run_once(dbname, statements, retries)
+                lock_retries += used
                 results.append({"iteration": i, "rowcounts": [r["rowcount"] for r in batch]})
                 if all(r["rowcount"] == 0 for r in batch):
                     break
+                if pause_s:
+                    time.sleep(pause_s)
             else:
                 raise RuntimeError("backfill did not converge in 10000 iterations")
         else:
-            results = db.run_guarded(dbname, statements)
+            results, lock_retries = _run_once(dbname, statements, retries)
     except Exception as exc:
         log.check(f"stage.{stage['id']}.executes", False, provenance=prov, error=str(exc),
                   app_version="database", check_type="execution",
                   expected={"error": None}, observed={"error": str(exc)})
         return False, results
     batches = len(results) if stage.get("repeat_until_zero_rows") else None
+    extra = {"lock_retries": lock_retries} if retries else {}
     log.check(f"stage.{stage['id']}.executes", True, provenance=prov, batches=batches,
               app_version="database", check_type="execution",
-              expected={"error": None}, observed={"error": None, "batches": batches})
+              expected={"error": None}, observed={"error": None, "batches": batches, **extra},
+              **extra)
     return True, results
+
+
+def _start_measure(sc, ctx, dbname, servers, sid, st):
+    """Load + lock observation for one stage of a large-table scenario (C1-C6)."""
+    if not sc.load:
+        return None
+    target_role = "old" if servers["old"].alive() else "new"
+    gen = load.LoadGenerator(servers[target_role], ctx.load_targets).start()
+    mon = load.LockMonitor(dbname).start()
+    holder = None
+    if sc.long_transaction and st is not None and st.get("kind") == "sql" \
+            and st.get("phase") == sc.long_transaction[0] and not ctx.long_tx_done:
+        holder = load.LongTransaction(dbname, sc.long_transaction[1]).start()
+        ctx.long_tx_done = True
+    return {"sid": sid, "role": target_role, "gen": gen, "mon": mon, "holder": holder}
+
+
+def _finish_measure(log, sc, m) -> None:
+    if not m:
+        return
+    stats = m["gen"].stop()
+    if m["holder"]:
+        m["holder"].join()
+    stats.update(m["mon"].stop())
+    if m["holder"]:
+        stats["long_transaction_s"] = sc.long_transaction[1]
+    ok = bool(stats["writes"]) and stats["errors"] == 0 and stats["max_ms"] <= sc.lock_budget_ms
+    log.check(f"{m['sid']}.write_latency", ok, app_version=m["role"], load=stats,
+              expected={"max_ms_at_most": sc.lock_budget_ms, "errors": 0},
+              observed={"max_ms": stats["max_ms"], "p95_ms": stats["p95_ms"],
+                        "errors": stats["errors"], "writes": stats["writes"],
+                        "max_lock_wait_ms": stats["max_lock_wait_ms"]})
 
 
 def _fails(log: RunLog, start: int) -> int:
@@ -171,7 +227,9 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 "recommendation": "reject"}
     new_version = variant.version
     log.event("scenario", provenance=MANUAL, scenario=sc.id, title=sc.title,
-              deploy_migration=migration, new_version=new_version, old_version=sc.old_version)
+              deploy_migration=migration, new_version=new_version, old_version=sc.old_version,
+              template=SEED_DB, load=sc.load,
+              lock_budget_ms=sc.lock_budget_ms if sc.load else None)
     log.check("plan.schema_valid", True, provenance=provenance, plan_id=plan["plan_id"],
               check_type="safety_gate", expected={"valid": True}, observed={"valid": True})
     log.write_json(f"plan-{plan['plan_id']}.json", plan)
@@ -209,13 +267,23 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
             checks.snapshot_columns(ctx, sc.unchanged)
             checks.app_smoke(ctx, "old", "S0")
             checks.preservation(ctx, "note", "S0")
+            if sc.load:
+                # Baseline: the same write load before any migration step.
+                ctx.reserve_load_targets()
+                baseline_m = _start_measure(sc, ctx, dbname, servers, "S0", None)
+                time.sleep(3)
+                _finish_measure(log, sc, baseline_m)
 
+        measure = None
         for st in plan["stages"] if not halted else []:
             sid, kind = st["id"], st["kind"]
             t0 = time.monotonic()
+            _finish_measure(log, sc, measure)
+            measure = None
             log.set_step(sid)
             log.event("stage", provenance=provenance, stage=sid, stage_kind=kind,
                       phase=st.get("phase"), description=st.get("description"))
+            measure = _start_measure(sc, ctx, dbname, servers, sid, st)
             failures_before = _fails(log, start)
 
             if kind == "sql" and st["phase"] == "contract":
@@ -335,6 +403,8 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                 checks.app_smoke(ctx, "new", sid)
 
             elif kind == "retire_old":
+                _finish_measure(log, sc, measure)   # stop old-app load before stopping the old app
+                measure = None
                 old.stop()
                 time.sleep(0.5)
                 closed = not port_open(PORTS["old"])
@@ -350,6 +420,8 @@ def run(log: RunLog, plan: dict, tests: dict | None, provenance: str = "scripted
                               "failed_checks": failed_here,
                               "seconds": round(time.monotonic() - t0, 1)})
 
+        _finish_measure(log, sc, measure)
+        measure = None
         done = {s["stage"] for s in stage_log}
         for st in plan["stages"]:
             if st["id"] not in done and st["id"] != halted_step:

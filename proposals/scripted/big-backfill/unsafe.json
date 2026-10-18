@@ -1,0 +1,45 @@
+{
+  "plan_id": "c1-unsafe",
+  "summary": "Backfill every row in a single UPDATE.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-nullable",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the column as nullable (metadata only).",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean"
+      ]
+    },
+    {
+      "id": "backfill-one-update",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "One statement over the whole table.",
+      "sql": [
+        "UPDATE account_user SET marketing_opt_in = false WHERE marketing_opt_in IS NULL"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-set-default",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Small metadata change after retirement.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET DEFAULT false"
+      ]
+    }
+  ]
+}

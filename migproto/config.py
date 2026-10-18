@@ -26,7 +26,11 @@ PG_USER = "saleor"
 PG_PASSWORD = "saleor"
 CACHE_URL = "redis://127.0.0.1:56379/0"
 
-SEED_DB = "migproto_seed"
+# Template database every run clones. MIGPROTO_SEED_DB selects another template (for example
+# migproto_seed_scale for the large-table scenarios) without touching the default one.
+SEED_DB = os.environ.get("MIGPROTO_SEED_DB", "migproto_seed")
+if not SEED_DB.startswith("migproto_seed") or not SEED_DB.replace("_", "").isalnum():
+    raise ValueError(f"MIGPROTO_SEED_DB must look like migproto_seed[_name], got {SEED_DB!r}")
 RUN_DB_PREFIX = "migproto_run_"
 
 PORTS = {"old": 8001, "new": 8002}

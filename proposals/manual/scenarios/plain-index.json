@@ -1,0 +1,17 @@
+{
+  "scenario": "plain-index",
+  "provenance": "manual",
+  "note": "Expected runner verdicts, written before the runs. Never shown to evaluated agents. Large-table scenario: run on MIGPROTO_SEED_DB=migproto_seed_scale; budget 500 ms per load write.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "A plain CREATE INDEX holds a SHARE lock that blocks writes for the whole build."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "accept_as_is",
+      "why": "CREATE INDEX CONCURRENTLY does not block writes."
+    }
+  }
+}

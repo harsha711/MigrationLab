@@ -1,0 +1,19 @@
+{
+  "plan_id": "c2-safe",
+  "summary": "Deploy with AddIndexConcurrently (non-atomic migration).",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run.",
+      "variant": "apply-concurrently"
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

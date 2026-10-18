@@ -1,0 +1,39 @@
+{
+  "plan_id": "c6-safe",
+  "summary": "CHECK NOT VALID, VALIDATE, then SET NOT NULL (no scan on PG 12+).",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-column-with-default",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Metadata-only on PG 11+: existing rows read the default.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean DEFAULT false"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-validated-not-null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "VALIDATE takes a lock that does not block writes; SET NOT NULL then skips the scan.",
+      "sql": [
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_opt_in_nn CHECK (marketing_opt_in IS NOT NULL) NOT VALID",
+        "ALTER TABLE account_user VALIDATE CONSTRAINT account_user_opt_in_nn",
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL",
+        "ALTER TABLE account_user DROP CONSTRAINT account_user_opt_in_nn"
+      ]
+    }
+  ]
+}

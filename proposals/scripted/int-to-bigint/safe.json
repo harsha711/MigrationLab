@@ -1,0 +1,61 @@
+{
+  "plan_id": "c3-safe",
+  "summary": "New bigint column kept in sync by a trigger, batched backfill, swap after retirement (metadata-only steps plus a NOT VALID / VALIDATE NOT NULL).",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-new-column-and-sync",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Copy every write into the new column.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN number_of_orders_new bigint",
+        "CREATE OR REPLACE FUNCTION migproto_orders_sync() RETURNS trigger LANGUAGE plpgsql AS $$\nBEGIN\n    NEW.number_of_orders_new := NEW.number_of_orders;\n    RETURN NEW;\nEND;\n$$",
+        "CREATE TRIGGER migproto_orders_sync BEFORE INSERT OR UPDATE ON account_user FOR EACH ROW EXECUTE FUNCTION migproto_orders_sync()"
+      ]
+    },
+    {
+      "id": "backfill-new-column",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Batched copy of existing values.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE number_of_orders_new IS NULL LIMIT 10000) UPDATE account_user u SET number_of_orders_new = u.number_of_orders FROM batch WHERE u.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true,
+      "pause_ms": 50
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-swap-columns",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Swap in one short metadata transaction, then validate without blocking writes.",
+      "sql": [
+        "BEGIN",
+        "DROP TRIGGER migproto_orders_sync ON account_user",
+        "DROP FUNCTION migproto_orders_sync()",
+        "ALTER TABLE account_user DROP COLUMN number_of_orders",
+        "ALTER TABLE account_user RENAME COLUMN number_of_orders_new TO number_of_orders",
+        "ALTER TABLE account_user ALTER COLUMN number_of_orders SET DEFAULT 0",
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_orders_nn CHECK (number_of_orders IS NOT NULL) NOT VALID",
+        "COMMIT",
+        "ALTER TABLE account_user VALIDATE CONSTRAINT account_user_orders_nn",
+        "ALTER TABLE account_user ALTER COLUMN number_of_orders SET NOT NULL",
+        "ALTER TABLE account_user DROP CONSTRAINT account_user_orders_nn",
+        "ALTER TABLE account_user ADD CONSTRAINT account_user_number_of_orders_check CHECK (number_of_orders >= 0) NOT VALID",
+        "ALTER TABLE account_user VALIDATE CONSTRAINT account_user_number_of_orders_check"
+      ]
+    }
+  ]
+}

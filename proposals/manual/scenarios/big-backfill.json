@@ -1,0 +1,17 @@
+{
+  "scenario": "big-backfill",
+  "provenance": "manual",
+  "note": "Expected runner verdicts, written before the runs. Never shown to evaluated agents. Large-table scenario: run on MIGPROTO_SEED_DB=migproto_seed_scale; budget 500 ms per load write.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "One UPDATE holds row locks on every row until it commits, so concurrent old-app writes wait for the whole statement."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "Each batch locks only 10,000 rows briefly."
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "plan_id": "c1-safe",
+  "summary": "Backfill in batches of 10,000 with short pauses.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-nullable",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Add the column as nullable (metadata only).",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean"
+      ]
+    },
+    {
+      "id": "backfill-batched",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Short transactions; writers wait at most one batch.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE marketing_opt_in IS NULL LIMIT 10000) UPDATE account_user SET marketing_opt_in = false FROM batch WHERE account_user.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true,
+      "pause_ms": 50
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-set-default",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Small metadata change after retirement.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET DEFAULT false"
+      ]
+    }
+  ]
+}

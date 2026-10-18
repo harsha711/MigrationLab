@@ -29,7 +29,7 @@ def test_registry_is_consistent():
         assert set(s.not_null_phases) <= set(scenarios.ALL_PHASES)
         for v in s.variants.values():
             assert v.version in WORKTREES and v.migration.startswith("0107_")
-    assert len(scenarios.SCENARIOS) == 17
+    assert len(scenarios.SCENARIOS) == 23
     assert "raw-sql-rename/old" in scenarios.variant_versions()
     with pytest.raises(KeyError):
         scenarios.get("no-such-scenario")
@@ -200,6 +200,63 @@ def test_composed_note_sql_matches_python_helper():
     # The SQL used by preservation_expr must express the same composition as compose_note.
     assert "note_title IS NULL THEN note_body" in scenarios.COMPOSED_NOTE_SQL
     assert "note_title || ': ' || coalesce(note_body, '')" in scenarios.COMPOSED_NOTE_SQL
+
+
+def test_stage_options_for_batching_and_lock_retries():
+    sql_stage = {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]}
+    contract = {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}
+    base = [{"id": "d", "kind": "deploy_new"}, RETIRE, contract]
+    assert plans.validate_plan(plan({**sql_stage, "pause_ms": 50, "retry_on_lock_timeout": 100},
+                                    *base))
+    for bad in ({"pause_ms": 99999}, {"retry_on_lock_timeout": -1}, {"pause_ms": "50"},
+                {"retry_on_lock_timeout": True}):
+        with pytest.raises(plans.PlanError):
+            plans.validate_plan(plan({**sql_stage, **bad}, *base))
+    with pytest.raises(plans.PlanError, match="only sql stages may set pause_ms"):
+        plans.validate_plan(plan(sql_stage, {"id": "d", "kind": "deploy_new", "pause_ms": 5},
+                                 RETIRE, contract))
+
+
+def test_load_summary_statistics():
+    from migproto import load
+    samples = [(i * 0.1, float(ms), True, None) for i, ms in enumerate(range(10, 110, 10))]
+    samples.append((2.0, 900.0, False, "IntegrityError"))
+    s = load.summarize(samples)
+    assert (s["writes"], s["errors"], s["max_ms"]) == (11, 1, 900.0)
+    assert s["p50_ms"] == 60.0 and s["p95_ms"] == 900.0   # nearest rank of 11 samples
+    assert s["worst"][0]["ms"] == 900.0 and s["first_errors"] == ["IntegrityError"]
+    assert load.summarize([])["max_ms"] is None
+
+
+def test_load_generator_rewrites_existing_values():
+    import time as _time
+    from migproto import load
+
+    class Server:
+        def __init__(self):
+            self.writes = []
+
+        def write_note(self, pk, value):
+            self.writes.append((pk, value))
+            _time.sleep(0.001)
+            return _Res(True, value)
+
+    server = Server()
+    gen = load.LoadGenerator(server, {1: "a", 2: "b", 3: "c"}, threads=2).start()
+    _time.sleep(0.1)
+    stats = gen.stop()
+    assert stats["writes"] > 10 and stats["errors"] == 0
+    assert set(server.writes) <= {(1, "a"), (2, "b"), (3, "c")}   # data never changes
+
+
+def test_large_table_scenarios_are_flagged():
+    c_ids = {"big-backfill", "plain-index", "int-to-bigint", "long-transaction",
+             "schema-and-backfill", "set-not-null"}
+    for sid in c_ids:
+        s = scenarios.get(sid)
+        assert s.load and s.lock_budget_ms == 500
+    assert scenarios.get("long-transaction").long_transaction == ("expand", 10.0)
+    assert not any(s.load for s in scenarios.SCENARIOS.values() if s.id not in c_ids)
 
 
 def test_note_free_new_app_skips_note_cases():

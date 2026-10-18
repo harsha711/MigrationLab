@@ -1,0 +1,47 @@
+{
+  "plan_id": "c5-safe",
+  "summary": "Add the column (metadata only), backfill in batches, deploy state-only.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-column",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Metadata-only.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN loyalty_score integer"
+      ]
+    },
+    {
+      "id": "backfill-batched",
+      "kind": "sql",
+      "phase": "backfill",
+      "description": "Short transactions.",
+      "sql": [
+        "WITH batch AS (SELECT id FROM account_user WHERE loyalty_score IS NULL LIMIT 10000) UPDATE account_user SET loyalty_score = 0 FROM batch WHERE account_user.id = batch.id"
+      ],
+      "repeat_until_zero_rows": true,
+      "pause_ms": 50
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-noop",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Metadata-only.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN loyalty_score SET DEFAULT 0"
+      ]
+    }
+  ]
+}

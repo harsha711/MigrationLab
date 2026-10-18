@@ -1,0 +1,17 @@
+{
+  "scenario": "schema-and-backfill",
+  "provenance": "manual",
+  "note": "Expected runner verdicts, written before the runs. Never shown to evaluated agents. Large-table scenario: run on MIGPROTO_SEED_DB=migproto_seed_scale; budget 500 ms per load write.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "The ACCESS EXCLUSIVE lock from ADD COLUMN is held until the backfill commits, blocking all reads and writes."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "Schema change and backfill run as separate short transactions."
+    }
+  }
+}

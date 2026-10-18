@@ -223,6 +223,20 @@ READERS_FIRST_GUARD = (
     "                    )\n                }\n            )\n")
 
 
+# --- Tier 4 building blocks ---
+PLAIN_ADD_INDEX = ("        migrations.AddIndex(\n            model_name=\"user\",\n"
+                   "            index=BTreeIndex(fields=[\"last_name\"], "
+                   "name=\"account_user_last_name_btree\"),\n        ),\n")
+ORDERS_LINE = "    number_of_orders = models.PositiveIntegerField(default=0, db_default=0)\n"
+ORDERS_BIGINT = ("        migrations.AlterField(\n            model_name=\"user\", name=\"number_of_orders\",\n"
+                 "            field=models.PositiveBigIntegerField(db_default=0, default=0),\n        ),\n")
+ADD_SCORE = ("        migrations.AddField(\n            model_name=\"user\", name=\"loyalty_score\",\n"
+             "            field=models.IntegerField(blank=True, null=True),\n        ),\n")
+FILL_SCORES_HEADER = ("\n\ndef fill_scores(apps, schema_editor):\n"
+                      "    User = apps.get_model(\"account\", \"User\")\n"
+                      "    User.objects.update(loyalty_score=0)\n")
+
+
 def rename_series(kind: str) -> list[Path]:
     """The original rename patches: kind 'new-unsafe' (RenameField) or 'new-staged' (state-only)."""
     return sorted((PATCHES / kind).glob("*.patch"))
@@ -389,6 +403,43 @@ SPECS = {
             "migration": ("0107_user_language_code_tlh", LANG_FIELD_OP,
                           "from django.conf import settings\n")}
         for v in ("apply", "readers-first")
+    },
+    # --- Tier 4 (C1 and C6 reuse add-required-column; C2's safe variant reuses D4) ---
+    "plain-index": {
+        "apply": {"subject": "add a B-tree index on User.last_name (plain CREATE INDEX)",
+                  "edits": [(MODELS, INDEX_ANCHOR, INDEX_ANCHOR.replace(
+                      "            # Orders searching index\n",
+                      "            BTreeIndex(fields=[\"last_name\"], "
+                      "name=\"account_user_last_name_btree\"),\n"
+                      "            # Orders searching index\n"))],
+                  "migration": ("0107_user_last_name_btree", PLAIN_ADD_INDEX,
+                                "from django.contrib.postgres.indexes import BTreeIndex\n")},
+    },
+    "int-to-bigint": {
+        v: {"subject": f"User.number_of_orders -> PositiveBigIntegerField ({v})",
+            "edits": [(MODELS, ORDERS_LINE, ORDERS_LINE.replace(
+                "PositiveIntegerField", "PositiveBigIntegerField"))],
+            "migration": ("0107_user_number_of_orders_bigint",
+                          ORDERS_BIGINT if v == "apply" else state_only(indent(ORDERS_BIGINT, 8)))}
+        for v in ("apply", "state-only")
+    },
+    "long-transaction": {
+        "state-only": {"subject": "add optional User.nickname (state-only; plan adds the column)",
+                       "edits": [(MODELS, NOTE_LINE, NOTE_LINE + "    nickname = models.CharField("
+                                  "max_length=256, null=True, blank=True)\n")],
+                       "migration": ("0107_user_nickname", state_only(indent(ADD_NICKNAME, 8)))},
+    },
+    "schema-and-backfill": {
+        "apply": {"subject": "add User.loyalty_score and backfill it in the same atomic migration",
+                  "edits": [(MODELS, NOTE_LINE, NOTE_LINE
+                             + "    loyalty_score = models.IntegerField(null=True, blank=True)\n")],
+                  "migration": ("0107_user_loyalty_score",
+                                ADD_SCORE + "        migrations.RunPython(fill_scores),\n",
+                                FILL_SCORES_HEADER)},
+        "state-only": {"subject": "add User.loyalty_score (state-only; plan adds and backfills)",
+                       "edits": [(MODELS, NOTE_LINE, NOTE_LINE
+                                  + "    loyalty_score = models.IntegerField(null=True, blank=True)\n")],
+                       "migration": ("0107_user_loyalty_score", state_only(indent(ADD_SCORE, 8)))},
     },
 }
 

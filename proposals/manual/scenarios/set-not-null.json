@@ -1,0 +1,17 @@
+{
+  "scenario": "set-not-null",
+  "provenance": "manual",
+  "note": "Expected runner verdicts, written before the runs. Never shown to evaluated agents. Large-table scenario: run on MIGPROTO_SEED_DB=migproto_seed_scale; budget 500 ms per load write.",
+  "plans": {
+    "unsafe.json": {
+      "verdict": "FAIL",
+      "recommendation": "reject",
+      "why": "SET NOT NULL scans the whole table while holding ACCESS EXCLUSIVE."
+    },
+    "safe.json": {
+      "verdict": "PASS",
+      "recommendation": "staged_rollout",
+      "why": "The only scan runs under a lock that allows writes."
+    }
+  }
+}

@@ -9,7 +9,9 @@ STAGE_KINDS = {"sql", "deploy_new", "retire_old", "rollback_check"}
 SQL_PHASES = {"expand", "backfill", "contract"}
 PLAN_KEYS = {"plan_id", "summary", "write_consistency", "stages", "provenance", "revision_notes"}
 STAGE_KEYS = {"id", "kind", "phase", "description", "sql", "repeat_until_zero_rows", "migration",
-              "variant"}
+              "variant", "pause_ms", "retry_on_lock_timeout"}
+MAX_PAUSE_MS = 5000
+MAX_LOCK_RETRIES = 200
 DEPLOY_MIGRATIONS = {"state_only", "apply"}
 APPS = {"old", "new"}
 OPS = {"read", "write", "create", "clear"}
@@ -66,6 +68,13 @@ def validate_plan(plan: dict) -> dict:
                     raise PlanError(f"stage {sid}: {exc}") from exc
         elif "sql" in st:
             raise PlanError(f"stage {sid}: only sql stages may carry sql")
+        for key, limit in (("pause_ms", MAX_PAUSE_MS), ("retry_on_lock_timeout", MAX_LOCK_RETRIES)):
+            if key in st:
+                if kind != "sql":
+                    raise PlanError(f"stage {sid}: only sql stages may set {key}")
+                if not isinstance(st[key], int) or isinstance(st[key], bool) \
+                        or not 0 <= st[key] <= limit:
+                    raise PlanError(f"stage {sid}: {key} must be an integer 0..{limit}")
         if "migration" in st:
             if kind != "deploy_new":
                 raise PlanError(f"stage {sid}: only the deploy_new stage may set migration")

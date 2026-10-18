@@ -4,6 +4,7 @@ import base64
 import os
 import socket
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ from . import db
 from .config import ADMIN_EMAIL, ADMIN_PASSWORD, CACHE_URL, VENV, VENV_PY, WORKTREES
 
 TOKEN_TTL_S = 240
+_TOKEN_LOCK = threading.Lock()
 
 
 def saleor_env(dbname: str) -> dict:
@@ -146,6 +148,11 @@ class AppServer:
         return body
 
     def token(self) -> tuple[str | None, str | None]:
+        # Load threads (migproto/load.py) share one client; serialize token refreshes.
+        with _TOKEN_LOCK:
+            return self._token_locked()
+
+    def _token_locked(self) -> tuple[str | None, str | None]:
         if self._token and time.monotonic() - self._token_at < TOKEN_TTL_S:
             return self._token, None
         body = self._post(

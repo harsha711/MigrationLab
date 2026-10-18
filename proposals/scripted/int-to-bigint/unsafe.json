@@ -1,0 +1,18 @@
+{
+  "plan_id": "c3-unsafe",
+  "summary": "Deploy with Django's AlterField to bigint.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "apply",
+      "description": "Deploy the new version and let its own Django migration run."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    }
+  ]
+}

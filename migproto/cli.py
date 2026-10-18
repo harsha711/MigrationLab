@@ -43,7 +43,8 @@ def cmd_baseline(args) -> int:
         log, args.rebuild_seed, args.skip_pytest,
         seed_source=getattr(args, "seed_source", "synthetic"),
         olist_dir=getattr(args, "olist_dir", None) or OLIST_DIR,
-        seed_limit=getattr(args, "seed_limit", None)))
+        seed_limit=getattr(args, "seed_limit", None),
+        seed_scale=getattr(args, "seed_scale", 0) or 0))
 
 
 def cmd_unsafe(args) -> int:
@@ -100,6 +101,9 @@ def main(argv=None) -> int:
                    help="customer seed: 200 synthetic notes (default) or Olist review comments")
     b.add_argument("--olist-dir", help="unzipped Kaggle Olist dataset (or MIGPROTO_OLIST_DIR)")
     b.add_argument("--seed-limit", type=int, help="olist: first N customers (default: all)")
+    b.add_argument("--seed-scale", type=int, default=0,
+                   help="add N bulk rows (copied Olist text) for large-table scenarios; use with "
+                        "MIGPROTO_SEED_DB=migproto_seed_scale to keep the default template")
     sub.add_parser("unsafe", help="reproduce old-app breakage from an immediate column rename")
     s = sub.add_parser("staged", help="execute one staged migration plan with compatibility checks")
     s.add_argument("--plan", default=str(PROPOSALS / "scripted" / "plan_v2.json"))

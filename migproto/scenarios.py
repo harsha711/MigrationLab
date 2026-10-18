@@ -60,6 +60,13 @@ class Scenario:
     # Values derived from several columns that must equal the expected note per row:
     # (label, SQL expression, columns it needs, phases after which it is checked).
     preserve_exprs: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = ()
+    # Large-table scenarios (C1-C6): concurrent write load + lock observation on every stage;
+    # a stage fails if any load write takes longer than lock_budget_ms or errors.
+    load: bool = False
+    lock_budget_ms: int = 500
+    # (phase, seconds): hold an ACCESS SHARE transaction on account_user across the first SQL
+    # stage of that phase (C4).
+    long_transaction: tuple[str, float] | None = None
 
     def variant(self, migration: str) -> Variant:
         if migration not in self.variants:
@@ -251,6 +258,65 @@ SCENARIOS: dict[str, Scenario] = {s.id: s for s in [
                   "apply-readers-first": Variant("new-language-value/readers-first",
                                                  "0107_user_language_code_tlh")},
         cases=RENAME_CASES + ("new_lang_write_old_read",), tags=("A7",),
+    ),
+    # --- Tier 4: large table + concurrent write load (run with MIGPROTO_SEED_DB=migproto_seed_scale)
+    Scenario(
+        id="big-backfill", title="C1: backfill a large table in one UPDATE vs batches",
+        change=_change("Add User.marketing_opt_in and backfill it on every row.",
+                       new_column="marketing_opt_in"),
+        variants={"apply": Variant("add-required-column/apply", "0107_user_marketing_opt_in"),
+                  "state_only": Variant("add-required-column/state-only",
+                                        "0107_user_marketing_opt_in")},
+        cases=RENAME_CASES, present_after_contract=("marketing_opt_in",), load=True,
+        tags=("C1", "load"),
+    ),
+    Scenario(
+        id="plain-index", title="C2: add an index on a large table (plain vs concurrently)",
+        change=_change("Add a B-tree index on User.last_name.", indexed_column="last_name"),
+        variants={"apply": Variant("plain-index/apply", "0107_user_last_name_btree"),
+                  "apply-concurrently": Variant("add-index-concurrently/apply",
+                                                "0107_user_last_name_btree")},
+        cases=RENAME_CASES, unchanged=("last_name",), load=True, tags=("C2", "load"),
+    ),
+    Scenario(
+        id="int-to-bigint", title="C3: change a column type on a large table (int -> bigint)",
+        change=_change("Change User.number_of_orders from PositiveIntegerField to "
+                       "PositiveBigIntegerField.", old_column="number_of_orders"),
+        variants={"apply": Variant("int-to-bigint/apply", "0107_user_number_of_orders_bigint"),
+                  "state_only": Variant("int-to-bigint/state-only",
+                                        "0107_user_number_of_orders_bigint")},
+        cases=RENAME_CASES, unchanged=("number_of_orders",),
+        present_after_contract=("number_of_orders",), load=True, tags=("C3", "load"),
+    ),
+    Scenario(
+        id="long-transaction",
+        title="C4: structural change while a long transaction holds the table",
+        change=_change("Add an optional column User.nickname while other transactions are "
+                       "running.", new_column="nickname"),
+        variants={"apply": Variant("add-optional-column/apply", "0107_user_nickname"),
+                  "state_only": Variant("long-transaction/state-only", "0107_user_nickname")},
+        cases=RENAME_CASES, present_after_contract=("nickname",), load=True,
+        long_transaction=("expand", 10.0), tags=("C4", "load"),
+    ),
+    Scenario(
+        id="schema-and-backfill",
+        title="C5: schema change and data backfill in one atomic migration",
+        change=_change("Add User.loyalty_score and set it to 0 on every row.",
+                       new_column="loyalty_score"),
+        variants={"apply": Variant("schema-and-backfill/apply", "0107_user_loyalty_score"),
+                  "state_only": Variant("schema-and-backfill/state-only",
+                                        "0107_user_loyalty_score")},
+        cases=RENAME_CASES, present_after_contract=("loyalty_score",), load=True,
+        tags=("C5", "load"),
+    ),
+    Scenario(
+        id="set-not-null", title="C6: make a column on a large table required",
+        change=_change("Make User.marketing_opt_in NOT NULL.", column="marketing_opt_in"),
+        variants={"apply": Variant("add-required-column/apply", "0107_user_marketing_opt_in"),
+                  "state_only": Variant("add-required-column/state-only",
+                                        "0107_user_marketing_opt_in")},
+        cases=RENAME_CASES, not_null=("marketing_opt_in",), not_null_phases=("contract",),
+        present_after_contract=("marketing_opt_in",), load=True, tags=("C6", "load"),
     ),
 ]}
 

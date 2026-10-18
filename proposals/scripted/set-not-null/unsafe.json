@@ -1,0 +1,36 @@
+{
+  "plan_id": "c6-unsafe",
+  "summary": "SET NOT NULL directly after retirement.",
+  "provenance": "scripted",
+  "stages": [
+    {
+      "id": "expand-add-column-with-default",
+      "kind": "sql",
+      "phase": "expand",
+      "description": "Metadata-only on PG 11+: existing rows read the default.",
+      "sql": [
+        "ALTER TABLE account_user ADD COLUMN marketing_opt_in boolean DEFAULT false"
+      ]
+    },
+    {
+      "id": "deploy_new",
+      "kind": "deploy_new",
+      "migration": "state_only",
+      "description": "Deploy the new version; its migration only updates Django state."
+    },
+    {
+      "id": "retire_old",
+      "kind": "retire_old",
+      "description": "Stop the old version."
+    },
+    {
+      "id": "contract-set-not-null",
+      "kind": "sql",
+      "phase": "contract",
+      "description": "Full table scan under ACCESS EXCLUSIVE.",
+      "sql": [
+        "ALTER TABLE account_user ALTER COLUMN marketing_opt_in SET NOT NULL"
+      ]
+    }
+  ]
+}
