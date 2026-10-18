@@ -427,6 +427,11 @@ changes H's verdict, and H's verdict never borrows from it.
   (compare H), and reviews stopped by each budget.
 - **Exclusions:** as in H.
 
+**Status (02:20):** started 02:15 on `defensive-green-cicada` (batch
+`runs/brev-batch-20261018-061500` on that instance) and stopped two minutes later, with no
+review finished, because the instance was handed to a teammate for another experiment. No
+results; the code (`6654bb0`, branch `feat/config-i`) is tested (348 passed) and unrun.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
