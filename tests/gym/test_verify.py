@@ -12,10 +12,10 @@ ACCEPT = {"plan_id": "p-accept", "recommendation": "accept_as_is", "summary": "s
     {"id": "d", "kind": "deploy_new", "migration": "apply"},
     {"id": "r", "kind": "retire_old"}]}
 STAGED = {"plan_id": "p-staged", "recommendation": "staged_rollout", "stages": [
-    {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+    {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
     {"id": "d", "kind": "deploy_new", "migration": "state_only"},
     {"id": "r", "kind": "retire_old"},
-    {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 2"]}]}
+    {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture 2'"]}]}
 
 
 class FakeRunner:
@@ -130,7 +130,7 @@ def test_policy_recommendation_must_match_runner(tmp_path, runner):
 def test_runner_recommendation_must_be_on_target(tmp_path, runner):
     runner()                         # a passing staged plan where only accept_as_is is listed
     staged_apply = {**STAGED, "stages": [
-        {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+        {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
         {"id": "d", "kind": "deploy_new", "migration": "apply"},
         {"id": "r", "kind": "retire_old"}]}
     out = _verify(tmp_path, "add-table", staged_apply)

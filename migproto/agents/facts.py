@@ -153,12 +153,14 @@ Recommendation:
 - "accept_as_is": the change is safe to deploy directly: deploy_new with "migration": "apply",
   then retire_old, and no SQL stages.
 - "staged_rollout": the change needs your SQL stages around the deploy (at least one sql
-  stage). With "migration": "state_only" the plan needs at least one expand and one contract
-  sql stage; with "apply" SQL stages are optional.
+  stage, in whichever phase the change needs). With "migration": "state_only" the plan needs at
+  least one sql stage; with "apply" SQL stages are optional.
 - "reject": you believe no plan keeps both versions correct. Still submit the plan you consider
   closest (for example the direct deploy) so the runner records evidence, and say why in
   summary.
-Rules: exactly one deploy_new and one retire_old stage, at most one rollback_check; stages run
+Rules: exactly one deploy_new and one retire_old stage, at most one rollback_check; every sql
+stage must change the schema or data (the runner does not evaluate query results, so a stage of
+only SELECT, SET or SHOW is rejected; checks belong in tester cases); stages run
 in the listed order; only sql stages carry "sql", only deploy_new carries "migration" or
 "variant"; each sql string is executed as a single statement (PL/pgSQL function bodies with $$
 quoting are fine); each string is sent to PostgreSQL exactly as written, so write `$$` and

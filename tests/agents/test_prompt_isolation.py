@@ -15,7 +15,7 @@ from migproto.agents.budget import ReviewBudget
 from migproto.config import PROPOSALS
 from migproto.runlog import RunLog
 
-FAKE_SQL = "SELECT 424242 AS fake_planner_statement"
+FAKE_SQL = "COMMENT ON TABLE account_user IS 'fake_planner_statement 424242'"
 
 
 def _scripted_answers() -> set[str]:

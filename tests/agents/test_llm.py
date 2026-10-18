@@ -191,7 +191,7 @@ def test_plan_validator_runs_hard_checks_before_prechecks():
          "sql": ["UPDATE account_user SET customer_note = note LIMIT 5"]},
         {"id": "d", "kind": "deploy_new", "migration": "state_only", "variant": "nope"},
         {"id": "r", "kind": "retire_old"},
-        {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 1"]}]}
+        {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]}]}
     with pytest.raises(plans.PlanError) as err:
         validate(plan)
     assert not isinstance(err.value, facts.PreCheckError)       # the variant error wins

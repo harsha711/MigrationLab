@@ -12,10 +12,10 @@ from migproto.config import WORKTREES
 from migproto.runlog import RunLog
 
 PLAN = {"plan_id": "p", "stages": [
-    {"id": "e", "kind": "sql", "phase": "expand", "sql": ["SELECT 1"]},
+    {"id": "e", "kind": "sql", "phase": "expand", "sql": ["COMMENT ON TABLE account_user IS 'fixture'"]},
     {"id": "d", "kind": "deploy_new", "migration": "state_only"},
     {"id": "r", "kind": "retire_old"},
-    {"id": "c", "kind": "sql", "phase": "contract", "sql": ["SELECT 2"]}]}
+    {"id": "c", "kind": "sql", "phase": "contract", "sql": ["COMMENT ON TABLE account_user IS 'fixture 2'"]}]}
 
 
 class HistoryLLM:

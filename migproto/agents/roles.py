@@ -272,8 +272,10 @@ Plan JSON schema (unknown keys are rejected):
     {"id": "unique", "kind": "retire_old", "description": "..."}
   ]
 }
-Rules: exactly one deploy_new and one retire_old stage; at least one expand and one contract
-sql stage; stages run in the listed order; each sql string is executed as a single statement
+Rules: exactly one deploy_new and one retire_old stage; at least one sql stage, and every sql
+stage must change the schema or data (the runner does not evaluate query results, so a stage of
+only SELECT, SET or SHOW is rejected; checks belong in tester cases); stages run in the listed
+order; each sql string is executed as a single statement
 (PL/pgSQL function bodies with $$ quoting are fine); each string is sent to PostgreSQL exactly
 as written, so write `$$` and quotes literally, never backslash-escaped; `repeat_until_zero_rows`
 re-runs a stage until every statement affects 0 rows, so each repeated statement must stop

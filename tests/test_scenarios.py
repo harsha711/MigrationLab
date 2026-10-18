@@ -47,9 +47,29 @@ def test_apply_plan_needs_no_expand_or_contract():
     assert plans.validate_plan(p) is p and plans.deploy_migration(p) == "apply"
 
 
-def test_state_only_plan_still_needs_expand_and_contract():
-    with pytest.raises(plans.PlanError, match="expand"):
+def test_state_only_plan_needs_one_effective_sql_stage():
+    with pytest.raises(plans.PlanError, match="at least one sql stage"):
         plans.validate_plan(plan({"id": "d", "kind": "deploy_new"}, RETIRE))
+    # One stage in either phase is enough (drop-column needs only a contract stage).
+    drop = {"id": "c", "kind": "sql", "phase": "contract",
+            "sql": ["ALTER TABLE account_user DROP COLUMN note"]}
+    assert plans.validate_plan(plan({"id": "d", "kind": "deploy_new"}, RETIRE, drop))
+    add = {"id": "e", "kind": "sql", "phase": "expand",
+           "sql": ["SET lock_timeout = '5s'", "ALTER TABLE account_user ADD COLUMN x int"]}
+    assert plans.validate_plan(plan(add, {"id": "d", "kind": "deploy_new"}, RETIRE))
+    # Filler and verification-only stages do nothing and are rejected, in any plan.
+    for filler in (["SELECT 1"], ["SELECT note FROM account_user LIMIT 1"],
+                   ["SET lock_timeout = '5s'"], ["BEGIN", "COMMIT"]):
+        stage = {"id": "f", "kind": "sql", "phase": "expand", "sql": filler}
+        with pytest.raises(plans.PlanError, match="has no effect"):
+            plans.validate_plan(plan(stage, {"id": "d", "kind": "deploy_new"}, RETIRE, drop))
+        with pytest.raises(plans.PlanError, match="has no effect"):
+            plans.validate_plan(plan(stage, DEPLOY_APPLY, RETIRE))
+    # Statements that may do work are kept.
+    for real in (["SELECT setval('account_user_id_seq', 10)"], ["SELECT backfill_batch()"],
+                 ["COMMENT ON TABLE account_user IS 'x'"], ["DO $$ BEGIN PERFORM 1; END $$"]):
+        stage = {"id": "f", "kind": "sql", "phase": "expand", "sql": real}
+        assert plans.validate_plan(plan(stage, {"id": "d", "kind": "deploy_new"}, RETIRE))
     with pytest.raises(plans.PlanError, match="migration must be one of"):
         plans.validate_plan(plan({**DEPLOY_APPLY, "migration": "yolo"}, RETIRE))
     with pytest.raises(plans.PlanError, match="only the deploy_new stage"):
