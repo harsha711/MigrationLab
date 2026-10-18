@@ -103,8 +103,15 @@ def evidence_for_claim(conn, claim_id) -> list[dict]:
 
 
 def list_runs(conn) -> list[dict]:
-    rows = conn.execute("SELECT run_id, source_kind, command, verdict, elapsed_s, checks_total, "
-                        "provenance, model FROM runs ORDER BY source_kind, run_id")
+    # Keep the library route lightweight. The UI used to request full run_detail() for every
+    # row just to display these two counts, which meant 100+ HTTP requests for a real batch.
+    rows = conn.execute(
+        "SELECT r.run_id, r.source_kind, r.command, r.verdict, r.elapsed_s, r.checks_total, "
+        "r.provenance, r.model, "
+        "(SELECT COUNT(*) FROM attempts a WHERE a.run_id = r.run_id) AS attempt_count, "
+        "(SELECT COUNT(*) FROM observations o WHERE o.run_id = r.run_id "
+        " AND o.status = 'FAIL') AS checks_failed "
+        "FROM runs r ORDER BY r.source_kind, r.run_id")
     return [dict(r) for r in rows]
 
 

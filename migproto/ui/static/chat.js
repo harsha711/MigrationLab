@@ -22,7 +22,8 @@
     question.value = button.dataset.chatQuestion;
     question.focus();
     question.setSelectionRange(question.value.length, question.value.length);
-    document.querySelector(".ask-composer")?.scrollIntoView({behavior: "smooth", block: "center"});
+    const composer = document.querySelector(".ask-composer");
+    if (composer && composer.getBoundingClientRect().top < 0) composer.scrollIntoView({block: "start"});
   });
 
   document.addEventListener("keydown", (event) => {

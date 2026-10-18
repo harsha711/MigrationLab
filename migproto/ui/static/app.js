@@ -125,21 +125,20 @@ function pageAsk() {
 async function pageRuns() {
   crumbs([["Runs"]]);
   const { runs, controller_available, controller_reason } = await api("/api/runs");
-  const details = await Promise.all(runs.map((r) => getRun(r.run_id)));
-  const defaultRun = details.find((d) => d.run_id === "live-ordering-revision") || details[0];
-  const demo = details.find((d) => d.run_id === state.dashboardRunId) || defaultRun;
+  const defaultRun = runs.find((run) => run.run_id === "live-ordering-revision") || runs[0];
+  const selected = runs.find((run) => run.run_id === state.dashboardRunId) || defaultRun;
+  const demo = selected ? await getRun(selected.run_id) : null;
   state.dashboardRunId = demo?.run_id || null;
   const finalAttempt = demo?.attempts.at(-1);
   const firstAttempt = demo?.attempts[0];
   const matrix = finalAttempt ? await api(`/api/matrix?run=${enc(demo.run_id)}&attempt=${enc(finalAttempt.attempt_id)}`) : {rows: [], db_checks: []};
-  const rows = details.map((d) => {
-    const failed = d.attempts.reduce((n, a) => n + a.checks_failed, 0);
-    const search = `${d.run_id} ${d.meta?.verdict || ""} ${d.source_kind} ${d.meta?.model || "scripted"}`.toLowerCase();
-    return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.meta?.verdict || "")}" data-kind="${esc(d.source_kind)}">
+  const rows = runs.map((d) => {
+    const search = `${d.run_id} ${d.verdict || ""} ${d.source_kind} ${d.model || "scripted"}`.toLowerCase();
+    return `<tr class="link run-row" data-href="#/run/${enc(d.run_id)}" data-search="${esc(search)}" data-verdict="${esc(d.verdict || "")}" data-kind="${esc(d.source_kind)}">
       <td><input type="checkbox" class="pick" value="${esc(d.run_id)}" aria-label="select for compare"></td>
-      <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempts.length} attempt${d.attempts.length === 1 ? "" : "s"}</small></td>
-      <td>${verdictBadge(d.meta?.verdict)}</td><td>${typeBadges(d)}</td>
-      <td>${d.attempts.length}</td><td>${d.meta?.checks_total ?? ""}</td><td>${failed}</td></tr>`;
+      <td><a href="#/run/${enc(d.run_id)}"><strong>${esc(d.run_id)}</strong></a><small class="cell-sub">${d.attempt_count} attempt${d.attempt_count === 1 ? "" : "s"}</small></td>
+      <td>${verdictBadge(d.verdict)}</td><td>${typeBadges({source_kind: d.source_kind, meta: {model: d.model}})}</td>
+      <td>${d.attempt_count}</td><td>${d.checks_total ?? ""}</td><td>${d.checks_failed}</td></tr>`;
   }).join("");
   const processStages = [
     "Review request",
@@ -196,7 +195,7 @@ async function pageRuns() {
   }).join(`<span>→</span>`);
   const verdict = demo?.meta?.verdict || finalAttempt?.status || "unknown";
   const finalPassed = ["PASS", "REPRODUCED"].includes(String(verdict).toUpperCase());
-  const runOptions = details.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.meta?.verdict || "unknown")}</option>`).join("");
+  const runOptions = runs.map((item) => `<option value="${esc(item.run_id)}" ${item.run_id === demo?.run_id ? "selected" : ""}>${esc(item.run_id)} · ${esc(item.verdict || "unknown")}</option>`).join("");
   return `<header class="editorial-head"><div><span class="eyebrow">RECORDED RUNS / EVIDENCE</span><h1>Migration evidence</h1><p>Follow each plan, runner check, and revision from request to tested outcome.</p></div><div class="editorial-head-actions"><select id="dashboard-run" class="run-selector" aria-label="Select recorded run">${runOptions}</select><span class="scope-label">Scope · sequential interleaving</span></div></header>
     <section class="editorial-layout">
       <main class="editorial-main">

@@ -46,6 +46,7 @@ def test_static_and_runs(base_url):
     assert data["controller_available"] is False
     assert {r["run_id"] for r in data["runs"]} == {
         "unsafe-rename", "scripted-sync-failure", "scripted-staged-success", "live-ordering-revision"}
+    assert all("attempt_count" in run and "checks_failed" in run for run in data["runs"])
 
 
 def test_run_and_observation_endpoints(base_url):
@@ -154,6 +155,13 @@ def test_first_use_navigation_is_task_oriented():
     assert "Track batches" in html and "Compare approaches" in html
     assert "What do you want to understand?" in js
     assert "How to read these answers" in js
+
+
+def test_run_library_does_not_hydrate_every_run():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    page = js[js.index("async function pageRuns()"):js.index("function replaySteps")]
+    assert "Promise.all" not in page
+    assert "await getRun(selected.run_id)" in page
 
 
 def test_batch_endpoints_over_http():
