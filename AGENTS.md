@@ -22,7 +22,7 @@ Every statement below is backed by `REPORT.md` and by fixtures in `examples/`. N
   - K: `roles` 11/18 vs `single` 11/18, p = 1.0. K includes the schema/data profile, the repeated-failure notice and the pre-execution dry run.
 
   Descriptively, in K `roles` used about half the tokens per matched review (156k vs 291k). A comparison with one big model has not been measured (KB was not run). See `docs/results.md`. Local 4B stand-in runs are separate and measure nothing about Lightning (`docs/local-standin-runs.md`).
-- **Tests:** `uv run pytest` runs 403 tests (the per-folder counts below predate configurations J and K and the review-jobs merge) on Linux with `uv` / Python 3.12: 85 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1), 109 in `tests/agents`, 81 in `tests/memory` and 64 in `tests/gym`.
+- **Tests:** `uv run pytest` runs 406 tests (2026-10-18) on Linux with `uv` / Python 3.12: 90 runner tests (SQL guard, plan schema, trigger semantics on a scratch table, runner v1, pre-runner dry run), 130 in `tests/agents`, 122 in `tests/memory` and 64 in `tests/gym`.
 - **Evidence store and review UI (Avritti, merged through `integrate/memory-ui`):**
   - **Fixtures:** ingesting the four `examples/` fixtures reproduces their `summary.json` facts. For `scripted-sync-failure` at `deploy_new`, every old-writer/new-reader case fails and every new-writer/old-reader case passes.
   - **v1 records and Mahek's controller output** (structured claims, plan lineage, review request, budgets): unit tests use synthetic fixtures in `tests/memory/fixtures/`. Real local runs were also ingested by hand: in scripted run `20261017-165715` all 64 checks carry v1 scope across attempts `a1` and `a2`, and the tester claim's 9 evidence IDs all resolve.
@@ -99,8 +99,8 @@ uv run migproto staged --plan proposals/scripted/plan_v2.json   # about 31 s, an
 uv run migproto agent-loop --proposals scripted # no model needed, about 55 s
 uv run migproto agent-loop --proposals llm      # live model, see configuration
 uv run migproto all [--skip-pytest]             # setup + baseline + unsafe + scripted loop
-uv run pytest                                   # 339 tests (85 runner, 109 agents, 81 memory/UI, 64 gym), under 10 s, needs local Postgres for trigger tests
-uv run pytest -q tests/memory                   # 50 memory/UI tests, no Docker or Postgres needed
+uv run pytest                                   # 406 tests (90 runner, 130 agents, 122 memory/UI, 64 gym), under 30 s, needs local Postgres for trigger tests
+uv run pytest -q tests/memory                   # 122 memory/UI tests, no Docker or Postgres needed
 uv run migproto ui [--port 8765] [--db PATH]    # Replay UI at http://127.0.0.1:8765/ (reads examples/ and runs/)
 ```
 
