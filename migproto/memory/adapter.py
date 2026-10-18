@@ -264,8 +264,8 @@ def claims(run: dict) -> list[dict]:
         elif stem == "investigator":
             # Investigator ran before any attempt: attempt unknown (None).
             for k, f in enumerate((body or {}).get("findings") or []):
-                if not f.get("needs_change"):
-                    continue
+                if not isinstance(f, dict) or not f.get("needs_change"):
+                    continue  # a malformed model finding (e.g. a bare string) is not a claim
                 out.append({"claim_id": f"{run_id}/-/investigator/{k}", "attempt": None,
                             "role": "investigator", "kind": f.get("kind"),
                             "text": f"{f.get('ref')}: {f.get('reason')}",

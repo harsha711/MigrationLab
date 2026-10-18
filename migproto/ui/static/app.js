@@ -23,6 +23,64 @@ const getRun = (id) => {
   return runCache.get(id);
 };
 const counterpartFor = (id) => api(`/api/runs/${enc(id)}/counterpart`);
+const runTools = (id) => api(`/api/runs/${enc(id)}/tools`).catch(() => null);
+
+// ---------- Pre-runner agent tools (schema profile, dry run): never a verdict ----------
+
+const dryRunError = (a) => a.report?.first_error || a.event?.first_error || null;
+const dryRunSummary = (tools) => {
+  const attempts = tools?.attempts || [];
+  if (!attempts.length) return null;
+  return {dry_runs: attempts.length, errors_found: attempts.filter(dryRunError).length,
+          fixes: attempts.filter((a) => a.fix).length, fixes_invalid: attempts.filter((a) => a.fix_invalid).length};
+};
+const dryRunText = (d) => d
+  ? `${d.errors_found} of ${d.dry_runs} dry run${d.dry_runs === 1 ? "" : "s"} found an error · ${d.fixes} fix${d.fixes === 1 ? "" : "es"}${d.fixes_invalid ? ` · ${d.fixes_invalid} unusable fix${d.fixes_invalid === 1 ? "" : "es"}` : ""}`
+  : null;
+const cellText = (v) => v === null || v === undefined ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v);
+
+function schemaProfileCard(profile) {
+  if (!profile) return "";
+  const cols = profile.columns || [];
+  return `<section class="tool-card start-db"><header><span class="eyebrow">STARTING DATABASE · READ-ONLY PROFILE</span><h2>${esc(profile.table)} · ${fmt(profile.rows)} rows</h2><p>Measured on a throwaway copy of the start state before planning, and given to the agents. Numbers only; not runner evidence.</p></header>
+    <div class="table-wrap"><table><tr><th>Column</th><th>Type</th><th>NOT NULL</th><th>Default</th><th>NULL values</th><th>Distinct non-NULL</th><th>Longest value (chars)</th></tr>
+    ${cols.map((c) => `<tr><td><code>${esc(c.column)}</code></td><td>${esc(cellText(c.type))}</td><td>${c.not_null ? "yes" : "no"}</td><td>${c.default == null ? "none" : `<code>${esc(c.default)}</code>`}</td><td class="num">${esc(cellText(c.null_values))}</td><td class="num">${esc(cellText(c.distinct_non_null_values))}</td><td class="num">${"max_char_length" in c ? esc(cellText(c.max_char_length)) : "—"}</td></tr>`).join("")}</table></div>
+    ${(profile.constraints || []).length ? `<p><strong>Constraints</strong></p><ul>${profile.constraints.map((x) => `<li><code>${esc(x)}</code></li>`).join("")}</ul>` : ""}
+    ${(profile.indexes || []).length ? `<p><strong>Indexes</strong></p><ul>${profile.indexes.map((x) => `<li><code>${esc(x)}</code></li>`).join("")}</ul>` : ""}</section>`;
+}
+
+function probeTable(probe) {
+  const cols = probe.columns_present || [];
+  const head = `<p class="probe-point"><strong>${esc(probe.point || "probe")}</strong>${probe.table ? ` · <code>${esc(probe.table)}</code>` : ""}</p>`;
+  if (probe.skipped) return `${head}<p class="muted">Probe skipped: ${esc(probe.skipped)}</p>`;
+  if (!(probe.writes || []).length) return `${head}<p class="muted">No probe writes recorded.</p>`;
+  return `${head}<div class="table-wrap"><table class="probe-table"><tr><th>Scripted write (rolled back)</th>${cols.map((c) => `<th>${esc(c)} after</th>`).join("")}</tr>
+    ${probe.writes.map((w) => `<tr><td><code>${esc(w.write)}</code></td>${w.error ? `<td colspan="${Math.max(cols.length, 1)}">error: ${esc(w.error)}</td>` : cols.map((c) => `<td>${esc(cellText(w.after?.[c]))}</td>`).join("")}</tr>`).join("")}</table></div>`;
+}
+
+function dryRunPanel(a) {
+  const stages = a.report?.stages || [], first = dryRunError(a);
+  const fix = a.fix ? `<div class="dry-run-fix"><strong>Plan fixed after dry run</strong> <code>${esc(a.fix.parent_plan_id || "?")}</code> → <code>${esc(a.fix.plan_id || "?")}</code>
+      ${a.fix.diff ? (a.fix.diff.length ? `<details><summary>Stage SQL diff</summary><pre class="sql-diff">${a.fix.diff.map((line) => `<span class="${line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : ""}">${esc(line)}</span>`).join("\n")}</pre></details>` : `<p class="muted">The fixed plan's stage SQL is identical; other fields changed.</p>`) : `<p class="muted">Both plan files are needed for a diff; one is missing.</p>`}</div>`
+    : a.fix_invalid ? `<div class="dry-run-fix"><strong>Fix after dry run was unusable; the original plan ran.</strong> <small>${esc(a.fix_invalid.error || "")}</small></div>` : "";
+  return `<details class="tool-card dry-run" ${first || a.fix ? "open" : ""}><summary><span class="eyebrow">DRY RUN · NOT A VERDICT</span> Agent-side tool on a throwaway copy, before the runner · ${first ? `first error at <code>${esc(first.stage ?? "setup")}</code>` : "no stage error"}${a.fix ? " · plan fixed" : ""}</summary>
+    <p class="muted">Runs the plan's SQL and the new version's Django migration on a throwaway copy of the start state, without app servers. It is not runner evidence; the runner's checks below decide this attempt.</p>
+    ${first ? `<p><strong>First error</strong> (stage <code>${esc(first.stage ?? "setup")}</code>): <code>${esc(first.error)}</code></p>` : ""}
+    ${stages.length ? `<div class="table-wrap"><table><tr><th>Stage</th><th>Kind / phase</th><th>Dry-run result</th></tr>${stages.map((st) => `<tr><td><code>${esc(st.stage)}</code></td><td>${esc(st.kind || "")} / ${esc(st.phase || "")}</td><td>${esc(st.result || "")}${st.batches ? ` · ${esc(st.batches)} batch${st.batches === 1 ? "" : "es"}` : ""}${st.error ? `<br><code>${esc(st.error)}</code>` : ""}</td></tr>`).join("")}</table></div>` : `<p class="muted">Dry-run report file not recorded.</p>`}
+    ${(a.report?.probes || []).length ? `<h4>Write probe</h4><p class="muted">Each scripted write runs in a rolled-back transaction and shows the value of each column afterwards. Values only; not pass or fail.</p>${a.report.probes.map(probeTable).join("")}` : ""}
+    ${fix}</details>`;
+}
+
+async function renderRunTools(id) {
+  const tools = await runTools(id);
+  if (!tools || location.hash !== `#/run/${enc(id)}`) return;
+  const start = $("#run-start-db");
+  if (start && tools.schema_profile) { start.innerHTML = schemaProfileCard(tools.schema_profile); start.hidden = false; }
+  for (const a of tools.attempts || []) {
+    const slot = document.querySelector(`.dry-run-slot[data-attempt="${a.attempt}"]`);
+    if (slot) slot.innerHTML = dryRunPanel(a);
+  }
+}
 
 function verdictBadge(v) {
   if (!v) return `<span class="badge">${unknown()}</span>`;
@@ -383,6 +441,7 @@ async function pollJob(runId, after) {
   catch (err) { $("#rv-state").textContent = "error"; return; }
   const timeline = $("#rv-events"); if (!timeline) return;
   for (const event of data.events) {
+    if (event.kind === "tool") timeline.insertAdjacentHTML("beforeend", `<article class="tool-event"><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>tool · ${esc(event.name || "tool")}</strong><small>${esc(event.msg || "")}${event.first_error ? ` · first error at ${esc(event.first_error.stage ?? "setup")}` : ""}</small></article>`);
     if (["attempt", "stage", "attempt_result", "check"].includes(event.kind)) timeline.insertAdjacentHTML("beforeend", `<article><span>${event.t == null ? "" : Number(event.t).toFixed(1) + "s"}</span><strong>${esc(event.kind === "check" ? humanize(event.name) : event.name || event.stage || event.kind)}</strong>${event.status ? verdictBadge(event.status) : ""}<small>${esc(event.msg || event.error || "")}</small></article>`);
   }
   if (!data.done) { setTimeout(() => pollJob(runId, data.next), 1500); return; }
@@ -431,6 +490,7 @@ async function pageOverview(id) {
   const run = await getRun(id);
   crumbs([["Runs", "#/"], [id]]);
   setTimeout(() => renderCounterpart(id), 0);
+  setTimeout(() => renderRunTools(id), 0);
   const m = run.meta || {};
   const intent = (attempt) => {
     const plan = attempt.plans?.[0]?.body || {};
@@ -464,10 +524,10 @@ async function pageOverview(id) {
     const compare = assessment(a, run.attempts[index - 1]);
     const failures = (a.failed || []).slice(0, 5);
     const failedCount = (a.failed || []).length;
-    return `<article class="revision-story-card ${compare.tone}"><header><div><span class="story-index">${index + 1}</span><span class="eyebrow">ATTEMPT ${esc(s)}</span><h3>${verdictBadge(a.status)} ${esc(compare.title)}</h3></div><div class="story-links"><a href="#/run/${enc(id)}/plan/${s}">Open plan</a><a href="#/run/${enc(id)}/matrix/${s}">Compatibility checks</a></div></header><div class="story-grid"><section><span>Planner proposed</span><p>${esc(intent(a))}</p><small>Saved planner artifact; this is a proposal, not runner evidence.</small></section><section><span>What changed</span><ul>${planDelta(a, run.attempts[index - 1]).map((change) => `<li>${esc(change)}</li>`).join("")}</ul></section><section class="runner-observed"><span>Runner observed</span><strong>${a.outcome_counts ? esc(countsText(a.outcome_counts)) : `${a.checks_total} checks · ${a.checks_failed} failed`}</strong><p>${esc(compare.detail)}</p>${a.halted ? `<small>Stopped: ${esc(a.halted)}</small>` : ""}</section></div>${failures.length ? `<footer><span>Failed checks</span>${failures.map((failure) => `<code>${esc(failure)}</code>`).join("")}${failedCount > failures.length ? `<small>+${failedCount - failures.length} more</small>` : ""}</footer>` : ""}${cause ? `<details class="story-diagnosis"><summary>Tester’s recorded diagnosis</summary><p>${esc(cause.text)}</p></details>` : ""}</article>`;
+    return `<article class="revision-story-card ${compare.tone}"><header><div><span class="story-index">${index + 1}</span><span class="eyebrow">ATTEMPT ${esc(s)}</span><h3>${verdictBadge(a.status)} ${esc(compare.title)}</h3></div><div class="story-links"><a href="#/run/${enc(id)}/plan/${s}">Open plan</a><a href="#/run/${enc(id)}/matrix/${s}">Compatibility checks</a></div></header><div class="dry-run-slot" data-attempt="${esc(String(s).replace(/^a/, ""))}"></div><div class="story-grid"><section><span>Planner proposed</span><p>${esc(intent(a))}</p><small>Saved planner artifact; this is a proposal, not runner evidence.</small></section><section><span>What changed</span><ul>${planDelta(a, run.attempts[index - 1]).map((change) => `<li>${esc(change)}</li>`).join("")}</ul></section><section class="runner-observed"><span>Runner observed</span><strong>${a.outcome_counts ? esc(countsText(a.outcome_counts)) : `${a.checks_total} checks · ${a.checks_failed} failed`}</strong><p>${esc(compare.detail)}</p>${a.halted ? `<small>Stopped: ${esc(a.halted)}</small>` : ""}</section></div>${failures.length ? `<footer><span>Failed checks</span>${failures.map((failure) => `<code>${esc(failure)}</code>`).join("")}${failedCount > failures.length ? `<small>+${failedCount - failures.length} more</small>` : ""}</footer>` : ""}${cause ? `<details class="story-diagnosis"><summary>Tester’s recorded diagnosis</summary><p>${esc(cause.text)}</p></details>` : ""}</article>`;
   }).join("");
   const man = run.manifest;
-  return `${runHeader(run, "overview")}<section id="run-counterpart" class="run-counterpart"><strong>Looking for a matched topology comparison…</strong></section>
+  return `${runHeader(run, "overview")}<section id="run-counterpart" class="run-counterpart"><strong>Looking for a matched topology comparison…</strong></section><section id="run-start-db" hidden></section>
     <section class="revision-story-head"><span class="eyebrow">REVISION STORY</span><h2>How the proposed migration changed after runner feedback</h2><p>Follow the saved planner proposal, the exact runner result, and the next revision. The runner—not the planner—determines whether an attempt passed.</p><div><strong>Requested change</strong><span>${m.scenario ? esc(m.scenario) : unknown("not recorded in this run")}</span></div></section>
     <section class="revision-story" aria-label="Revision story">${story || `<p class="muted">No attempt records were saved for this run.</p>`}</section>
     ${man ? `<details><summary>Fixture notes</summary><p>${val(man.note)}</p>
@@ -663,8 +723,9 @@ async function pageCompare(a, b) {
     const shown = names.slice(0, limit);
     return `${shown.map((name) => `<code class="chip">${esc(name)}</code>`).join("")}${names.length > limit ? `<small>+${names.length - limit} more</small>` : ""}`;
   };
-  const col = (run) => {
+  const col = (run, tools) => {
     const id = run.run_id;
+    const dry = dryRunText(dryRunSummary(tools));
     const best = closest(run.attempts);
     const finalVerdict = run.meta?.verdict || "not recorded";
     const final = run.attempts.at(-1);
@@ -684,6 +745,7 @@ async function pageCompare(a, b) {
         ${Object.entries(groups).map(([theme, names]) => `<div><strong>${esc(theme)}</strong><small>${names.length} failed check${names.length === 1 ? "" : "s"}</small></div>`).join("")}
         <div class="chips compare-failure-names">${compactFailures(best.failed, 99)}</div>
       </section>` : ""}
+      <p class="compare-dry-run"><strong>Dry runs before the runner (not a verdict):</strong> ${dry ? esc(dry) : `<span class="muted">none recorded</span>`}</p>
       <p class="compare-outcome"><strong>Final recorded outcome:</strong> ${verdictBadge(finalVerdict)}${final?.halted ? ` <span class="muted">${esc(final.halted)}</span>` : ""}</p>
       <section class="compare-path"><span class="eyebrow">RECORDED ATTEMPT PATH</span>
         ${run.attempts.map((x) => `<div><header><strong>${esc(short(x.attempt_id))}</strong> ${verdictBadge(x.status)}<span>${x.checks_failed} failed / ${x.checks_total} checks</span></header>
@@ -695,8 +757,8 @@ async function pageCompare(a, b) {
       </details>
     </article>`;
   };
-  const [left, right, leftContext, rightContext] = await Promise.all([
-    getRun(a), getRun(b), counterpartFor(a), counterpartFor(b),
+  const [left, right, leftContext, rightContext, leftTools, rightTools] = await Promise.all([
+    getRun(a), getRun(b), counterpartFor(a), counterpartFor(b), runTools(a), runTools(b),
   ]);
   const leftBest = closest(left.attempts), rightBest = closest(right.attempts);
   const shared = [...new Set((leftBest?.failed || []).filter((name) => (rightBest?.failed || []).includes(name)))];
@@ -722,7 +784,7 @@ async function pageCompare(a, b) {
   return `<h1>Compare two reviews</h1><p class="muted">This page describes two recorded reviews only. It does not rank topologies or establish that one approach is better.</p>${contextStrip}${warning}
     <section class="compare-conclusion"><span class="eyebrow">WHAT THIS COMPARISON SAYS</span><strong>${esc(result)}</strong>
       <div><section><span>Left closest attempt</span><b>${leftBest ? `${esc(short(leftBest.attempt_id))} · ${leftBest.checks_failed}/${leftBest.checks_total} failed` : "not recorded"}</b></section><section><span>Right closest attempt</span><b>${rightBest ? `${esc(short(rightBest.attempt_id))} · ${rightBest.checks_failed}/${rightBest.checks_total} failed` : "not recorded"}</b></section><section><span>Shared closest-attempt blockers</span><b>${shared.length ? `${shared.length} shared` : "none recorded"}</b>${shared.length ? `<small>${compactFailures(shared, 4)}</small>` : ""}</section></div>
-    </section><div class="compare">${col(left)}${col(right)}</div>`;
+    </section><div class="compare">${col(left, leftTools)}${col(right, rightTools)}</div>`;
 }
 
 // ---------- Brev batches (supervisor records, read-only) ----------
@@ -815,6 +877,7 @@ function batchRunRows(runs) {
     <td>${scoreCell(r)}</td>
     <td class="num">${r.total_tokens == null ? nr(null) : fmt(r.total_tokens)}</td>
     <td class="num">${nr(r.model_calls)}</td>
+    <td class="dry-run-cell">${r.dry_run ? `${esc(r.dry_run.errors_found)} / ${esc(r.dry_run.fixes)}<small class="cell-sub">${esc(dryRunText(r.dry_run))}</small>` : `<span class="muted">none</span>`}</td>
     <td class="num">${r.wall_seconds == null ? nr(null) : Number(r.wall_seconds).toFixed(0)}</td>
     <td class="links">${suspect ? `<span class="muted" title="The run directory holds another run's files">no link (shared directory)</span>`
       : `${r.in_store ? `<a href="#/run/${enc(r.run_id)}">Replay</a>` : `<span class="muted" title="Run is not in the evidence store">not ingested</span>`}
@@ -825,7 +888,7 @@ function batchRunRows(runs) {
 
 function batchRunsTable(runs) {
   return `<div class="card table-wrap"><table class="batch-runs">
-    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th>${scoreHead}<th>tokens</th><th>calls</th><th>wall (s)</th><th>links</th></tr>
+    <tr><th>#</th><th>run</th><th>scenario</th><th>topology</th><th>verdict</th><th>recommendation</th><th>failed checks per attempt</th>${scoreHead}<th>tokens</th><th>calls</th><th title="Agent-side dry runs before the runner (not a verdict)">dry-run errors found / fixes</th><th>wall (s)</th><th>links</th></tr>
     ${batchRunRows(runs)}</table></div>`;
 }
 

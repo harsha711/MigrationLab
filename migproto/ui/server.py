@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ..memory import query, store
 from .. import scenarios
+from . import tools
 from .review import Busy, ReviewManager, Unavailable
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -175,8 +176,28 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
         value = review.available() if review else {"ok": False, "reason": "controller not available"}
         return {**value, "llm_available": bool(os.environ.get("MIGPROTO_LLM_MODEL"))}
 
+    def run_dir(run_id):
+        if not run_id or not RUN_ID.match(run_id):
+            return None
+        path = (runs_root / run_id).resolve()
+        return path if path.parent == runs_root.resolve() and path.is_dir() else None
+
+    def with_dry_runs(detail):
+        # Agent-side dry-run counts per run row, read from the run directory (never a verdict).
+        for row in (detail or {}).get("runs") or []:
+            path = run_dir(row.get("run_id"))
+            row["dry_run"] = tools.summary(path) if path else None
+        return detail
+
     def api(path, params):
         p = lambda name: (params.get(name) or [None])[0]
+        if path.startswith("/api/runs/") and path.endswith("/tools"):
+            run_id = path.removeprefix("/api/runs/").removesuffix("/tools").rstrip("/")
+            if not RUN_ID.match(run_id or ""):
+                raise KeyError(path)
+            path_ = run_dir(run_id)
+            return {"run_id": run_id, **(tools.run_tools(path_) if path_ else
+                    {"schema_profile": None, "attempts": [], "tool_events": []})}
         if path.startswith("/api/runs/") and path.endswith("/counterpart"):
             run_id = path.removeprefix("/api/runs/").removesuffix("/counterpart").rstrip("/")
             result = counterpart(runs_root, run_id, conn)
@@ -211,7 +232,7 @@ def make_handler(conn, lock, review: ReviewManager | None = None, runs_root=None
             if path == "/api/batches":
                 return {"batches": query.list_batches(runs_root, conn)}
             if path == "/api/batch":
-                return query.batch_detail(runs_root, p("id"), conn)
+                return with_dry_runs(query.batch_detail(runs_root, p("id"), conn))
             if path == "/api/topology-comparison":
                 return query.topology_comparison(runs_root, conn)
             if path == "/api/scenario-activities":
