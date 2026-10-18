@@ -214,6 +214,14 @@ def test_compatibility_checks_use_plain_language_before_the_grid():
     assert ".compat-summary-grid" in css and ".compat-failure-grid" in css
 
 
+def test_compatibility_matrix_does_not_equate_green_paths_with_attempt_success():
+    js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
+    page = js[js.index("async function pageMatrix"):js.index("async function pageAgents")]
+    assert "A green matrix does not override a failed attempt outcome." in page
+    assert "The shown app interactions passed, but another runner check did not" in page
+    assert "Other runner checks" in page
+
+
 def test_run_overview_has_an_evidence_first_revision_story():
     js = (ROOT / "migproto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
     css = (ROOT / "migproto" / "ui" / "static" / "style.css").read_text(encoding="utf-8")
