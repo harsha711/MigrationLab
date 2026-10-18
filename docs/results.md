@@ -108,7 +108,7 @@ check). Traced in Langfuse (environment `brev`).
 
 ## Configuration C: `single` with compacted history
 
-Batch `../hackathon-variant/runs/brev-batch-20261017-211542` (1 worker). Settings are B's plus:
+Batch `runs/brev-batch-20261017-211542` (1 worker). Settings are B's plus:
 - the `single` history compaction `latest-plan-evidence/v1` (`docs/decisions/single-history.md`);
 - the deploy-variant guard (see Disclosures).
 
@@ -132,7 +132,7 @@ The `roles` rename prompts are byte-identical to B's.
 
 ## Configuration D: rename prompt lists the deployable builds
 
-Batch `../hackathon-configd/runs/brev-batch-20261017-213725`. Settings are C's plus the rename
+Batch `runs/brev-batch-20261017-213725`. Settings are C's plus the rename
 contract listing `state_only` (the default) and `apply`, in the same words every other
 scenario's prompt uses (`ebe6f40`). It says what each build does, not which one to pick.
 Rename prompts differ from A-C from here on.
@@ -274,7 +274,7 @@ a PASS with a listed recommendation when a safe plan exists, otherwise a rejecti
 | shorten-note | INCOMPLETE (1,800 s) | reject / staged_rollout | 4 → 4 | 101,541 | no: variant bug |
 | irreversible-data-migration | excluded | | | | run-directory collision |
 
-**Sweep 2** (`../hackathon-variant/runs/brev-batch-20261017-212229`, with the variant guard): it
+**Sweep 2** (`runs/brev-batch-20261017-212229`, with the variant guard): it
 reran the three variant-bug scenarios and added three not yet run.
 
 | Scenario | Runner verdict | Runner / agent rec. | Attempts (failed checks) | Tokens | Matches |
@@ -299,6 +299,8 @@ single observations, not rates.
   combination, and the review ended FAIL as "revision invalid".
 
 ## Disclosures
+
+- **Run locations:** the sweep-2 and configuration D batches ran in the `hackathon-variant` and `hackathon-configd` worktrees; their `runs/` entries were copied unchanged (`cp -a`) into the main checkout's `runs/`, which is where every path in this document points.
 
 - **Prompt content added during development.** None of it states a solution:
   - the runner-contract lines (SQL is sent verbatim; repeated statements must stop matching
