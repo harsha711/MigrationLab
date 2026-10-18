@@ -92,9 +92,38 @@ class ReviewManager:
         return {**self.available(), "current": self.current}
 
     def jobs(self) -> list[dict]:
-        """Known UI jobs, oldest first. Run details remain in the evidence store."""
+        """UI jobs plus persisted requests, oldest first.
+
+        A restart must not hide a finished job's human decision or feedback lineage.
+        """
         with self._guard:
-            return [deepcopy(job) for job in self._jobs.values()]
+            jobs = {run_id: deepcopy(job) for run_id, job in self._jobs.items()}
+        # During this server session the queue is authoritative.  Disk discovery is for a
+        # restarted UI and must not make one manager claim another manager's queued jobs.
+        if jobs:
+            return list(jobs.values())
+        if self.runs_root.is_dir():
+            for path in self.runs_root.iterdir():
+                request_path = path / "request.json"
+                if not path.is_dir() or not RUN_ID.match(path.name) or not request_path.is_file():
+                    continue
+                try:
+                    request = json.loads(request_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                summary_path = path / "summary.json"
+                verdict = None
+                if summary_path.is_file():
+                    try:
+                        verdict = json.loads(summary_path.read_text(encoding="utf-8")).get("verdict")
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                jobs[path.name] = {"run_id": path.name, "mode": request.get("mode"),
+                                   "topology": request.get("agent_topology"),
+                                   "scenario": request.get("scenario"), "request": request,
+                                   "state": "finished" if summary_path.is_file() else "running",
+                                   "verdict": verdict, "error": None}
+        return sorted(jobs.values(), key=lambda job: job["run_id"])
 
     # ---- starting a review ----
 
@@ -117,6 +146,9 @@ class ReviewManager:
             request["budget"] = {**request.get("budget", {}), **budget}
         if request_extra:
             request.update(request_extra)
+        # Validate and normalize at the UI boundary too, so the persisted request is the
+        # v1 object the controller will receive (including its human-assisted source tag).
+        request = request_module.load_review_request(request, mode, topology, scenario)
         with self._guard:
             try:
                 log = factory(f"agent-loop-{mode}", root=self.runs_root)

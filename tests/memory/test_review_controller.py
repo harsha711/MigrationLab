@@ -132,6 +132,25 @@ def test_ui_job_writes_v1_request_and_human_decision(tmp_path):
     assert json.loads((runs / started["run_id"] / "review-decision.json").read_text()) == record
 
 
+def test_ui_child_job_records_human_feedback_and_lineage(tmp_path):
+    from review_fakes import FakeLock, FakeRunLog
+
+    runs = tmp_path / "runs"
+    manager = ReviewManager(store.connect(":memory:"), threading.Lock(), runs_root=runs,
+                            controller=lambda log, source, **kw: {"ok": True, "verdict": "PASS"},
+                            lock_module=FakeLock(),
+                            runlog_factory=lambda command: FakeRunLog(runs, command))
+    parent = manager.start("scripted", "roles", "rename-note")["run_id"]
+    child = manager.start("scripted", "roles", "rename-note", request_extra={
+        "continue_from": {"run_id": parent, "attempt": 1},
+        "human_feedback": [{"kind": "issue", "text": "keep old readers", "author": "Ada",
+                            "at": "2026-10-18T00:00:00Z"}],
+    })["run_id"]
+    request = json.loads((runs / child / "request.json").read_text())
+    assert request["continue_from"]["run_id"] == parent
+    assert request["source_tags"] == ["human-assisted"]
+
+
 def test_ui_queue_runs_every_job_including_after_the_worker_went_idle(tmp_path):
     from review_fakes import FakeLock, FakeRunLog
 

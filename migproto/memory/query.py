@@ -713,6 +713,11 @@ def scenario_activity_overview(conn) -> dict:
             continue
         totals = summary.get("agent_totals") or {}
         meta = _obj(row["meta_json"]) or {}
+        source_tags = ((meta.get("request") or {}).get("source_tags") or [])
+        if "human-assisted" in source_tags:
+            # A human-assisted revision is useful on its own job page, but is not an
+            # independent topology/model measurement for activity comparisons.
+            continue
         calls = _obj(row["model_calls_json"]) or []
         groups.setdefault(scenario, []).append({
             "run_id": row["run_id"], "source_kind": row["source_kind"],

@@ -353,7 +353,8 @@ async function pageJob(runId) {
   const jobs = (await api("/api/jobs")).jobs || [], job = jobs.find((x) => x.run_id === runId);
   const request = job?.request || {};
   setTimeout(() => pollJob(runId, 0), 0);
-  return `<header class="job-head"><span class="eyebrow">REVIEW JOB</span><h1>${esc(runId)}</h1><p>Runner outcomes are evidence. A human decision below is separate and never changes the recorded verdict.</p></header><section class="job-request"><h2>Request</h2><dl><div><dt>Activity</dt><dd>${esc(request.scenario || job?.scenario || "unknown")}</dd></div><div><dt>Mode</dt><dd>${esc(request.mode || job?.mode || "unknown")}</dd></div><div><dt>Topology</dt><dd>${esc(request.agent_topology || job?.topology || "unknown")}</dd></div><div><dt>Budget</dt><dd>${esc(JSON.stringify(request.budget || {}))}</dd></div></dl></section><section class="job-timeline"><header><h2>Attempt timeline</h2><span id="rv-state" class="badge">${esc(job?.state || "running")}</span></header><div id="rv-events" class="timeline-events"></div></section><section id="job-decision" class="job-decision" hidden><span class="eyebrow">HUMAN DECISION</span><h2>Decide what to do with this review</h2><p>This is a recorded human decision, not runner evidence. A PASS covers only the data set, app versions, sequential interleaving, and this machine tested here.</p><textarea id="decision-note" placeholder="Why are you approving or rejecting this review?"></textarea><div><button data-decision="approve" class="primary">Approve review</button><button data-decision="reject">Reject review</button></div><p id="decision-msg"></p></section><details class="job-chat"><summary>Ask evidence about this job</summary><form id="chat-form" data-run-id="${esc(runId)}"><textarea id="chat-question" placeholder="What caused this attempt to fail?"></textarea><button type="submit">Ask evidence →</button></form><div id="chat-result"></div></details>`;
+  const lineage = request.continue_from ? `<p class="notice">Human-assisted revision of <a href="#/jobs/${enc(request.continue_from.run_id)}">${esc(request.continue_from.run_id)}</a>, using attempt ${esc(request.continue_from.attempt)}. Human feedback is unverified input; runner evidence remains separate.</p>` : "";
+  return `<header class="job-head"><span class="eyebrow">${request.source_tags?.includes("human-assisted") ? "HUMAN-ASSISTED REVIEW" : "REVIEW JOB"}</span><h1>${esc(runId)}</h1><p>Runner outcomes are evidence. A human decision below is separate and never changes the recorded verdict.</p></header>${lineage}<section class="job-request"><h2>Request</h2><dl><div><dt>Activity</dt><dd>${esc(request.scenario || job?.scenario || "unknown")}</dd></div><div><dt>Mode</dt><dd>${esc(request.mode || job?.mode || "unknown")}</dd></div><div><dt>Topology</dt><dd>${esc(request.agent_topology || job?.topology || "unknown")}</dd></div><div><dt>Budget</dt><dd>${esc(JSON.stringify(request.budget || {}))}</dd></div></dl></section><section class="job-timeline"><header><h2>Attempt timeline</h2><span id="rv-state" class="badge">${esc(job?.state || "running")}</span></header><div id="rv-events" class="timeline-events"></div></section><section id="job-revise" class="job-decision" hidden><span class="eyebrow">HUMAN-ASSISTED REVISION</span><h2>Revise with feedback</h2><p>Feedback is sent to an LLM planner as unverified input. The runner still decides the outcome. Scripted mode ignores feedback.</p><label>Base attempt<select id="feedback-attempt"></select></label><label>Issue<textarea id="feedback-issue" placeholder="A concrete concern to address"></textarea></label><label>Suggestion<textarea id="feedback-suggestion" placeholder="An optional revision suggestion"></textarea></label><label>Test request<textarea id="feedback-test" placeholder="An interaction the tester should consider"></textarea></label><button id="feedback-start" class="primary">Submit revision job →</button><p id="feedback-msg"></p></section><section id="job-decision" class="job-decision" hidden><span class="eyebrow">HUMAN DECISION</span><h2>Decide what to do with this review</h2><p>This is a recorded human decision, not runner evidence. A PASS covers only the data set, app versions, sequential interleaving, and this machine tested here.</p><textarea id="decision-note" placeholder="Why are you approving or rejecting this review?"></textarea><div><button data-decision="approve" class="primary">Approve review</button><button data-decision="reject">Reject review</button></div><p id="decision-msg"></p></section><details class="job-chat"><summary>Ask evidence about this job</summary><form id="chat-form" data-run-id="${esc(runId)}"><textarea id="chat-question" placeholder="What caused this attempt to fail?"></textarea><button type="submit">Ask evidence →</button></form><div id="chat-result"></div></details>`;
 }
 
 async function pollJob(runId, after) {
@@ -369,6 +370,26 @@ async function pollJob(runId, after) {
   const detail = await getRun(runId).catch(() => null), verdict = detail?.meta?.verdict || "finished";
   $("#rv-state").outerHTML = `${verdictBadge(verdict)} <a href="#/run/${enc(runId)}">Open complete evidence</a>`;
   $("#job-decision").hidden = false;
+  const revise = $("#job-revise");
+  if (revise) {
+    const attempts = detail?.attempts || [];
+    const best = [...attempts].sort((a, b) => (a.checks_failed || 0) - (b.checks_failed || 0))[0];
+    $("#feedback-attempt").innerHTML = attempts.map((a) => `<option value="${esc(String(a.attempt).replace(/^a/, ""))}" ${a === best ? "selected" : ""}>Attempt ${esc(a.attempt)} · ${esc(a.status || "recorded")}</option>`).join("");
+    revise.hidden = !attempts.length;
+  }
+}
+
+async function startFeedbackRevision() {
+  const runId = routeParts()[1], msg = $("#feedback-msg");
+  const fields = [["issue", "#feedback-issue"], ["suggestion", "#feedback-suggestion"], ["test", "#feedback-test"]];
+  const human_feedback = fields.map(([kind, selector]) => ({kind, text: $(selector).value.trim(), author: "UI reviewer", at: new Date().toISOString()})).filter((item) => item.text);
+  if (!human_feedback.length) { msg.textContent = "Add at least one feedback item."; return; }
+  msg.textContent = "Submitting revision…";
+  const jobs = (await api("/api/jobs")).jobs || [], parent = jobs.find((job) => job.run_id === runId);
+  const response = await fetch("/api/review", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode: parent?.mode || "llm", topology: parent?.topology || "roles", scenario: parent?.scenario || "rename-note", continue_from: {run_id: runId, attempt: Number($("#feedback-attempt").value)}, human_feedback})});
+  const body = await response.json();
+  if (response.status === 202) { location.hash = `#/jobs/${enc(body.run_id)}`; return; }
+  msg.textContent = body.error || "Could not submit revision.";
 }
 
 async function submitDecision(decision) {
@@ -1059,6 +1080,7 @@ document.addEventListener("click", (ev) => {
   const obs = ev.target.closest("[data-obs]");
   if (obs) { openEvidence(obs.dataset.obs); return; }
   if (ev.target.id === "rv-start") { ev.preventDefault(); startReview(); return; }
+  if (ev.target.id === "feedback-start") { ev.preventDefault(); startFeedbackRevision(); return; }
   const decision = ev.target.closest("[data-decision]");
   if (decision) { submitDecision(decision.dataset.decision); return; }
   if (ev.target.closest("#drawer-close") || ev.target.id === "drawer-backdrop") { closeDrawer(); return; }
