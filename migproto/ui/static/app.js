@@ -14,12 +14,17 @@ const state = { replayTimer: null, batchPoll: null, replayStep: 0, replaySpeed: 
 
 async function api(path) {
   const r = await fetch(path);
-  if (!r.ok) throw new Error(`${path}: ${r.status}`);
+  if (!r.ok) {
+    const err = new Error(r.status === 404 ? "not found in the evidence store" : `${path}: ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   return r.json();
 }
 const runCache = new Map();
 const getRun = (id) => {
-  if (!runCache.has(id)) runCache.set(id, api(`/api/run?id=${enc(id)}`));
+  // A failed load is not cached, so a run ingested later opens on the next visit.
+  if (!runCache.has(id)) runCache.set(id, api(`/api/run?id=${enc(id)}`).catch((err) => { runCache.delete(id); throw err; }));
   return runCache.get(id);
 };
 const counterpartFor = (id) => api(`/api/runs/${enc(id)}/counterpart`);
@@ -829,12 +834,13 @@ function inProgressTable(b) {
   const table = (list) => `<div class="card table-wrap"><table class="batch-runs">
     <tr><th>#</th><th>scenario</th><th>topology</th><th>worker</th><th>started (supervisor clock)</th><th>status</th></tr>${rows(list)}</table></div>`;
   return `${running.length ? `<h2>Running now</h2><p class="muted">Started in supervisor.log, no runs.jsonl row yet. No verdict exists until the run finishes; these are not counted.</p>${table(running)}` : ""}
-    ${lost.length ? `<h2>Started without a result</h2><p class="muted">supervisor.log says these started and the batch logged DONE, but runs.jsonl has no readable row for them.</p>${table(lost)}` : ""}`;
+    ${lost.length ? `<h2>Started without a result</h2><p class="muted">supervisor.log says these started and the batch ${b.status === "stopped" ? "stopped without logging DONE" : "logged DONE"}, but runs.jsonl has no readable row for them.</p>${table(lost)}` : ""}`;
 }
 
 function batchStatusBadge(b) {
   if (b.status === "running") return `<span class="badge running" title="supervisor.log has no DONE line yet; last line ${esc(b.log_last_line_at || "?")}">running${b.planned_runs ? ` · ${b.run_count} of ${b.planned_runs} recorded` : ""}${b.running_count ? ` · ${b.running_count} in progress` : ""}</span>`;
   if (b.status === "finished") return `<span class="badge">finished (DONE logged)</span>`;
+  if (b.status === "stopped") return `<span class="badge warn" title="no DONE line, and supervisor.log unchanged for ${esc(duration(b.log_age_seconds))}">stopped without DONE${b.planned_runs ? ` · ${b.run_count} of ${b.planned_runs} recorded` : ""}</span>`;
   return `<span class="badge">${unknown("no supervisor.log")}</span>`;
 }
 
@@ -911,6 +917,7 @@ function batchPurpose(b) {
   const topologies = [...new Set((b.counts || []).map((c) => c.topology).filter(Boolean))];
   const scope = `${scenarios.length ? scenarios.join(", ") : "the recorded migration activity"}${topologies.length ? ` using ${topologies.join(" and ")}` : ""}`;
   if (b.status === "running") return `This experiment is still collecting reviews for ${scope}. Recorded outcomes below are incomplete; no comparison conclusion should be drawn yet.`;
+  if (b.status === "stopped") return `This experiment stopped before it finished (no DONE line; read its INFRA-NOTE). It recorded ${b.model_result_count} review${b.model_result_count === 1 ? "" : "s"} for ${scope}; use only what its pre-registered rule allows.`;
   return `This finished experiment recorded ${b.model_result_count} review${b.model_result_count === 1 ? "" : "s"} for ${scope}. Open an individual review to see its plan and runner evidence.`;
 }
 
@@ -924,6 +931,7 @@ function batchOutcomeCards(b) {
 }
 
 function batchTakeaway(b) {
+  if (b.status === "stopped") return "The batch stopped early. Interpret it only as its INFRA-NOTE and pre-registered rule allow.";
   if (b.status !== "finished") return "Wait for the supervisor to record DONE before interpreting the batch.";
   if (!b.model_result_count) return "The supervisor finished without a readable model result.";
   if (b.running_count) return "Some records are still in progress; treat the displayed results as partial.";
@@ -1099,7 +1107,7 @@ function openTour() {
 function closeTour() {
   const tour = $("#welcome-tour");
   tour.classList.remove("open");
-  localStorage.setItem("migrationlab-tour-seen", "1");
+  try { localStorage.setItem("migrationlab-tour-seen", "1"); } catch (e) { /* storage blocked */ }
   setTimeout(() => { tour.hidden = true; }, 220);
 }
 
@@ -1202,13 +1210,18 @@ async function route() {
     else if (parts[0] === "review" && parts.length === 1) html = await pageReview();
     else if (parts[0] === "jobs" && parts.length === 1) html = await pageJobs();
     else if (parts[0] === "jobs" && parts.length === 2) html = await pageJob(parts[1]);
+    else if (parts[0] === "compare") html = `<div class="card"><p>Choose two recorded reviews to compare: tick them in <a href="#/">Browse runs</a> and press <b>Compare selected</b>, or open <a href="#/topologies">Compare approaches</a>.</p></div>`;
     else html = `<p>Page not found. <a href="#/">Back to runs</a></p>`;
     view.innerHTML = html;
     window.scrollTo(0, 0);
     scheduleBatchPoll();
-    if (parts[0] === "workspace" && !localStorage.getItem("migrationlab-tour-seen")) requestAnimationFrame(openTour);
+    let tourSeen = true;
+    try { tourSeen = !!localStorage.getItem("migrationlab-tour-seen"); } catch (e) { /* storage blocked */ }
+    if (parts[0] === "workspace" && !tourSeen) requestAnimationFrame(openTour);
   } catch (err) {
-    view.innerHTML = `<div class="card">Failed to load: ${esc(err.message)}</div>`;
+    view.innerHTML = err.status === 404
+      ? `<div class="card"><p><b>${esc(parts[1] || parts.join("/"))}</b> is not in the evidence store. A run appears once its directory has a summary.json; reload after it finishes, or <a href="#/">browse recorded runs</a>.</p></div>`
+      : `<div class="card">Failed to load: ${esc(err.message)}</div>`;
   }
 }
 
@@ -1259,7 +1272,7 @@ document.addEventListener("click", (ev) => {
   if (ev.target.closest("#theme-toggle")) {
     const root = document.documentElement;
     root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light";
-    localStorage.setItem("migrationlab-theme", root.dataset.theme);
+    try { localStorage.setItem("migrationlab-theme", root.dataset.theme); } catch (e) { /* storage blocked */ }
     syncThemeToggle(); return;
   }
   if (ev.target.closest("a, input, button, summary")) return;
@@ -1337,6 +1350,6 @@ function syncThemeToggle() {
   button.setAttribute("aria-label", dark ? "Use light theme" : "Use dark theme");
   button.title = dark ? "Use light theme" : "Use dark theme";
 }
-document.documentElement.dataset.theme = localStorage.getItem("migrationlab-theme") || "light";
+document.documentElement.dataset.theme = (() => { try { return localStorage.getItem("migrationlab-theme"); } catch (e) { return null; } })() || "light";
 syncThemeToggle();
 route();

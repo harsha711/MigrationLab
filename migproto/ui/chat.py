@@ -393,11 +393,21 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
                 final_problems.append("contract preconditions")
             if final_problems:
                 explanation += " The final revision still failed " + ", ".join(final_problems) + "."
-        if any(a.get("halted") and "contract stage" in a["halted"] for a in attempts):
-            explanation += " Because those earlier checks were still failing, the runner did not allow the contract stage to execute."
+        # Name the attempts the runner halted: a skip in attempt 1 says nothing about a final
+        # attempt that ran its contract stage.
+        skipped = [a for a in attempts if a.get("halted") and "contract stage" in a["halted"]]
+        if skipped:
+            labels = ("attempts " if len(skipped) > 1 else "attempt ") + ", ".join(
+                str(a.get("attempt") or a.get("attempt_id") or "?") for a in skipped)
+            if skipped[-1] is attempts[-1]:
+                explanation += (f" In {labels}, earlier checks were still failing, so the "
+                                "runner did not allow the contract stage to execute.")
+            else:
+                explanation += (f" In {labels}, earlier check failures meant the runner "
+                                "skipped the contract stage; the final attempt was not halted.")
         recommendation = (run.get("summary") or {}).get("runner_recommendation")
         if recommendation:
-            explanation += f" The recorded runner recommendation was therefore {recommendation}."
+            explanation += f" The recorded runner recommendation was {recommendation}."
         parts.append(explanation)
     recent = facts.get("recent_run")
     if recent:

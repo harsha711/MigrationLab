@@ -192,3 +192,18 @@ def test_chat_ui_has_clickable_question_suggestions():
     assert 'closest("[data-chat-question]")' in js
     assert "question.value = button.dataset.chatQuestion" in js
     assert "requestSubmit" in js
+
+
+def test_contract_skip_is_attributed_to_its_attempt_not_the_final_pass():
+    run = {"run_id": "r1", "results": {"verdict": "PASS"},
+           "summary": {"runner_recommendation": "staged_rollout"},
+           "attempts": [{"attempt": 1, "checks_failed": 9, "failed": ["case.old_write_new_read"],
+                         "halted": "contract stage contract skipped: 8 earlier check failures"},
+                        {"attempt": 2, "checks_failed": 0, "failed": [], "halted": None}]}
+    text, _ = chat.facts_answer({"question": "why did attempt 1 fail?", "runs": [run]})
+    assert "In attempt 1, earlier check failures meant the runner skipped the contract stage" in text
+    assert "final attempt was not halted" in text and "therefore" not in text
+    run["attempts"][1].update(checks_failed=2, halted="contract stage contract skipped: 2 earlier")
+    run["results"]["verdict"] = "FAIL"
+    text, _ = chat.facts_answer({"question": "why?", "runs": [run]})
+    assert "In attempts 1, 2, earlier checks were still failing" in text

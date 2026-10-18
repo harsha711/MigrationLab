@@ -167,6 +167,39 @@ def test_batch_is_finished_only_with_a_done_line(tmp_path):
     assert query.batch_detail(tmp_path, batch.name)["status"] == "finished"
 
 
+
+def _remote_batch(tmp_path, log_age_seconds, now):
+    """A batch whose supervisor logged in UTC, 4 h ahead of the local clock, never wrote DONE."""
+    import os
+    batch = tmp_path / "brev-batch-20260101-080000"
+    batch.mkdir()
+    (batch / "runs.jsonl").write_text(json.dumps({"n": 1, "run_id": "r1", "verdict": "PASS"}) + "\n")
+    (batch / "supervisor.log").write_text(
+        "12:00:01 RUN   1/3 roles starting (~$1.00)\n"
+        "12:05:00 RUN   1/3 roles PASS run=r1 299 s (~$1.10)\n"
+        "12:05:00 RUN   2/3 single starting on worker 2 (~$1.10)\n")
+    mtime = now.timestamp() - log_age_seconds
+    os.utime(batch / "supervisor.log", (mtime, mtime))
+    return batch
+
+
+def test_quiet_batch_without_done_is_stopped_not_running(tmp_path):
+    now = datetime(2026, 1, 1, 10, 0, 0)  # local clock; the log says 12:05 (UTC)
+    batch = _remote_batch(tmp_path, 2 * 3600, now)
+    b = query.batch_detail(tmp_path, batch.name, now=now)
+    assert b["status"] == "stopped" and b["running_count"] == 0
+    assert b["log_age_seconds"] == 7200
+    assert [(r["n"], r["status"], r["elapsed_seconds"]) for r in b["in_progress"]] == [
+        (2, "no_result", None)]
+
+
+def test_running_batch_on_a_clock_ahead_measures_elapsed_on_the_log_clock(tmp_path):
+    now = datetime(2026, 1, 1, 8, 15, 0)
+    batch = _remote_batch(tmp_path, 600, now)  # written 10 min ago, log clock 4 h ahead
+    b = query.batch_detail(tmp_path, batch.name, now=now)
+    assert b["status"] == "running" and b["running_count"] == 1
+    assert b["in_progress"][0]["elapsed_seconds"] == 600
+
 def test_supervisor_progress_old_format_and_missing_date(tmp_path):
     (tmp_path / "supervisor.log").write_text(
         "18:21:22 RUN   1/2 roles starting (~$2.07)\n"

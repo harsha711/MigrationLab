@@ -917,3 +917,8 @@ kbd { padding: 2px 5px; border: 1px solid var(--border); border-bottom-width: 2p
 .sql-diff .del { text-decoration: line-through; opacity: 0.7; }
 .timeline-events .tool-event strong { font-style: italic; }
 .dry-run-cell { white-space: nowrap; }
+
+/* Phone width: keep absolutely positioned table labels inside their scroll container, and let
+   the top nav strip scroll instead of widening the page. */
+.table-wrap { position: relative; }
+@media (max-width: 680px) { .side-nav { min-width: 0; overflow-x: auto; } }

@@ -20,6 +20,9 @@ from pathlib import Path
 APP_ORDER = ["old", "new-staged", "new-unsafe"]
 BATCH_PREFIX = "brev-batch-"
 BATCH_VERDICTS = ("PASS", "FAIL", "INCOMPLETE", "ERROR")
+# A batch without DONE whose supervisor.log has not changed for this long is "stopped"
+# (cancelled or killed), not running. Reviews log a line at least every ~20 min.
+STALE_LOG_SECONDS = 45 * 60
 # Answer labels for scoring finished batches in the UI. Evaluation side only: nothing an agent
 # calls (memory.retrieval, the controller) may use expected_target or this path.
 EXPECTED_VERDICTS = Path(__file__).resolve().parents[2] / "proposals" / "manual" / "scenarios"
@@ -439,6 +442,14 @@ def supervisor_progress(path: Path, batch_date: str | None = None) -> dict | Non
     return {"finished": done, "started": started, "planned": planned, "last_line_at": last}
 
 
+def _log_age(path: Path, now: datetime) -> int | None:
+    """Seconds since supervisor.log was last written, on the local clock (mtime vs now)."""
+    try:
+        return max(0, round(now.timestamp() - (path / "supervisor.log").stat().st_mtime))
+    except OSError:
+        return None
+
+
 def _iso(at):
     return at.isoformat(timespec="seconds") if at else None
 
@@ -498,23 +509,30 @@ def _stored_run_ids(conn) -> set[str]:
     return {r[0] for r in conn.execute("SELECT run_id FROM runs")} if conn is not None else set()
 
 
-def _in_progress(progress: dict | None, runs: list[dict], now: datetime) -> list[dict]:
+def _in_progress(progress: dict | None, runs: list[dict], now: datetime,
+                 stopped: bool = False, age: int | None = None) -> list[dict]:
     """Runs the log says started but runs.jsonl has no row for.
 
-    "running" while the batch has no DONE line; after DONE they are "no_result" (the
-    supervisor ended without recording them).
+    "running" while the batch has no DONE line and is not stopped; otherwise "no_result"
+    (the supervisor ended without recording them).
     """
     if not progress:
         return []
     recorded = {r["n"] for r in runs if isinstance(r["n"], int)}
+    ended = progress["finished"] or stopped
+    # A remote supervisor logs in its own clock (Brev: UTC). When the log is ahead of the
+    # local clock, measure elapsed time on the log clock: last line + file age.
+    last = progress["last_line_at"]
+    if last is not None and age is not None and last > now + timedelta(minutes=1):
+        now = last + timedelta(seconds=age)
     out = []
     for n, s in sorted(progress["started"].items()):
         if n in recorded:
             continue
         at = s["started_at"]
         out.append({**s, "started_at": _iso(at),
-                    "status": "no_result" if progress["finished"] else "running",
-                    "elapsed_seconds": None if progress["finished"] or at is None
+                    "status": "no_result" if ended else "running",
+                    "elapsed_seconds": None if ended or at is None
                     else max(0, round((now - at).total_seconds()))})
     return out
 
@@ -553,7 +571,9 @@ def _batch(path: Path, runs_root: Path, stored: set[str], now: datetime,
                    for r in records),
                   key=lambda r: (r["n"] if isinstance(r["n"], int) else 10 ** 6, r["run_id"] or ""))
     progress = supervisor_progress(path, date)
-    in_progress = _in_progress(progress, runs, now)
+    age = _log_age(path, now) if progress else None
+    stopped = bool(progress and not progress["finished"] and (age or 0) > STALE_LOG_SECONDS)
+    in_progress = _in_progress(progress, runs, now, stopped, age)
     cells = {}
     for r in runs:
         if r["infrastructure_failure"]:
@@ -573,9 +593,12 @@ def _batch(path: Path, runs_root: Path, stored: set[str], now: datetime,
                                                    c["topology"] or ""))
     return {
         "batch_id": batch_id,
-        # "finished" only on a DONE line; "unknown" without supervisor.log.
+        # "finished" only on a DONE line; "stopped" when supervisor.log went quiet without
+        # DONE (cancelled or killed); "unknown" without supervisor.log.
         "status": ("unknown" if progress is None
-                   else "finished" if progress["finished"] else "running"),
+                   else "finished" if progress["finished"]
+                   else "stopped" if stopped else "running"),
+        "log_age_seconds": age,
         "planned_runs": progress["planned"] if progress else None,
         "log_last_line_at": _iso(progress["last_line_at"]) if progress else None,
         "checked_at": _iso(now),
