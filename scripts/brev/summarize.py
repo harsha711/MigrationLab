@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def row(rec: dict) -> tuple[str, str]:
     run_dir = ROOT / "runs" / (rec.get("run_id") or "")
     if not rec.get("run_id") or not (run_dir / "summary.json").is_file():
-        return rec["topology"], (f"| (no run dir) | {rec['topology']} | main scenario | - | - | - "
+        return rec["topology"], (f"| (no run dir) | {rec['topology']} | {rec.get('scenario', 'rename-note')} | - | - | - "
                                  f"| {rec.get('seconds')} s | - | {rec.get('verdict')} |")
     s = json.loads((run_dir / "summary.json").read_text())
     t = s.get("agent_totals") or {}
@@ -33,7 +33,7 @@ def row(rec: dict) -> tuple[str, str]:
     if t.get("exhausted_reason"):
         verdict += f" ({t['exhausted_reason']})"
     return s.get("topology") or rec["topology"], (
-        f"| `{run_dir.name}` | {s.get('topology')} | main scenario "
+        f"| `{run_dir.name}` | {s.get('topology')} | {rec.get('scenario', 'rename-note')} "
         f"| {t.get('valid_proposals')} / {calls} | {t.get('total_tokens')} | {latency} "
         f"| {t.get('wall_seconds', s.get('elapsed_s'))} s | {attempts} | {verdict} |")
 
@@ -43,7 +43,7 @@ def main(dirs):
     for d in dirs:
         p = Path(d) / "runs.jsonl"
         recs += [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
-    print("| Run | Topology | Task | Valid proposals / calls | Tokens | Model latency "
+    print("| Run | Topology | Scenario | Valid proposals / calls | Tokens | Model latency "
           "| Review time | Attempts | Runner verdict |")
     print("|---|---|---|---|---|---|---|---|---|")
     counts: dict = {}

@@ -59,6 +59,13 @@ class Supervisor:
         self.env = dict(os.environ)
         self.env.pop("UV_PROJECT_ENVIRONMENT", None)  # AGENTS.md: never leak into uv run
         self.env["MIGPROTO_LLM_BASE_URL"] = args.local_url or f"http://localhost:{args.port}/v1"
+        if args.env_file:  # e.g. Langfuse keys; values are never logged
+            for line in Path(args.env_file).read_text().splitlines():
+                m = re.match(r"\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$", line)
+                if m:
+                    self.env[m.group(1)] = m.group(2).strip().strip("'\"")
+        if self.env.get("LANGFUSE_PUBLIC_KEY"):
+            self.env.setdefault("LANGFUSE_TRACING_ENVIRONMENT", "brev")
         self.env.setdefault("MIGPROTO_LLM_API_KEY", "unused")
         if args.instance_type:
             self.env["MIGPROTO_BREV_INSTANCE"] = args.instance_type
@@ -200,16 +207,19 @@ class Supervisor:
 
     # ---- batch ----
 
-    def write_request(self) -> Path:
+    def write_request(self, scenario: str) -> Path:
         sys.path.insert(0, str(ROOT))
         from migproto.agents.request import DEFAULT_REQUEST
         request = json.loads(json.dumps(DEFAULT_REQUEST))
-        request["request_id"] = f"brev-batch-{self.dir.name[len('brev-batch-'):]}"
+        request["request_id"] = f"brev-batch-{self.dir.name[len('brev-batch-'):]}-{scenario}"
+        request["scenario"] = scenario
+        if scenario != "rename-note":
+            request.pop("change", None)  # filled from the scenario registry
         request["budget"] = {"max_revisions": self.a.max_revisions,
                              "max_model_calls": self.a.max_calls,
                              "max_total_tokens": self.a.max_tokens,
                              "max_wall_seconds": self.a.max_wall}
-        path = self.dir / "request.json"
+        path = self.dir / f"request-{scenario}.json"
         path.write_text(json.dumps(request, indent=2) + "\n")
         self.log("INFO", f"request {path.name}: budget {request['budget']}")
         return path
@@ -223,8 +233,8 @@ class Supervisor:
                        MIGPROTO_CACHE_URL=f"redis://127.0.0.1:56379/{w}")
         return env
 
-    def run_one(self, n, topology, request, w=0) -> dict:
-        out = self.dir / f"{n:02d}-{topology}.out"
+    def run_one(self, n, scenario, topology, request, w=0) -> dict:
+        out = self.dir / f"{n:02d}-{scenario}-{topology}.out"
         t0 = time.monotonic()
         cmd = ["uv", "run", "migproto", "agent-loop", "--proposals", self.a.proposals,
                "--topology", topology, "--request", str(request)]
@@ -234,7 +244,8 @@ class Supervisor:
         text = out.read_text()
         m = re.findall(r"summary\s+(\S+)\s+-> (\S+)", text)
         verdict, run_dir = m[-1] if m else ("UNKNOWN", None)
-        rec = {"n": n, "worker": w, "workers": self.a.workers, "topology": topology,
+        rec = {"n": n, "worker": w, "workers": self.a.workers, "scenario": scenario,
+               "topology": topology,
                "verdict": verdict, "exit": code,
                "run_id": Path(run_dir).name if run_dir else None,
                "seconds": round(time.monotonic() - t0, 1), "spend_usd": self.spend()}
@@ -269,8 +280,9 @@ class Supervisor:
         return False
 
     def batch(self):
-        request = self.write_request()
-        order = list(enumerate((t for _ in range(self.a.runs) for t in self.a.topologies), 1))
+        requests_by_scenario = {sc: self.write_request(sc) for sc in self.a.scenarios}
+        order = list(enumerate(((sc, t) for _ in range(self.a.runs) for sc in self.a.scenarios
+                                for t in self.a.topologies), 1))
         total, results = len(order), []
         queue_lock, self.record_lock = threading.Lock(), threading.Lock()
         state = {"stop": False, "last_launch": 0.0}
@@ -286,13 +298,13 @@ class Supervisor:
                     # RunLog names run dirs by the second: space launches apart.
                     time.sleep(max(0.0, state["last_launch"] + 3 - time.monotonic()))
                     state["last_launch"] = time.monotonic()
-                    n, topology = order.pop(0)
-                    self.log("RUN", f"{n}/{total} {topology} starting on worker {w} "
+                    n, (scenario, topology) = order.pop(0)
+                    self.log("RUN", f"{n}/{total} {scenario} {topology} starting on worker {w} "
                              f"(~${self.spend()})")
-                rec = self.run_one(n, topology, request, w)
+                rec = self.run_one(n, scenario, topology, requests_by_scenario[scenario], w)
                 with queue_lock:
                     results.append(rec)
-                self.log("RUN", f"{n}/{total} {topology} {rec['verdict']} run={rec['run_id']} "
+                self.log("RUN", f"{n}/{total} {scenario} {topology} {rec['verdict']} run={rec['run_id']} "
                          f"{rec['seconds']} s, calls={rec.get('model_calls')} "
                          f"tokens={rec.get('total_tokens')} "
                          f"stopped={rec.get('exhausted_reason')} (~${rec['spend_usd']})")
@@ -369,6 +381,10 @@ def parse(argv=None):
     p.add_argument("--first-worker", type=int, default=0,
                    help="index of the first worker (worker 0 = runner defaults)")
     p.add_argument("--topologies", default="roles,single")
+    p.add_argument("--scenarios", default="rename-note",
+                   help="comma-separated scenario ids (migproto/scenarios.py)")
+    p.add_argument("--env-file", help="KEY=VALUE file loaded into the review environment "
+                                      "(e.g. .env with LANGFUSE_* keys)")
     p.add_argument("--proposals", choices=["llm", "scripted"], default="llm")
     p.add_argument("--max-revisions", type=int, default=1)
     p.add_argument("--max-calls", type=int, default=10)
@@ -382,6 +398,7 @@ def parse(argv=None):
     p.add_argument("--model", help="override MIGPROTO_LLM_MODEL (dry runs)")
     a = p.parse_args(argv)
     a.topologies = [t for t in a.topologies.split(",") if t]
+    a.scenarios = [s for s in a.scenarios.split(",") if s]
     if not a.local_url and not a.instance:
         p.error("--instance is required unless --local-url is given")
     return a
