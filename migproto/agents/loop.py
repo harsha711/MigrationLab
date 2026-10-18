@@ -224,6 +224,9 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           request_id=review.get("request_id"),
                           history_compaction=config["history_compaction"])
         log.write_json("agents/review-request.json", review)
+        # Human feedback is input to agents, never a runner observation or a verdict.
+        for index, item in enumerate(review.get("human_feedback", [])):
+            log.event("human_feedback", provenance="human", index=index, **item)
 
         # The scenario's OLD app version is the code under review (deployed before the
         # change); never a new-version or state-only build.

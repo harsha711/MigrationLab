@@ -98,6 +98,21 @@ def load_review_request(value: str | Path | dict | None, source: str,
     request["mode"] = source
     request["agent_topology"] = chosen
     request.setdefault("budget", {})
+    feedback = request.get("human_feedback", [])
+    if not isinstance(feedback, list) or any(
+            not isinstance(item, dict) or item.get("kind") not in {"issue", "suggestion", "test"}
+            or not isinstance(item.get("text"), str) or not item["text"].strip()
+            or not isinstance(item.get("author"), str) or not isinstance(item.get("at"), str)
+            for item in feedback):
+        raise ValueError("human_feedback must contain kind, text, author and at")
+    if feedback:
+        request["source_tags"] = sorted(set(request.get("source_tags", [])) | {"human-assisted"})
+    continuation = request.get("continue_from")
+    if continuation is not None and (not isinstance(continuation, dict)
+                                     or not isinstance(continuation.get("run_id"), str)
+                                     or not isinstance(continuation.get("attempt"), int)
+                                     or continuation["attempt"] < 1):
+        raise ValueError("continue_from must contain run_id and a positive attempt")
     return request
 
 

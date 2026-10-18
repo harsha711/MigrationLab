@@ -60,6 +60,13 @@ def test_request_may_not_contradict_its_scenario():
         load_review_request(None, "llm", scenario="no-such-scenario")
 
 
+def test_human_feedback_is_marked_as_human_assisted():
+    raw = {"scenario": "rename-note", "change": {"description": "x"},
+           "human_feedback": [{"kind": "issue", "text": "keep old readers",
+                               "author": "reviewer", "at": "2026-10-18T00:00:00Z"}]}
+    assert load_review_request(raw, "llm")["source_tags"] == ["human-assisted"]
+
+
 def test_rename_scenario_text_is_unchanged():
     from migproto.agents.request import scenario_text
     text = scenario_text(load_review_request(None, "llm"))
