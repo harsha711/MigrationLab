@@ -87,6 +87,12 @@ def test_recent_run_resolves_from_latest_batch(conn, tmp_path):
     assert "Batch " not in result["answer"]
 
 
+def test_facts_answer_explains_cause_not_just_counts(conn, tmp_path):
+    result = chat.answer("why did scripted-sync-failure fail?", conn, tmp_path)
+    assert "underlying problem" in result["answer"]
+    assert "cross-version" in result["answer"]
+
+
 class BrokenLLM:
     model = "broken"
     base_url = "http://broken"

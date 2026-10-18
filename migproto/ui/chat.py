@@ -66,12 +66,18 @@ def _compact_run(detail: dict | None) -> dict | None:
                        ("verdict", "elapsed_s", "model", "base_url", "model_call_count",
                         "model_seconds", "prompt_tokens", "completion_tokens", "total_tokens",
                         "budget", "budget_remaining", "topology", "reason")}
+    summary = detail.get("summary") or {}
+    summary_attempts = {f"a{a.get('attempt')}": a for a in summary.get("attempts", [])
+                        if isinstance(a, dict) and a.get("attempt") is not None}
     return {
         "run_id": detail["run_id"], "source_kind": detail.get("source_kind"),
-        "summary": detail.get("summary"), "results": compact_results,
+        "summary": summary, "results": compact_results,
         "attempts": [{k: a.get(k) for k in ("attempt_id", "attempt", "status", "ok",
                                               "failed", "checks_total", "checks_failed",
-                                              "outcome_counts")}
+                                              "outcome_counts")} |
+                     {"halted": (summary_attempts.get(a.get("attempt")) or {}).get("halted"),
+                      "runner_recommendation":
+                          (summary_attempts.get(a.get("attempt")) or {}).get("runner_recommendation")}
                      for a in detail.get("attempts", [])],
     }
 
@@ -260,17 +266,53 @@ def facts_answer(facts: dict) -> tuple[str, list[str]]:
         attempts = run.get("attempts") or []
         failed = [str(a.get("checks_failed", 0)) for a in attempts]
         failed_names = []
+        failed_sets = []
         for attempt in attempts:
+            this_attempt = set()
             for item in attempt.get("failed") or []:
                 name = item.get("name") if isinstance(item, dict) else item
                 if isinstance(name, str) and name not in failed_names:
                     failed_names.append(name)
-        parts.append(f"Run {rid} recorded verdict {results.get('verdict') or 'not recorded'}"
-                     + (f"; failed checks by attempt: {' → '.join(failed)}" if failed else "")
-                     + (f"; recorded failures included {', '.join(failed_names[:5])}"
-                        if failed_names else "")
-                     + (f"; {results.get('total_tokens')} tokens" if results.get("total_tokens") is not None else "")
-                     + (f"; stop reason: {results.get('reason')}" if results.get("reason") else "") + ".")
+                if isinstance(name, str):
+                    this_attempt.add(name)
+            if this_attempt:
+                failed_sets.append(this_attempt)
+        persistent = set.intersection(*failed_sets) if failed_sets else set()
+        verdict = results.get("verdict") or "not recorded"
+        reason = results.get("reason")
+        if verdict == "INCOMPLETE" and reason:
+            explanation = (f"Run {rid} did not reach a completed verdict because {reason}. "
+                           f"That was the immediate reason it stopped after {len(attempts)} "
+                           f"unsuccessful attempts")
+        else:
+            explanation = (f"Run {rid} ended with runner verdict {verdict} after "
+                           f"{len(attempts)} attempt{'s' if len(attempts) != 1 else ''}")
+        if failed:
+            explanation += f" ({' → '.join(failed)} failed checks)"
+        explanation += "."
+        if persistent:
+            cross_version = sum(name.startswith("case.") for name in persistent)
+            columns = any(name.endswith("columns_agree") for name in persistent)
+            preservation = sum(".preservation." in name for name in persistent)
+            preconditions = any(name.endswith(".preconditions") for name in persistent)
+            problems = []
+            if cross_version:
+                problems.append(f"{cross_version} old/new cross-version read, write, create, or clear checks")
+            if columns:
+                problems.append("the mandatory column-agreement check")
+            if preservation:
+                problems.append(f"{preservation} data-preservation checks")
+            if preconditions:
+                problems.append("the contract-stage preconditions")
+            if problems:
+                explanation += (" The underlying problem was persistent, not a one-off timeout: "
+                                + ", ".join(problems) + " failed on every attempt.")
+        if any(a.get("halted") and "contract stage" in a["halted"] for a in attempts):
+            explanation += " Because those earlier checks were still failing, the runner did not allow the contract stage to execute."
+        recommendation = (run.get("summary") or {}).get("runner_recommendation")
+        if recommendation:
+            explanation += f" The recorded runner recommendation was therefore {recommendation}."
+        parts.append(explanation)
     recent = facts.get("recent_run")
     if recent:
         citations.append(recent["run_id"])
