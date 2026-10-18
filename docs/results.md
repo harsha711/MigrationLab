@@ -601,6 +601,31 @@ and K all ran with it. The guard is committed on `feat/schema-profile` but **not
 the running batch, so every K review runs the same code. The run stays in K as a recorded
 ERROR (a non-match). This is not an infrastructure exclusion.
 
+## Configuration K0: K without the dry run, ablation (pre-registered 07:20)
+
+Written and committed while K was running and before any K result was analysed. The results
+will be added below this paragraph without changing it.
+
+- **Question:** does the pre-execution dry run (`MIGPROTO_PREFLIGHT=1`) raise the match rate?
+- **Arms:** identical to K, with `MIGPROTO_PREFLIGHT` unset. The schema/data profile, the
+  repeated-failure notice and D6 stay on. This is J's configuration.
+- **Code:** the same commit as K (`fc0aed7` on `human-brown-mollusk`). The later planner fix
+  for malformed findings (`22144b8`) is deliberately not deployed, so the flag is the only
+  difference.
+- **Everything else as in K:** server, sampling, budgets, 8 workers, H's 9 scenarios, 2 runs
+  per scenario per topology (36 reviews), run index outermost. It starts automatically when
+  K's supervisor exits, so the two batches never share the GPU. If it is stopped early (for
+  example at the 11:00 demo), only completed run indexes are used, and K is compared over the
+  same run indexes.
+- **Primary comparison:** matches with the dry run (K) versus without (K0), pooled over both
+  topologies (36 versus 36), two-sided Fisher exact test. "The dry run improves accuracy" is
+  claimed only if K has more matches and p < 0.05. Per-topology counts are secondary.
+- **Secondary:** runner attempts per review, attempts halted by an SQL or migration error,
+  tokens and wall time per matched review.
+- **Caveat:** the batches run one after the other, not interleaved, so a drift in serving
+  conditions over time would be confounded with the flag. The server is the same, and its
+  serving record is kept in each batch directory.
+
 ## Scenario sweeps (`roles`, one review per scenario)
 
 Scored with `scripts/brev/score_scenarios.py` against Mahek's manual expected verdicts
