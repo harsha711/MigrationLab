@@ -14,7 +14,7 @@
 | README: reproduce the demo (env vars, keys, sample .env) | done; `.env.example` is committed | `README.md` → How to reproduce |
 | README: datasets/synthetic data and provenance | done; open dataset with datasheet in `dataset/` | `README.md` → Data and provenance, `dataset/README.md` |
 | README: known limitations and next steps | done | `README.md` |
-| Deployed URL or short screen capture | no deployment; attach a 30-60 s capture of the UI (it can be cut from the video) | form |
+| Deployed URL or short screen capture | https://migrationlab.onrender.com (read-only replay of the `examples/` fixtures; reviews cannot be started there). Optionally also attach a 30-60 s capture of the full local UI | form |
 | Team roster (names, roles, contacts) | TODO: fill names and contacts | `README.md` → Team, and form |
 
 ## Project description (paste into the form)

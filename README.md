@@ -15,6 +15,8 @@ only the runner decides pass or fail.
 - **Evaluation environment:** a NeMo Gym resources server wraps the same runner (`gym/`).
 - **Review UI:** replay any recorded review, submit new ones, add human feedback, compare
   topologies and batches.
+- **Live demo (read-only):** https://migrationlab.onrender.com (frozen fixtures only; may
+  take up to a minute to wake).
 
 ## Screenshots
 
@@ -115,8 +117,8 @@ review request -> investigator (searches old-version code) -> planner (staged SQ
 
 ## Hosting the review UI (read-only)
 
-`render.yaml` is a [Render](https://render.com) Blueprint for a public, read-only copy of
-the UI: in Render, **New → Blueprint**, pick this repository, deploy. It serves the frozen
+Live at **https://migrationlab.onrender.com**. `render.yaml` is the [Render](https://render.com)
+Blueprint for this public, read-only copy of the UI: in Render, **New → Blueprint**, pick this repository, deploy. It serves the frozen
 fixtures in `examples/` with `migproto ui --host 0.0.0.0 --read-only`, so visitors can replay
 runs and ask the evidence chat (recorded facts only), but cannot start reviews. Live reviews
 need Docker, Postgres, the Saleor worktrees and a model endpoint, so they run locally (below).
