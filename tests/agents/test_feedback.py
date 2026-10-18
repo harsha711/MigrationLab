@@ -34,6 +34,39 @@ def test_planner_sees_every_failed_check_and_the_tester_summary():
     assert "TESTER-SUMMARY" in section and "read None" in section
 
 
+def test_human_feedback_is_labelled_unverified_in_the_revision_prompt():
+    captured = {}
+
+    class Stub:
+        def chat_json(self, system, user, transcript, **kwargs):
+            captured["user"] = user
+            return {}
+
+    roles.plan("llm", Stub(), {"findings": []}, [], feedback={"failed_checks": []},
+               previous={"plan_id": "p"}, human_feedback=[{
+                   "kind": "issue", "text": "retain the old writer", "author": "Ada",
+                   "at": "2026-10-18T00:00:00Z",
+               }])
+    assert "Reviewer feedback (human, unverified; the runner will check any change you make)" in captured["user"]
+    assert "retain the old writer" in captured["user"]
+
+
+def test_human_test_reaches_tester_without_replacing_mandatory_catalogue():
+    captured = {}
+
+    class Stub:
+        def chat_json(self, system, user, transcript, **kwargs):
+            captured["user"] = user
+            return {"checks": [], "custom_cases": []}
+
+    roles.propose_tests("llm", Stub(), {"plan_id": "p"}, [], human_tests=[{
+        "kind": "test", "text": "alternate old and new writers", "author": "Ada",
+        "at": "2026-10-18T00:00:00Z",
+    }])
+    assert "alternate old and new writers" in captured["user"]
+    assert "ALWAYS runs this mandatory catalogue" in captured["user"]
+
+
 def test_compact_check_keeps_diagnostics_and_drops_bulk():
     out = loop._compact_check(_record(1))
     assert out["expected"] == {"value": "v1"} and out["observed"] == {"value": None}

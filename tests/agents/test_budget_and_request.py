@@ -87,3 +87,22 @@ def test_human_feedback_is_logged_without_colliding_with_the_event_kind(tmp_path
     events = [json.loads(line) for line in (log.dir / "events.jsonl").read_text().splitlines()]
     fb = [e for e in events if e["kind"] == "human_feedback"]
     assert fb and fb[0]["feedback_kind"] == "issue" and fb[0]["provenance"] == "human"
+
+
+def test_continue_from_loads_the_selected_plan_and_runner_outcome(tmp_path):
+    from migproto.agents import loop
+    from migproto.runlog import RunLog
+
+    parent = tmp_path / "20261018-010101-agent-loop-llm"
+    parent.mkdir()
+    (parent / "summary.json").write_text(json.dumps({"attempts": [{
+        "attempt": 2, "plan_id": "a2-parent", "ok": False, "halted": "contract skipped",
+        "failed_checks": ["case.old_write_new_read"],
+    }]}))
+    (parent / "plan-a2-parent.json").write_text(json.dumps({"plan_id": "a2-parent"}))
+    log = RunLog("child", root=tmp_path)
+    plan, feedback = loop._continuation_base(log, {"continue_from": {
+        "run_id": parent.name, "attempt": 2,
+    }})
+    assert plan["plan_id"] == "a2-parent"
+    assert feedback["failed_checks"] == [{"name": "case.old_write_new_read"}]

@@ -177,6 +177,49 @@ def _log_human_feedback(log: RunLog, review: dict) -> None:
                   at=item["at"])
 
 
+def _continuation_base(log: RunLog, review: dict) -> tuple[dict, dict]:
+    """Load one recorded parent plan and its runner outcome for an LLM revision.
+
+    This deliberately reads only the named local run artifact.  Human text is kept separate
+    from this runner feedback and is never represented as a check or verdict.
+    """
+    continuation = review.get("continue_from")
+    if not continuation:
+        return {}, {}
+    run_id, attempt = continuation["run_id"], continuation["attempt"]
+    if not re.fullmatch(r"\d{8}-\d{6}-[\w.-]+", run_id):
+        raise ValueError("continue_from.run_id is invalid")
+    parent = (log.dir.parent / run_id).resolve()
+    if parent.parent != log.dir.parent.resolve() or not (parent / "summary.json").is_file():
+        raise ValueError("continue_from run is not a finished local review")
+    summary = json.loads((parent / "summary.json").read_text())
+    record = next((x for x in summary.get("attempts", []) if x.get("attempt") == attempt), None)
+    plan_paths = sorted(parent.glob(f"plan-a{attempt}-*.json"))
+    if record is None or not plan_paths:
+        raise ValueError("continue_from attempt has no recorded plan and runner outcome")
+    plan = json.loads(plan_paths[0].read_text())
+    feedback = {
+        "ok": record.get("ok"), "plan_id": record.get("plan_id"),
+        "halted": record.get("halted"), "failed_checks": [
+            {"name": name} for name in record.get("failed_checks", [])],
+        "note": "Recorded runner outcome from the selected parent attempt.",
+    }
+    log.event("revision_base", provenance="runner", parent_run_id=run_id,
+              parent_attempt=attempt, parent_plan_id=plan.get("plan_id"))
+    return plan, feedback
+
+
+def _emit_addressed_feedback(log: RunLog, prov: str, attempt: int, plan: dict) -> None:
+    items = plan.get("addressed_feedback")
+    if not items:
+        return
+    log.event("agent_claim", provenance=prov, contract_version="migproto.contracts/v1",
+              claim_id=f"{log.dir.name}/a{attempt}/planner/addressed-feedback",
+              role="planner", claim_kind="addressed_feedback",
+              text="Planner response to human feedback (an agent claim; runner outcome remains separate).",
+              addressed_feedback=items, evidence=[])
+
+
 def _run_review(log: RunLog, source: str, request=None, topology: str | None = None,
                 llm: LLM | None = None, scenario: str | None = None,
                 trace: tracing.Review | None = None) -> dict:
@@ -234,6 +277,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                           history_compaction=config["history_compaction"])
         log.write_json("agents/review-request.json", review)
         _log_human_feedback(log, review)
+        continuation_plan, continuation_feedback = _continuation_base(log, review)
 
         # The scenario's OLD app version is the code under review (deployed before the
         # change); never a new-version or state-only build.
@@ -303,6 +347,8 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                       msg=f"no investigator ground truth for scenario {scenario_id}; not scored")
 
         if topology == "parallel":
+            if continuation_plan:
+                raise ValueError("continue_from is not supported for parallel topology")
             last_result, reason = _run_parallel(
                 log, prov, solution_origin, call, llm, investigation, plan_kwargs, test_kwargs,
                 sfacts, scenario_id, budget, attempts)
@@ -310,8 +356,17 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
             return _finish(final_ok, "PASS" if final_ok else "FAIL", source, topology, model,
                            score, attempts, budget, reason=reason, scenario=scenario_id)
 
-        plan_obj = _tag(call("planner-1", roles.plan, investigation, **plan_kwargs), 1)
+        human_items = review.get("human_feedback", [])
+        human_plan_feedback = [x for x in human_items if x["kind"] in {"issue", "suggestion"}]
+        human_tests = [x for x in human_items if x["kind"] == "test"]
+        first_revision = {}
+        if source == "llm" and continuation_plan:
+            first_revision = {"feedback": continuation_feedback, "previous": continuation_plan,
+                              "human_feedback": human_plan_feedback}
+        plan_obj = _tag(call("planner-1", roles.plan, investigation, **first_revision,
+                             **plan_kwargs), 1)
         _validate_plan(plan_obj, sfacts, log, prov, 1)
+        _emit_addressed_feedback(log, prov, 1, plan_obj)
         log.event("proposal", provenance=prov, role="planner", attempt=1,
                   plan_id=plan_obj["plan_id"], solution_origin=solution_origin,
                   parent_plan_id=None, recommendation=plan_obj.get("recommendation"))
@@ -319,6 +374,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
         earlier: list[dict] = []   # runner facts of executed attempts before the latest
         for attempt in range(1, budget.max_revisions + 2):
             tests = call(f"tester-propose-{attempt}", roles.propose_tests, plan_obj,
+                         **({"human_tests": human_tests} if source == "llm" else {}),
                          **test_kwargs)
             plans.validate_tests(tests)
             if isinstance(tests, dict):
@@ -376,6 +432,7 @@ def _run_review(log: RunLog, source: str, request=None, topology: str | None = N
                     **plan_kwargs,
                 ), attempt + 1)
                 _validate_plan(plan_obj, sfacts, log, prov, attempt + 1)
+                _emit_addressed_feedback(log, prov, attempt + 1, plan_obj)
             except (LLMError, plans.PlanError) as exc:
                 # The runner already failed every executed plan; an unusable revision does
                 # not make that an infrastructure error. BudgetExceeded still means INCOMPLETE.
